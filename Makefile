@@ -23,14 +23,15 @@ check:
 	@files="$$(gofmt -l $$(go list -f '{{.Dir}}' ./... | xargs -n1 -I{} find {} -name '*.go' -type f))"; test -z "$$files" || (echo "Unformatted Go files:"; echo "$$files"; exit 1)
 	go vet ./...
 	go test ./...
-	npm run check --prefix web
+	$(MAKE) web-check
 	$(MAKE) contract-check
 
 contract-check:
-	npm run contract:check --prefix web
+	npm run contract:check
 
 web-install:
-	npm ci --prefix web
+	npm ci
 
 web-check:
-	npm run check --prefix web
+	npm run test
+	npm run build
