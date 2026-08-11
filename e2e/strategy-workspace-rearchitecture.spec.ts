@@ -282,7 +282,9 @@ test('Brief fields autosave to the server without silently confirming high-risk 
   const intakeComposer = page.getByRole('textbox', { name: /例如：我们要给 FlowKit/ })
   await intakeComposer.fill('产品：FlowKit；推广目标：提升企业试用转化；核心受众：科技公司运营负责人；核心主张：减少跨团队重复沟通。')
   await page.getByRole('button', { name: '发送需求消息' }).click()
+  await page.getByRole('button', { name: /^AI 助手/ }).click()
   await expect(page.getByLabel('AI 当前理解')).toContainText('FlowKit')
+  await page.getByRole('button', { name: '收起 AI 助手' }).click()
   await page.getByRole('button', { name: /^Brief：/ }).click()
 
   const objective = page.getByRole('textbox', { name: /推广目标/ })
@@ -365,13 +367,15 @@ test('one natural-language requirement reaches an immutable StrategyPackage and 
   await intakeComposer.fill(requirement)
   await page.getByRole('button', { name: '发送需求消息' }).click()
 
-  await expect(page.getByLabel('已识别 3 项，共 3 项核心事实')).toBeVisible()
+  await expect(page.getByLabel('需求收敛状态')).toContainText('3 / 3 项核心信息')
+  await page.getByRole('button', { name: /^AI 助手/ }).click()
   await expect(page.getByLabel('AI 当前理解')).toContainText('娇兰第三代黄金复原蜜')
   await expect(page.getByLabel('AI 当前理解')).toContainText('提升 30 天企业试用转化')
   await expect(page.getByLabel('AI 当前理解')).toContainText('20-200 人科技公司的运营负责人')
   await expect(page.getByLabel('AI 当前理解')).toContainText('跨团队流程透明和减少重复沟通')
   await expect(page.getByText('这次最重要的业务目标是什么？')).toHaveCount(0)
   await expect(page.getByText('最希望影响哪一类核心人群？')).toHaveCount(0)
+  await page.getByRole('button', { name: '收起 AI 助手' }).click()
 
   await page.getByRole('button', { name: /^Brief：/ }).click()
   const unsavedRegion = page.getByRole('region', { name: '受众与情境' }).getByRole('textbox', { name: /^地区/ })
@@ -487,7 +491,7 @@ test('formal review binds approval to one revision and invalidates a stale candi
     '推广 娇兰第三代黄金复原蜜，目标是提升购买转化，核心受众是关注高端护肤的消费者；强调修护价值和可信产品体验。',
   )
   await page.getByRole('button', { name: '发送需求消息' }).click()
-  await expect(page.getByLabel('已识别 3 项，共 3 项核心事实')).toBeVisible()
+  await expect(page.getByLabel('需求收敛状态')).toContainText('3 / 3 项核心信息')
   await page.getByRole('button', { name: '确认理解并锁定需求' }).click()
   await page.getByRole('button', { name: /^策略：/ }).click()
   await page.getByRole('button', { name: '创建 Brief 补充修订' }).click()

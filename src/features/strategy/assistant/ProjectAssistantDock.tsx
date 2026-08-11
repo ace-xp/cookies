@@ -9,6 +9,7 @@ import Send from 'lucide-react/dist/esm/icons/send.js'
 import ShieldAlert from 'lucide-react/dist/esm/icons/shield-alert.js'
 import X from 'lucide-react/dist/esm/icons/x.js'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { buildConversationLens } from '../strategyConversationModel'
 import type { ArtifactProposal, BriefDraft, BriefPatchOperation, Message, ProjectContextManifest } from '../types'
 import { strategyStageLabel } from '../workspace/StageRail'
 import type { StrategyStage } from '../workspace/workspaceRoute'
@@ -61,6 +62,7 @@ export function ProjectAssistantDock({
   const recentMessages = messages.filter(message => message.role !== 'system_event').slice(-4)
   const excludedSources = useMemo(() => new Set(excludedSourceIds), [excludedSourceIds])
   const starterRequests = useMemo(() => assistantStarterRequests(brief, stage), [brief, stage])
+  const understanding = useMemo(() => buildConversationLens(brief, []), [brief])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -97,6 +99,16 @@ export function ProjectAssistantDock({
     </header>
     <div className="project-assistant-context" aria-label="当前助手上下文">
       {contextLabels.map(label => <span key={label}>{label}</span>)}
+      <section className="project-assistant-understanding" aria-label="AI 当前理解">
+        <header>
+          <b>AI 当前理解</b>
+          <small>{understanding.completedCore}/{understanding.totalCore} 项核心信息</small>
+        </header>
+        <div>{understanding.items.map(item => <article data-captured={Boolean(item.value)} key={item.key}>
+          <span>{item.value ? <Check size={11}/> : null}</span>
+          <div><small>{item.label}{item.required ? '' : ' · 可选'}</small><p>{item.value || '待确认'}</p></div>
+        </article>)}</div>
+      </section>
       {manifest ? <details>
         <summary>结构化上下文</summary>
         <dl>

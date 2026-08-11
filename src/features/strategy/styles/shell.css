@@ -786,6 +786,74 @@ button[aria-current="step"] .strategy-stage-index {
   font-size: 12px;
 }
 
+.project-assistant-understanding {
+  width: 100%;
+  margin-top: 5px;
+  padding-top: 9px;
+  border-top: 1px solid var(--strategy-line);
+}
+
+.project-assistant-understanding > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.project-assistant-understanding > header b { font-size: 12px; font-weight: 700; }
+.project-assistant-understanding > header small { color: var(--strategy-text-soft); font-size: 10px; }
+
+.project-assistant-understanding > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.project-assistant-understanding article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 6px;
+  padding: 7px;
+  border-radius: 5px;
+  background: var(--strategy-surface-muted);
+}
+
+.project-assistant-understanding article > span {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: var(--strategy-text-soft);
+  border: 1px solid var(--strategy-line-strong);
+  border-radius: 50%;
+}
+
+.project-assistant-understanding article[data-captured='true'] > span {
+  color: var(--strategy-success);
+  border-color: color-mix(in srgb, var(--strategy-success) 45%, var(--strategy-line));
+  background: color-mix(in srgb, var(--strategy-success) 9%, white);
+}
+
+.project-assistant-understanding article div { min-width: 0; }
+.project-assistant-understanding article small { display: block; color: var(--strategy-text-soft); font-size: 9px; }
+.project-assistant-understanding article p {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--strategy-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-assistant-understanding article:not([data-captured='true']) p {
+  color: var(--strategy-text-soft);
+  font-weight: 500;
+}
+
 .project-assistant-context details {
   width: 100%;
   margin-top: 3px;

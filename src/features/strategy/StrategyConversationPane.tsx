@@ -266,29 +266,7 @@ export function StrategyConversationPane({
   }
 
   return <section className="kanon-conversation-workbench">
-    <header className="kanon-conversation-header">
-      <div className="kanon-conversation-heading">
-        <span className="section-label">CONVERSATIONAL REQUIREMENT</span>
-        <h2>先说清楚要解决什么。</h2>
-        <p>不要求先填完整表单；产品、目标和核心受众足够后，就能冻结需求并选择创作路径。</p>
-      </div>
-      <div className="kanon-conversation-progress" aria-label="当前工作链状态">
-        <div className="kanon-conversation-progress-summary">
-          <span className={`kanon-requirement-state ${locked ? 'locked' : lens.coreReady ? 'ready' : ''}`}>
-            {locked ? <CircleCheck size={14}/> : <Sparkles size={14}/>}
-            {locked ? `Requirement v${briefVersion?.version}` : `${lens.completedCore} / ${lens.totalCore} 项核心事实`}
-          </span>
-          <b>{!locked ? '需求收敛中' : strategyReady ? '需求已确认，可进入策略' : '需求已确认，策略尚未就绪'}</b>
-        </div>
-        <ol>
-          <li className={locked ? 'done' : 'active'}><span>01</span><div><b>需求</b><small>{locked ? '已冻结' : '对话中'}</small></div></li>
-          <li className={locked && strategyReady ? 'active' : ''}><span>02</span><div><b>策略</b><small>{strategyReady ? '可生成' : '待补充'}</small></div></li>
-          <li><span>03</span><div><b>创意</b><small>待交接</small></div></li>
-        </ol>
-      </div>
-    </header>
-
-    <div className="kanon-conversation-grid">
+    <div className="kanon-conversation-grid compact">
       <div className="kanon-conversation-thread">
         <div className="kanon-message-list" ref={listRef}>
           {!messages.length ? <div className="kanon-conversation-empty-v2">
@@ -320,6 +298,32 @@ export function StrategyConversationPane({
                 ? '正在进行本轮深度分析，内部资料会单独标注…'
                 : '正在区分事实、假设和仍需确认的问题…'}</p></div>
           </article> : null}
+        </div>
+
+        <div className="kanon-requirement-strip" aria-label="需求收敛状态">
+          <div className="kanon-requirement-strip-copy">
+            <span className={`kanon-requirement-state ${locked ? 'locked' : lens.coreReady ? 'ready' : ''}`}>
+              {locked ? <CircleCheck size={14}/> : <Sparkles size={14}/>}
+              {locked ? `需求 v${briefVersion?.version}` : `${lens.completedCore} / ${lens.totalCore} 项核心信息`}
+            </span>
+            <p>{locked
+              ? strategyReady ? '需求已确认，可以进入策略。' : strategyBlocker?.reason || '需求已确认，完整策略仍需补充信息。'
+              : lens.coreReady ? '核心信息已经够用，可以确认需求。' : `还差 ${lens.totalCore - lens.completedCore} 项核心信息，继续对话即可。`}</p>
+          </div>
+          <div className="kanon-requirement-strip-actions">
+            <button className="kanon-lens-detail-link" onClick={onOpenBrief} type="button">查看 Brief <ArrowUpRight size={12}/></button>
+            {locked && !strategyReady ? <button className="primary-button" onClick={onOpenFullStrategy} type="button">查看策略阻断</button>
+              : locked && conversationCapabilities?.quick_viral_remake.available ? <button className="primary-button" disabled={Boolean(busy)} onClick={() => void startViralRemake()} type="button">
+                  {busy === 'viral-remake' ? <LoaderCircle className="spin" size={14}/> : <Video size={14}/>}
+                  {busy === 'viral-remake' ? '正在创建…' : '进入爆款裂变'}
+                </button>
+              : locked ? <button className="primary-button" onClick={onOpenFullStrategy} type="button">进入完整策略</button>
+              : lens.coreReady ? <button aria-label="确认理解并锁定需求" className="primary-button" disabled={Boolean(busy) || pending} onClick={() => void onConfirmRequirement()} type="button">
+                  {busy === 'confirm-requirement' ? <LoaderCircle className="spin" size={14}/> : <Check size={14}/>}
+                  {busy === 'confirm-requirement' ? '确认中…' : '确认需求'}
+                </button>
+              : null}
+          </div>
         </div>
 
         <form className="kanon-composer-v2" onSubmit={submit}>
@@ -422,64 +426,6 @@ export function StrategyConversationPane({
         </form>
         {feedback || notice ? <div className="kanon-conversation-feedback" role="status">{feedback || notice}</div> : null}
       </div>
-
-      <aside className="kanon-understanding-lens" aria-label="AI 当前理解">
-        <header>
-          <span>UNDERSTANDING LENS</span>
-          <h3>AI 当前理解</h3>
-          <p>这里只展示会影响下一步的事实，不把内部结构化字段甩给用户。</p>
-        </header>
-        <div className="kanon-lens-progress" aria-label={`已识别 ${lens.completedCore} 项，共 ${lens.totalCore} 项核心事实`}>
-          <span style={{ width: `${lens.completedCore / lens.totalCore * 100}%` }}/>
-        </div>
-        <div className="kanon-lens-facts">
-          {lens.items.map(item => <article className={item.value ? 'captured' : ''} key={item.key}>
-            <span>{item.value ? <Check size={12}/> : <i/>}</span>
-            <div>
-              <small>{item.label}{item.required ? '' : ' · 可选'}</small>
-              <p>{item.value || '还没有可靠信息'}</p>
-              {item.value && item.sourceLabel ? <em className="kanon-fact-source">{item.sourceLabel}</em> : null}
-            </div>
-          </article>)}
-        </div>
-
-        <section className="kanon-lens-sources">
-          <div><span>来源资料</span><small>{lens.readySourceCount + mediaArtifacts.filter(value => value.status === 'ready' || value.status === 'partial').length} / {lens.sourceCount + mediaArtifacts.length} 可用</small></div>
-          {sourceDocuments.length ? sourceDocuments.slice(0, 3).map(document => <article key={document.id}>
-            <FileText size={14}/><span><b>{compactDocumentTitle(document)}</b><small>{document.status === 'ready' ? `${document.chunk_count} 个可检索片段` : document.status === 'parse_failed' ? '解析失败' : '正在解析'}</small></span>
-          </article>) : null}
-          {mediaArtifacts.slice(0, 3).map(artifact => <article key={artifact.id}>
-            {artifact.asset_kind === 'video' ? <Video size={14}/> : <ImageIcon size={14}/>}
-            <span><b>{artifact.asset_kind === 'video' ? '短视频证据' : '图片证据'}</b><small>{mediaArtifactStatus(artifact)}</small></span>
-          </article>)}
-          {!sourceDocuments.length && !mediaArtifacts.length ? <p>{conversationCapabilities?.multimodal_input.available
-            ? '可直接添加文档、图片或 15–90 秒 MP4；只有可定位的直接证据会影响理解。'
-            : '当前灰度未开放附件输入；仍可直接用自然语言说明需求。'}</p> : null}
-        </section>
-
-        <footer className="kanon-lens-action">
-          {locked && !strategyReady ? <>
-            <div className="kanon-lens-blocked"><CircleCheck size={16}/><span><b>Requirement 已冻结，但完整策略还不能生成</b><small>{strategyBlocker?.reason || 'Project、目标、受众、主张或渠道仍有一项需要修正。'}</small></span></div>
-            <button className="primary-button full" onClick={onOpenFullStrategy} type="button"><ArrowUpRight size={14}/>查看阻断并创建补充修订</button>
-          </> : locked ? conversationCapabilities?.quick_viral_remake.available ? <>
-            <div><Video size={16}/><span><b>爆款裂变快速路径</b><small>跳过形式化策略文档，直接校验参考视频和创作输入。</small></span></div>
-            <button className="primary-button full" disabled={Boolean(busy)} onClick={() => void startViralRemake()} type="button">
-              {busy === 'viral-remake' ? <LoaderCircle className="spin" size={14}/> : <Sparkles size={14}/>}
-              {busy === 'viral-remake' ? '正在创建创作任务…' : '进入爆款裂变'}
-            </button>
-          </> : <>
-            <div><Sparkles size={16}/><span><b>进入完整策略路径</b><small>快速裂变当前未灰度开放；已确认需求仍可直接生成品牌与创作策略。</small></span></div>
-            <button className="primary-button full" onClick={onOpenFullStrategy} type="button"><ArrowUpRight size={14}/>进入完整策略</button>
-          </> : lens.coreReady ? <>
-            <div><CircleCheck size={16}/><span><b>核心信息已经够用</b><small>确认会冻结不可变 Requirement 版本；其他信息仍可在新版本补充。</small></span></div>
-            <button className="primary-button full" disabled={Boolean(busy) || pending} onClick={() => void onConfirmRequirement()} type="button">
-              {busy === 'confirm-requirement' ? <LoaderCircle className="spin" size={14}/> : <Check size={14}/>}
-              确认理解并锁定需求
-            </button>
-          </> : <div className="kanon-lens-next"><span>{lens.totalCore - lens.completedCore}</span><p><b>还差少量关键信息</b>继续对话即可，不必打开表单逐项填写。</p></div>}
-          <button className="kanon-lens-detail-link" onClick={onOpenBrief} type="button">查看或修正完整理解 <ArrowUpRight size={12}/></button>
-        </footer>
-      </aside>
     </div>
   </section>
 }
