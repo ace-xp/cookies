@@ -72,10 +72,10 @@ jobs:
         run: npm run test:video-editor-governance
 
       - name: Install Chromium for video editor acceptance
-        run: npx playwright install --with-deps chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium
 
       - name: Run video editor real-browser acceptance
-        run: npx playwright test e2e/video-editor-phase1.spec.ts --config=playwright.platform.config.ts
+        run: ./node_modules/.bin/playwright test e2e/video-editor-phase1.spec.ts --config=playwright.platform.config.ts
 
       - name: Validate API contracts
         run: npm run contract:check

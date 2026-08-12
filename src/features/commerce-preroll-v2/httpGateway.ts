@@ -30,7 +30,7 @@ type TaskDetail = { task: { id: string; display_name: string; version: number; s
 
 const backendOrigin = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
 const wait = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms))
-const key = (kind: string) => `commerce-v2-${kind}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+const key = (kind: string) => `commerce-v2-${kind}-${crypto.randomUUID()}`
 
 function workspaceAspectRatio(workspace: ApiWorkspace) {
   const width = workspace.source_metadata?.WidthPixels ?? 0

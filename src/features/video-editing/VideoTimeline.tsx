@@ -171,6 +171,9 @@ export function VideoTimeline({
         const value = JSON.parse(encoded) as { assetId?: string; assetVersion?: number }
         if (value.assetId && Number.isInteger(value.assetVersion)) onInsertAsset(value.assetId, Number(value.assetVersion), insertionIndexFromPointer(event.clientX))
       } catch { /* Ignore foreign drag payloads. */ }
+    }} role="button" tabIndex={0} onKeyDown={event => {
+      if (event.key === 'ArrowLeft') onSeek(Math.max(0, playheadMs - 1000))
+      if (event.key === 'ArrowRight') onSeek(Math.min(timeline.durationMs, playheadMs + 1000))
     }} onClick={event => {
       if ((event.target as HTMLElement).closest('.real-timeline-clip')) return
       seekFromPointer(event.clientX)

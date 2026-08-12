@@ -6,4 +6,4 @@ SET display_name = CASE
   WHEN creative_format = 'video' THEN '未命名品牌广告'
   ELSE '未命名创意任务'
 END
-WHERE display_name = '';
+WHERE CHAR_LENGTH(display_name) = 0;

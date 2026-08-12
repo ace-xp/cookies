@@ -336,8 +336,8 @@ func (r MySQLRepository) FindImageGenerationAttemptByProviderJob(
 	projectID contract.ProjectID,
 	providerJobID string,
 ) (ImageGenerationAttempt, error) {
-	return scanImageGenerationAttempt(r.DB.QueryRowContext(ctx, imageAttemptSelect+`
-		WHERE organization_id=? AND project_id=? AND provider_job_id=?`,
+	const query = imageAttemptSelect + ` WHERE organization_id=? AND project_id=? AND provider_job_id=?`
+	return scanImageGenerationAttempt(r.DB.QueryRowContext(ctx, query,
 		organizationID, projectID, providerJobID))
 }
 

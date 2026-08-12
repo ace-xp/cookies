@@ -417,7 +417,8 @@ func (r MySQLRepository) RenameTask(ctx context.Context, organizationID contract
 		}
 		return CreativeTask{}, ErrVersionConflict
 	}
-	return scanTask(r.DB.QueryRowContext(ctx, creativeTaskSelect+` WHERE organization_id = ? AND project_id = ? AND id = ?`, organizationID, projectID, taskID))
+	const query = creativeTaskSelect + ` WHERE organization_id = ? AND project_id = ? AND id = ?`
+	return scanTask(r.DB.QueryRowContext(ctx, query, organizationID, projectID, taskID))
 }
 
 func (r MySQLRepository) GetTaskDetail(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, taskID string) (TaskDetail, error) {

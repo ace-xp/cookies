@@ -15,24 +15,20 @@ type renderObservabilityExecer interface {
 }
 
 func ensureInitialRenderObservability(ctx context.Context, executor renderObservabilityExecer, source ProductionRunSourceKind, organizationID contract.OrganizationID, projectID contract.ProjectID, jobID string, createdAt time.Time) error {
-	usageTable, eventTable, err := renderObservabilityTables(source)
+	usageQuery, eventQuery, err := initialRenderObservabilityQueries(source)
 	if err != nil {
 		return err
 	}
 	reason := renderOwnerLabel(source) + " actual cost is not metered."
-	if _, err = executor.ExecContext(ctx, fmt.Sprintf(`INSERT IGNORE INTO %s
-		(render_job_id,organization_id,project_id,currency,actual_cost_minor,unavailable_reason,measured_at)
-		VALUES (?,?,?,'CNY',NULL,?,?)`, usageTable), jobID, organizationID, projectID, reason, createdAt); err != nil {
+	if _, err = executor.ExecContext(ctx, usageQuery, jobID, organizationID, projectID, reason, createdAt); err != nil {
 		return err
 	}
-	_, err = executor.ExecContext(ctx, fmt.Sprintf(`INSERT IGNORE INTO %s
-		(render_job_id,organization_id,project_id,ordinal,stage,safe_message,error_code,occurred_at)
-		VALUES (?,?,?,1,'queued',?,NULL,?)`, eventTable), jobID, organizationID, projectID, renderOwnerLabel(source)+" queued.", createdAt)
+	_, err = executor.ExecContext(ctx, eventQuery, jobID, organizationID, projectID, renderOwnerLabel(source)+" queued.", createdAt)
 	return err
 }
 
 func appendRenderLifecycleEvent(ctx context.Context, executor renderObservabilityExecer, source ProductionRunSourceKind, organizationID contract.OrganizationID, projectID contract.ProjectID, jobID, status, errorCode string, occurredAt time.Time) error {
-	_, eventTable, err := renderObservabilityTables(source)
+	eventQuery, err := appendRenderEventQuery(source)
 	if err != nil {
 		return err
 	}
@@ -41,24 +37,21 @@ func appendRenderLifecycleEvent(ctx context.Context, executor renderObservabilit
 		return fmt.Errorf("creative render lifecycle stage is invalid")
 	}
 	code := safeRenderToken(errorCode, 128)
-	_, err = executor.ExecContext(ctx, fmt.Sprintf(`INSERT IGNORE INTO %s
-		(render_job_id,organization_id,project_id,ordinal,stage,safe_message,error_code,occurred_at)
-		SELECT ?,?,?,COALESCE(MAX(ordinal),0)+1,?,?,?,? FROM %s WHERE render_job_id=? AND organization_id=? AND project_id=?`, eventTable, eventTable),
+	_, err = executor.ExecContext(ctx, eventQuery,
 		jobID, organizationID, projectID, stage, renderLifecycleMessage(source, stage), sql.NullString{String: code, Valid: code != ""}, occurredAt,
 		jobID, organizationID, projectID)
 	return err
 }
 
 func (r MySQLRepository) loadRenderObservability(ctx context.Context, source ProductionRunSourceKind, organizationID contract.OrganizationID, projectID contract.ProjectID, jobID string) (*RenderUsage, []RenderEvent, error) {
-	usageTable, eventTable, err := renderObservabilityTables(source)
+	usageQuery, eventQuery, err := loadRenderObservabilityQueries(source)
 	if err != nil {
 		return nil, nil, err
 	}
 	var usage RenderUsage
 	var amount sql.NullInt64
 	var reason sql.NullString
-	err = r.DB.QueryRowContext(ctx, fmt.Sprintf(`SELECT currency,actual_cost_minor,unavailable_reason,measured_at
-		FROM %s WHERE render_job_id=? AND organization_id=? AND project_id=?`, usageTable), jobID, organizationID, projectID).
+	err = r.DB.QueryRowContext(ctx, usageQuery, jobID, organizationID, projectID).
 		Scan(&usage.Currency, &amount, &reason, &usage.MeasuredAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, err
@@ -73,8 +66,7 @@ func (r MySQLRepository) loadRenderObservability(ctx context.Context, source Pro
 		}
 		usageResult = &usage
 	}
-	rows, err := r.DB.QueryContext(ctx, fmt.Sprintf(`SELECT ordinal,stage,safe_message,COALESCE(error_code,''),occurred_at
-		FROM %s WHERE render_job_id=? AND organization_id=? AND project_id=? ORDER BY ordinal`, eventTable), jobID, organizationID, projectID)
+	rows, err := r.DB.QueryContext(ctx, eventQuery, jobID, organizationID, projectID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -96,12 +88,11 @@ func (r MySQLRepository) RecordRenderUsage(ctx context.Context, source Productio
 	if err := usage.Validate(); err != nil {
 		return err
 	}
-	usageTable, _, err := renderObservabilityTables(source)
+	usageQuery, err := updateRenderUsageQuery(source)
 	if err != nil {
 		return err
 	}
-	result, err := r.DB.ExecContext(ctx, fmt.Sprintf(`UPDATE %s SET currency=?,actual_cost_minor=?,unavailable_reason=?,measured_at=?
-		WHERE render_job_id=? AND organization_id=? AND project_id=?`, usageTable), usage.Currency,
+	result, err := r.DB.ExecContext(ctx, usageQuery, usage.Currency,
 		sql.NullInt64{Int64: valueOrZero(usage.ActualCostMinor), Valid: usage.ActualCostMinor != nil},
 		sql.NullString{String: stringOrEmpty(usage.UnavailableReason), Valid: usage.UnavailableReason != nil}, usage.MeasuredAt,
 		jobID, organizationID, projectID)
@@ -115,15 +106,52 @@ func (r MySQLRepository) RecordRenderUsage(ctx context.Context, source Productio
 	return nil
 }
 
-func renderObservabilityTables(source ProductionRunSourceKind) (string, string, error) {
+func initialRenderObservabilityQueries(source ProductionRunSourceKind) (string, string, error) {
+	const usageSuffix = ` (render_job_id,organization_id,project_id,currency,actual_cost_minor,unavailable_reason,measured_at) VALUES (?,?,?,'CNY',NULL,?,?)`
+	const eventSuffix = ` (render_job_id,organization_id,project_id,ordinal,stage,safe_message,error_code,occurred_at) VALUES (?,?,?,1,'queued',?,NULL,?)`
 	switch source {
 	case ProductionSourceCreativeRender:
-		return "creative_render_job_usage", "creative_render_job_events", nil
+		return `INSERT IGNORE INTO creative_render_job_usage` + usageSuffix, `INSERT IGNORE INTO creative_render_job_events` + eventSuffix, nil
 	case ProductionSourceEditingRender:
-		return "creative_edit_render_job_usage", "creative_edit_render_job_events", nil
+		return `INSERT IGNORE INTO creative_edit_render_job_usage` + usageSuffix, `INSERT IGNORE INTO creative_edit_render_job_events` + eventSuffix, nil
 	default:
 		return "", "", fmt.Errorf("unsupported creative render owner %q", source)
 	}
+}
+
+func appendRenderEventQuery(source ProductionRunSourceKind) (string, error) {
+	const creativeQuery = `INSERT IGNORE INTO creative_render_job_events (render_job_id,organization_id,project_id,ordinal,stage,safe_message,error_code,occurred_at) SELECT ?,?,?,COALESCE(MAX(ordinal),0)+1,?,?,?,? FROM creative_render_job_events WHERE render_job_id=? AND organization_id=? AND project_id=?`
+	const editingQuery = `INSERT IGNORE INTO creative_edit_render_job_events (render_job_id,organization_id,project_id,ordinal,stage,safe_message,error_code,occurred_at) SELECT ?,?,?,COALESCE(MAX(ordinal),0)+1,?,?,?,? FROM creative_edit_render_job_events WHERE render_job_id=? AND organization_id=? AND project_id=?`
+	if source == ProductionSourceCreativeRender {
+		return creativeQuery, nil
+	}
+	if source == ProductionSourceEditingRender {
+		return editingQuery, nil
+	}
+	return "", fmt.Errorf("unsupported creative render owner %q", source)
+}
+
+func loadRenderObservabilityQueries(source ProductionRunSourceKind) (string, string, error) {
+	const usageSuffix = ` WHERE render_job_id=? AND organization_id=? AND project_id=?`
+	const eventSuffix = ` WHERE render_job_id=? AND organization_id=? AND project_id=? ORDER BY ordinal`
+	if source == ProductionSourceCreativeRender {
+		return `SELECT currency,actual_cost_minor,unavailable_reason,measured_at FROM creative_render_job_usage` + usageSuffix, `SELECT ordinal,stage,safe_message,COALESCE(error_code,''),occurred_at FROM creative_render_job_events` + eventSuffix, nil
+	}
+	if source == ProductionSourceEditingRender {
+		return `SELECT currency,actual_cost_minor,unavailable_reason,measured_at FROM creative_edit_render_job_usage` + usageSuffix, `SELECT ordinal,stage,safe_message,COALESCE(error_code,''),occurred_at FROM creative_edit_render_job_events` + eventSuffix, nil
+	}
+	return "", "", fmt.Errorf("unsupported creative render owner %q", source)
+}
+
+func updateRenderUsageQuery(source ProductionRunSourceKind) (string, error) {
+	const suffix = ` SET currency=?,actual_cost_minor=?,unavailable_reason=?,measured_at=? WHERE render_job_id=? AND organization_id=? AND project_id=?`
+	if source == ProductionSourceCreativeRender {
+		return `UPDATE creative_render_job_usage` + suffix, nil
+	}
+	if source == ProductionSourceEditingRender {
+		return `UPDATE creative_edit_render_job_usage` + suffix, nil
+	}
+	return "", fmt.Errorf("unsupported creative render owner %q", source)
 }
 
 func renderOwnerLabel(source ProductionRunSourceKind) string {

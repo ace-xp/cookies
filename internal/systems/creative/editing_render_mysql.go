@@ -60,8 +60,11 @@ const editingRenderSelect = `SELECT edit_render_job_id,organization_id,project_i
 
 const editingRenderByRetryKeyQuery = `SELECT edit_render_job_id,organization_id,project_id,edit_task_id,timeline_version,timeline_schema_version,timeline_payload,timeline_hash,compiler_version,renderer_fingerprint,timeline_created_by,timeline_created_at,kind,status,progress_percent,COALESCE(output_asset_id,''),COALESCE(output_asset_version,0),COALESCE(error_code,''),COALESCE(error_message,''),COALESCE(retry_of,''),COALESCE(retry_idempotency_key,''),COALESCE(retry_request_hash,''),created_by_id,created_by_kind,created_at,updated_at FROM creative_edit_render_jobs WHERE organization_id=? AND project_id=? AND retry_idempotency_key=?`
 
+const editingRenderByIDQuery = editingRenderSelect + ` WHERE organization_id=? AND project_id=? AND edit_render_job_id=?`
+const reusableEditingRenderQuery = editingRenderSelect + ` WHERE organization_id=? AND project_id=? AND renderer_fingerprint=? AND kind=? AND status='succeeded' AND output_asset_id IS NOT NULL ORDER BY updated_at DESC LIMIT 1`
+
 func (r MySQLRepository) GetEditingRender(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, id string) (EditingRenderJob, error) {
-	job, err := scanEditingRender(r.DB.QueryRowContext(ctx, editingRenderSelect+` WHERE organization_id=? AND project_id=? AND edit_render_job_id=?`, org, project, id))
+	job, err := scanEditingRender(r.DB.QueryRowContext(ctx, editingRenderByIDQuery, org, project, id))
 	return r.attachEditingRenderObservability(ctx, job, err)
 }
 func (r MySQLRepository) GetEditingRenderByRetryKey(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, key contract.IdempotencyKey) (EditingRenderJob, error) {
@@ -69,7 +72,7 @@ func (r MySQLRepository) GetEditingRenderByRetryKey(ctx context.Context, org con
 	return r.attachEditingRenderObservability(ctx, job, err)
 }
 func (r MySQLRepository) FindReusableEditingRender(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, fingerprint string, kind EditingRenderKind) (EditingRenderJob, error) {
-	job, err := scanEditingRender(r.DB.QueryRowContext(ctx, editingRenderSelect+` WHERE organization_id=? AND project_id=? AND renderer_fingerprint=? AND kind=? AND status='succeeded' AND output_asset_id IS NOT NULL ORDER BY updated_at DESC LIMIT 1`, org, project, fingerprint, kind))
+	job, err := scanEditingRender(r.DB.QueryRowContext(ctx, reusableEditingRenderQuery, org, project, fingerprint, kind))
 	return r.attachEditingRenderObservability(ctx, job, err)
 }
 func (r MySQLRepository) MarkEditingRenderRunning(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, id string, now time.Time) (EditingRenderJob, error) {

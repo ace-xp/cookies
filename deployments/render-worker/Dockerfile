@@ -25,11 +25,13 @@ RUN apk add --no-cache \
       ffmpeg=8.1.2-r0 \
       font-noto-cjk=0_git20220127-r1 \
       fontconfig=2.17.1-r1 \
-      ca-certificates=20260611-r0 && \
-    mkdir -p /opt/cookies /var/lib/cookies && \
+    ca-certificates=20260611-r0 && \
+    addgroup -S cookies && adduser -S -G cookies cookies && \
+    mkdir -p /opt/cookies /var/lib/cookies && chown -R cookies:cookies /var/lib/cookies && \
     { ffmpeg -version; printf '\n'; ffprobe -version; printf '\n'; fc-match 'Noto Sans CJK SC'; } > /opt/cookies/render-toolchain.txt
 COPY --from=builder /out/cookies-api /usr/local/bin/cookies-api
 ENV COOKIES_FFMPEG_PATH=/usr/bin/ffmpeg \
     COOKIES_FFPROBE_PATH=/usr/bin/ffprobe
 VOLUME ["/var/lib/cookies"]
+USER cookies
 ENTRYPOINT ["/usr/local/bin/cookies-api"]
