@@ -37,13 +37,14 @@ const (
 )
 
 type ManualBrandFilmInput struct {
-	DocumentID     string `json:"document_id,omitempty"`
-	FixtureID      string `json:"fixture_id"`
-	FixtureVersion int64  `json:"fixture_version"`
-	FixtureHash    string `json:"fixture_hash"`
-	BriefName      string `json:"brief_name"`
-	BriefText      string `json:"brief_text"`
-	ProductName    string `json:"product_name"`
+	DocumentID      string                     `json:"document_id,omitempty"`
+	FixtureID       string                     `json:"fixture_id"`
+	FixtureVersion  int64                      `json:"fixture_version"`
+	FixtureHash     string                     `json:"fixture_hash"`
+	BriefName       string                     `json:"brief_name"`
+	BriefText       string                     `json:"brief_text"`
+	ProductName     string                     `json:"product_name"`
+	AssetCandidates []BrandBriefAssetCandidate `json:"asset_candidates,omitempty"`
 }
 
 func (i ManualBrandFilmInput) Validate() error {
@@ -51,6 +52,17 @@ func (i ManualBrandFilmInput) Validate() error {
 		if !validSHA256Ref(i.FixtureHash) || strings.TrimSpace(i.BriefName) == "" ||
 			strings.TrimSpace(i.BriefText) == "" || strings.TrimSpace(i.ProductName) == "" {
 			return fmt.Errorf("manual brand film document input is incomplete")
+		}
+		if len(i.AssetCandidates) > 24 {
+			return fmt.Errorf("manual brand film has too many extracted asset candidates")
+		}
+		for _, candidate := range i.AssetCandidates {
+			if strings.TrimSpace(candidate.ID) == "" || (candidate.Role != "product_front" && candidate.Role != "logo") || strings.TrimSpace(candidate.Label) == "" {
+				return fmt.Errorf("manual brand film extracted asset candidate is invalid")
+			}
+			if candidate.AssetRef != nil && candidate.AssetRef.Validate() != nil {
+				return fmt.Errorf("manual brand film extracted asset reference is invalid")
+			}
 		}
 		return nil
 	}
@@ -103,13 +115,7 @@ type BrandFilmSourceSnapshot struct {
 func newBrandFilmDraft(task CreativeTask, intake CreativeIntake, route CreativeRouteSnapshot, now time.Time) (*BrandFilmDraft, error) {
 	briefName := "已确认品牌策略"
 	briefText := strings.TrimSpace(string(intake.Request.StrategyHandoffInput))
-	productName := strings.TrimSpace(intake.Request.CoreMessage)
-	if productName == "" {
-		productName = strings.TrimSpace(intake.Request.Concept)
-	}
-	if productName == "" {
-		productName = "未命名品牌项目"
-	}
+	productName := brandFilmProductName(intake)
 	snapshot := BrandFilmSourceSnapshot{
 		SourceKind: string(intake.Source), IntakeID: intake.ID, InputIdentityHash: intake.InputIdentityHash,
 		BriefName: briefName, BriefText: briefText, ProductName: productName,
@@ -125,9 +131,12 @@ func newBrandFilmDraft(task CreativeTask, intake CreativeIntake, route CreativeR
 			snapshot.SourceKind = "manual_document"
 			snapshot.IntakeID = intake.ID
 			snapshot.EvidenceRefs = []string{"knowledge://documents/" + manual.DocumentID}
-			snapshot.AssetCandidates = []BrandBriefAssetCandidate{
-				{ID: "asset_product_front", Role: "product_front", Label: "商品正面图", SourceLocator: "knowledge://documents/" + manual.DocumentID + "#product-image", RightsStatus: "needs_confirmation"},
-				{ID: "asset_brand_logo", Role: "logo", Label: "品牌 Logo", SourceLocator: "knowledge://documents/" + manual.DocumentID + "#brand-logo", RightsStatus: "needs_confirmation"},
+			snapshot.AssetCandidates = append([]BrandBriefAssetCandidate{}, manual.AssetCandidates...)
+			if len(snapshot.AssetCandidates) == 0 {
+				snapshot.AssetCandidates = []BrandBriefAssetCandidate{
+					{ID: "asset_product_front", Role: "product_front", Label: "商品正面图", SourceLocator: "knowledge://documents/" + manual.DocumentID + "#product-image", RightsStatus: "needs_confirmation"},
+					{ID: "asset_brand_logo", Role: "logo", Label: "品牌 Logo", SourceLocator: "knowledge://documents/" + manual.DocumentID + "#brand-logo", RightsStatus: "needs_confirmation"},
+				}
 			}
 		}
 		snapshot.FixtureID, snapshot.FixtureVersion, snapshot.FixtureHash = manual.FixtureID, manual.FixtureVersion, manual.FixtureHash
@@ -179,6 +188,16 @@ func newBrandFilmDraft(task CreativeTask, intake CreativeIntake, route CreativeR
 		},
 		CreatedAt: now, UpdatedAt: now,
 	}, nil
+}
+
+func brandFilmProductName(intake CreativeIntake) string {
+	if value := strings.TrimSpace(intake.Request.CoreMessage); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(intake.Request.Concept); value != "" {
+		return value
+	}
+	return "未命名品牌项目"
 }
 
 type BrandBriefFact struct {
