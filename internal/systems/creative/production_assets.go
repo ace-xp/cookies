@@ -24,22 +24,7 @@ func (a AssetReadAdapter) Resolve(ctx context.Context, actor contract.ActorConte
 		view := ProductionAssetView{
 			AssetRef: ref, MediaKind: productionMediaKind(asset.Asset.Kind), Availability: string(asset.Version.Status),
 		}
-		if asset.Version.MIMEType != "" {
-			value := asset.Version.MIMEType
-			view.MIMEType = &value
-		}
-		if asset.Version.WidthPixels > 0 {
-			value := asset.Version.WidthPixels
-			view.WidthPixels = &value
-		}
-		if asset.Version.HeightPixels > 0 {
-			value := asset.Version.HeightPixels
-			view.HeightPixels = &value
-		}
-		if asset.Version.DurationMS >= 0 && (asset.Asset.Kind == contract.AssetVideo || asset.Asset.Kind == contract.AssetAudio) {
-			value := asset.Version.DurationMS
-			view.DurationMS = &value
-		}
+		populateProductionAssetMetadata(&view, asset)
 		if asset.Version.Status == platformassets.AssetReady {
 			preview, err := a.Assets.Preview(ctx, actor, projectID, ref)
 			if err != nil {
@@ -50,6 +35,25 @@ func (a AssetReadAdapter) Resolve(ctx context.Context, actor contract.ActorConte
 		items = append(items, view)
 	}
 	return items, nil
+}
+
+func populateProductionAssetMetadata(view *ProductionAssetView, asset platformassets.ProjectAsset) {
+	if asset.Version.MIMEType != "" {
+		value := asset.Version.MIMEType
+		view.MIMEType = &value
+	}
+	if asset.Version.WidthPixels > 0 {
+		value := asset.Version.WidthPixels
+		view.WidthPixels = &value
+	}
+	if asset.Version.HeightPixels > 0 {
+		value := asset.Version.HeightPixels
+		view.HeightPixels = &value
+	}
+	if asset.Version.DurationMS >= 0 && (asset.Asset.Kind == contract.AssetVideo || asset.Asset.Kind == contract.AssetAudio) {
+		value := asset.Version.DurationMS
+		view.DurationMS = &value
+	}
 }
 
 func productionMediaKind(kind contract.AssetKind) ProductionMediaKind {

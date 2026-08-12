@@ -10,11 +10,11 @@ import (
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
-type renderObservabilityExecutor interface {
+type renderObservabilityExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-func ensureInitialRenderObservability(ctx context.Context, executor renderObservabilityExecutor, source ProductionRunSourceKind, organizationID contract.OrganizationID, projectID contract.ProjectID, jobID string, createdAt time.Time) error {
+func ensureInitialRenderObservability(ctx context.Context, executor renderObservabilityExecer, source ProductionRunSourceKind, organizationID contract.OrganizationID, projectID contract.ProjectID, jobID string, createdAt time.Time) error {
 	usageTable, eventTable, err := renderObservabilityTables(source)
 	if err != nil {
 		return err
@@ -31,7 +31,7 @@ func ensureInitialRenderObservability(ctx context.Context, executor renderObserv
 	return err
 }
 
-func appendRenderLifecycleEvent(ctx context.Context, executor renderObservabilityExecutor, source ProductionRunSourceKind, organizationID contract.OrganizationID, projectID contract.ProjectID, jobID, status, errorCode string, occurredAt time.Time) error {
+func appendRenderLifecycleEvent(ctx context.Context, executor renderObservabilityExecer, source ProductionRunSourceKind, organizationID contract.OrganizationID, projectID contract.ProjectID, jobID, status, errorCode string, occurredAt time.Time) error {
 	_, eventTable, err := renderObservabilityTables(source)
 	if err != nil {
 		return err

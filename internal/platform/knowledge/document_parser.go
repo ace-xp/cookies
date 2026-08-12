@@ -68,6 +68,7 @@ type TikaParser struct {
 const (
 	maxTikaMediaResources    = 200
 	maxTikaMediaArchiveBytes = 20 * 1024 * 1024
+	contentTypeHeader        = "Content-Type"
 )
 
 func (p TikaParser) ExtractMedia(ctx context.Context, input DocumentParseRequest) ([]ExtractedDocumentMedia, error) {
@@ -106,7 +107,7 @@ func (p TikaParser) ExtractMedia(ctx context.Context, input DocumentParseRequest
 	result := make([]ExtractedDocumentMedia, 0, min(len(records), maxTikaMediaResources))
 	for _, record := range records {
 		filename := path.Base(metadataString(record, "resourceName"))
-		mimeType := metadataString(record, "Content-Type")
+		mimeType := metadataString(record, contentTypeHeader)
 		if filename == "." || filename == "" || (mimeType != "image/png" && mimeType != "image/jpeg") {
 			continue
 		}
@@ -168,7 +169,7 @@ func (p TikaParser) requestInlineMedia(ctx context.Context, url string, input Do
 	if err != nil {
 		return nil, fmt.Errorf("build Tika media request: %w", err)
 	}
-	request.Header.Set("Content-Type", input.MIMEType)
+	request.Header.Set(contentTypeHeader, input.MIMEType)
 	request.Header.Set("Accept", accept)
 	request.Header.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": input.Filename}))
 	request.Header.Set("X-Tika-PDFextractInlineImages", "true")
@@ -233,7 +234,7 @@ func (p TikaParser) Parse(ctx context.Context, input DocumentParseRequest) (Pars
 	if err != nil {
 		return ParsedDocument{}, fmt.Errorf("build Tika request: %w", err)
 	}
-	request.Header.Set("Content-Type", input.MIMEType)
+	request.Header.Set(contentTypeHeader, input.MIMEType)
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
 		"filename": input.Filename,

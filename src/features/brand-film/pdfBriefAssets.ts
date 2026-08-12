@@ -17,8 +17,8 @@ export function briefProductNames(briefText: string): string[] {
     if (!result.some(current => normalize(current).replace(/^法国娇兰|^娇兰/, '') === identity)) result.push(value)
   }
   for (const line of briefText.replace(/\r\n/g, '\n').split('\n')) {
-    const hashtags = [...line.matchAll(/#\s*([^#\r\n]{2,48}?)\s*#/g)]
-    if (hashtags.length) hashtags.forEach(match => add(match[1]))
+    const hashtags = line.split('#').filter((_, index) => index % 2 === 1)
+    if (hashtags.length) hashtags.forEach(add)
     else if (line.includes('娇兰')) add(line)
   }
   return result

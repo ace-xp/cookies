@@ -348,7 +348,15 @@ function VisualLayer({ clip, z, muted, selected, playheadMs, playing, onSelect, 
   useEffect(() => { const video = mediaRef.current; if (video) { const target = (clip.sourceInMs + playheadMs - clip.timelineStartMs) / 1000; if (Math.abs(video.currentTime - target) > 0.2) video.currentTime = Math.max(0, target) } }, [clip, playheadMs])
   useEffect(() => { const video = mediaRef.current; if (!video) return; if (playing) void video.play().catch(() => undefined); else video.pause() }, [playing])
   const style = { zIndex: z + 1, width: `${clip.transform.scale * 100}%`, height: `${clip.transform.scale * 100}%`, left: `${clip.transform.positionX * 100}%`, top: `${clip.transform.positionY * 100}%`, transform: `translate(${-clip.transform.positionX * 100}%, ${-clip.transform.positionY * 100}%)`, opacity: clip.transform.opacity, clipPath: `inset(${clip.transform.crop.top * 100}% ${clip.transform.crop.right * 100}% ${clip.transform.crop.bottom * 100}% ${clip.transform.crop.left * 100}%)` }
-  const move = (event: ReactPointerEvent<HTMLButtonElement>) => { if (!dragRef.current) return; const bounds = event.currentTarget.parentElement?.getBoundingClientRect(); if (!bounds) return; onTransform(clip.id, { positionX: dragRef.current.positionX + (event.clientX - dragRef.current.x) / bounds.width, positionY: dragRef.current.positionY + (event.clientY - dragRef.current.y) / bounds.height }) }
+  const move = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!dragRef.current) return
+    const bounds = event.currentTarget.parentElement?.getBoundingClientRect()
+    if (!bounds) return
+    onTransform(clip.id, {
+      positionX: dragRef.current.positionX + (event.clientX - dragRef.current.x) / bounds.width,
+      positionY: dragRef.current.positionY + (event.clientY - dragRef.current.y) / bounds.height,
+    })
+  }
   return <button className={`c3-visual-layer${selected ? ' selected' : ''}`} style={style} onClick={event => { event.stopPropagation(); onSelect(clip.id) }} onPointerDown={event => { if ((event.target as HTMLElement).closest('.c3-resize-handle')) return; event.currentTarget.setPointerCapture(event.pointerId); dragRef.current = { x: event.clientX, y: event.clientY, positionX: clip.transform.positionX, positionY: clip.transform.positionY } }} onPointerMove={move} onPointerUp={event => { dragRef.current = null; event.currentTarget.releasePointerCapture(event.pointerId) }}>
     {clip.kind === 'image' ? <img src={clip.previewUrl} alt={clip.name} style={{ objectFit: clip.transform.fit }}/> : <video ref={mediaRef} src={clip.previewUrl} muted playsInline preload="auto" style={{ objectFit: clip.transform.fit }}/>}<span className="c3-layer-name">{clip.name}</span>{selected ? <span className="c3-resize-handle" onPointerDown={event => { event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); resizeRef.current = { x: event.clientX, scale: clip.transform.scale } }} onPointerMove={event => { if (resizeRef.current) onTransform(clip.id, { scale: resizeRef.current.scale + (event.clientX - resizeRef.current.x) / 240 }) }} onPointerUp={() => { resizeRef.current = null }}/> : null}
   </button>

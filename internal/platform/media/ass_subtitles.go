@@ -86,13 +86,8 @@ func validateCaptionStyle(style TimelineCaptionStyle) error {
 
 func styledASSText(value string, emphasis []TimelineCaptionEmphasis, style TimelineCaptionStyle) (string, error) {
 	runes := []rune(strings.TrimSpace(value))
-	sort.Slice(emphasis, func(i, j int) bool { return emphasis[i].StartRune < emphasis[j].StartRune })
-	previousEnd := 0
-	for _, span := range emphasis {
-		if span.StartRune < previousEnd || span.StartRune < 0 || span.EndRune <= span.StartRune || span.EndRune > len(runes) {
-			return "", fmt.Errorf("caption emphasis range is invalid")
-		}
-		previousEnd = span.EndRune
+	if err := validateCaptionEmphasis(runes, emphasis); err != nil {
+		return "", err
 	}
 	var body strings.Builder
 	spanIndex := 0
@@ -119,6 +114,18 @@ func styledASSText(value string, emphasis []TimelineCaptionEmphasis, style Timel
 		}
 	}
 	return body.String(), nil
+}
+
+func validateCaptionEmphasis(runes []rune, emphasis []TimelineCaptionEmphasis) error {
+	sort.Slice(emphasis, func(i, j int) bool { return emphasis[i].StartRune < emphasis[j].StartRune })
+	previousEnd := 0
+	for _, span := range emphasis {
+		if span.StartRune < previousEnd || span.StartRune < 0 || span.EndRune <= span.StartRune || span.EndRune > len(runes) {
+			return fmt.Errorf("caption emphasis range is invalid")
+		}
+		previousEnd = span.EndRune
+	}
+	return nil
 }
 
 func assColor(value string) string {
