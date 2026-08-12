@@ -580,30 +580,35 @@ func filterProductionRuns(items []ProductionSourceRun, request ListProductionRun
 	query := strings.ToLower(strings.TrimSpace(request.Query))
 	for _, item := range items {
 		summary := item.Summary
-		if request.MediaKind != "" && summary.MediaKind != request.MediaKind || len(statuses) > 0 && !statuses[summary.NormalizedStatus] {
+		if !productionRunMatches(summary, request, statuses, query) {
 			continue
-		}
-		if request.SourceTaskID != "" && (summary.SourceTask == nil || summary.SourceTask.ObjectID != request.SourceTaskID) {
-			continue
-		}
-		if request.CreatedAfter != nil && summary.CreatedAt.Before(*request.CreatedAfter) || request.CreatedBefore != nil && !summary.CreatedAt.Before(*request.CreatedBefore) {
-			continue
-		}
-		if query != "" {
-			haystack := strings.ToLower(summary.Ref.ID)
-			if summary.SourceTask != nil && summary.SourceTask.DisplayName != nil {
-				haystack += " " + strings.ToLower(*summary.SourceTask.DisplayName)
-			}
-			if summary.Error != nil {
-				haystack += " " + strings.ToLower(summary.Error.Code)
-			}
-			if !strings.Contains(haystack, query) {
-				continue
-			}
 		}
 		filtered = append(filtered, item)
 	}
 	return filtered
+}
+
+func productionRunMatches(summary ProductionRunSummary, request ListProductionRunsRequest, statuses map[ProductionStatus]bool, query string) bool {
+	if request.MediaKind != "" && summary.MediaKind != request.MediaKind || len(statuses) > 0 && !statuses[summary.NormalizedStatus] {
+		return false
+	}
+	if request.SourceTaskID != "" && (summary.SourceTask == nil || summary.SourceTask.ObjectID != request.SourceTaskID) {
+		return false
+	}
+	if request.CreatedAfter != nil && summary.CreatedAt.Before(*request.CreatedAfter) || request.CreatedBefore != nil && !summary.CreatedAt.Before(*request.CreatedBefore) {
+		return false
+	}
+	if query == "" {
+		return true
+	}
+	haystack := strings.ToLower(summary.Ref.ID)
+	if summary.SourceTask != nil && summary.SourceTask.DisplayName != nil {
+		haystack += " " + strings.ToLower(*summary.SourceTask.DisplayName)
+	}
+	if summary.Error != nil {
+		haystack += " " + strings.ToLower(summary.Error.Code)
+	}
+	return strings.Contains(haystack, query)
 }
 
 func encodeProductionCursor(summary ProductionRunSummary) (string, error) {

@@ -319,17 +319,8 @@ func (s UploadService) IngestRenderedVideoWithSources(ctx context.Context, reque
 }
 
 func (s UploadService) ingestRenderedVideo(ctx context.Context, requestContext contract.RequestContext, projectID contract.ProjectID, renderJobID string, sources []contract.ResourceRef, content io.Reader, sizeBytes int64) (contract.ProjectAssetRef, error) {
-	if err := s.validateDependencies(); err != nil {
+	if err := s.validateRenderedVideoIngest(requestContext, renderJobID, content, sizeBytes); err != nil {
 		return contract.ProjectAssetRef{}, err
-	}
-	if err := requestContext.Validate(); err != nil {
-		return contract.ProjectAssetRef{}, err
-	}
-	if !requestContext.Actor.HasScope("assets.write") {
-		return contract.ProjectAssetRef{}, fmt.Errorf("assets.write scope is required")
-	}
-	if strings.TrimSpace(renderJobID) == "" || len(renderJobID) > 96 || content == nil || sizeBytes < 1 || sizeBytes > MaxVideoBytes {
-		return contract.ProjectAssetRef{}, fmt.Errorf("render_job_id and supported video content are required")
 	}
 	project, err := s.Projects.RequireActiveContext(ctx, requestContext.Actor, projectID)
 	if err != nil {
@@ -379,6 +370,22 @@ func (s UploadService) ingestRenderedVideo(ctx context.Context, requestContext c
 		_ = s.Blobs.Delete(ctx, commit.Location)
 	}
 	return ref, nil
+}
+
+func (s UploadService) validateRenderedVideoIngest(requestContext contract.RequestContext, renderJobID string, content io.Reader, sizeBytes int64) error {
+	if err := s.validateDependencies(); err != nil {
+		return err
+	}
+	if err := requestContext.Validate(); err != nil {
+		return err
+	}
+	if !requestContext.Actor.HasScope("assets.write") {
+		return fmt.Errorf("assets.write scope is required")
+	}
+	if strings.TrimSpace(renderJobID) == "" || len(renderJobID) > 96 || content == nil || sizeBytes < 1 || sizeBytes > MaxVideoBytes {
+		return fmt.Errorf("render_job_id and supported video content are required")
+	}
+	return nil
 }
 
 // IngestDerivedImage persists a processor-produced image as an immutable Asset

@@ -170,28 +170,34 @@ func (s Service) validateTimelineV2Assets(ctx context.Context, actor contract.Ac
 	}
 	for _, track := range timeline.Tracks {
 		for _, clip := range track.Clips {
-			if clip.AssetRef == nil {
-				continue
-			}
-			asset, err := s.Assets.ReadForCreative(ctx, actor, projectID, *clip.AssetRef)
-			if err != nil {
+			if err := s.validateTimelineV2ClipAsset(ctx, actor, projectID, clip, purpose); err != nil {
 				return err
-			}
-			if !asset.Ready || asset.Ref != *clip.AssetRef {
-				return fmt.Errorf("editing clip %s references an unavailable asset", clip.ID)
-			}
-			if clip.Kind == "video" && asset.Kind != contract.AssetVideo || clip.Kind == "image" && asset.Kind != contract.AssetImage || clip.Kind == "audio" && asset.Kind != contract.AssetAudio {
-				return fmt.Errorf("editing clip %s asset kind does not match", clip.ID)
-			}
-			if clip.Source != nil && clip.Source.OutUS > asset.DurationMS*1000 {
-				return fmt.Errorf("editing clip %s source range exceeds asset duration", clip.ID)
-			}
-			if s.AssetUses != nil {
-				if _, err := s.AssetUses.Authorize(ctx, platformassets.AssetUseRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AssetRef: *clip.AssetRef, Purpose: purpose}); err != nil {
-					return err
-				}
 			}
 		}
 	}
 	return nil
+}
+
+func (s Service) validateTimelineV2ClipAsset(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, clip EditingClipV2, purpose platformassets.AssetUsePurpose) error {
+	if clip.AssetRef == nil {
+		return nil
+	}
+	asset, err := s.Assets.ReadForCreative(ctx, actor, projectID, *clip.AssetRef)
+	if err != nil {
+		return err
+	}
+	if !asset.Ready || asset.Ref != *clip.AssetRef {
+		return fmt.Errorf("editing clip %s references an unavailable asset", clip.ID)
+	}
+	expectedKinds := map[string]contract.AssetKind{"video": contract.AssetVideo, "image": contract.AssetImage, "audio": contract.AssetAudio}
+	if expectedKinds[clip.Kind] != asset.Kind {
+		return fmt.Errorf("editing clip %s asset kind does not match", clip.ID)
+	}
+	if clip.Source != nil && clip.Source.OutUS > asset.DurationMS*1000 {
+		return fmt.Errorf("editing clip %s source range exceeds asset duration", clip.ID)
+	}
+	if s.AssetUses != nil {
+		_, err = s.AssetUses.Authorize(ctx, platformassets.AssetUseRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AssetRef: *clip.AssetRef, Purpose: purpose})
+	}
+	return err
 }

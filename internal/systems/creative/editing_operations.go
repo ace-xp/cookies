@@ -110,6 +110,27 @@ func ApplyEditOperations(document EditingDocument, batch EditOperationBatch) (Ed
 }
 
 func applyEditOperation(document *EditingTimelineV2, op EditOperation) (EditOperation, error) {
+	if handler := directEditOperationHandler(op.Type); handler != nil {
+		return handler(document, op)
+	}
+	return applyComplexEditOperation(document, op)
+}
+
+func directEditOperationHandler(operationType EditOperationType) func(*EditingTimelineV2, EditOperation) (EditOperation, error) {
+	return map[EditOperationType]func(*EditingTimelineV2, EditOperation) (EditOperation, error){
+		OperationSetCanvasProfile: applyCanvasProfileOperation,
+	}[operationType]
+}
+
+func applyCanvasProfileOperation(document *EditingTimelineV2, op EditOperation) (EditOperation, error) {
+	old := document.Canvas.ProfileID
+	if err := setCanvasProfileV2(&document.Canvas, op.CanvasProfileID); err != nil {
+		return EditOperation{}, err
+	}
+	return inheritInverse(op, EditOperation{Type: OperationSetCanvasProfile, CanvasProfileID: old}), nil
+}
+
+func applyComplexEditOperation(document *EditingTimelineV2, op EditOperation) (EditOperation, error) {
 	switch op.Type {
 	case OperationInsertAsset:
 		track := findTrackV2(document, op.TrackID)
@@ -293,12 +314,6 @@ func applyEditOperation(document *EditingTimelineV2, op EditOperation) (EditOper
 		old := track.Locked
 		track.Locked = *op.Locked
 		return inheritInverse(op, EditOperation{Type: OperationSetTrackLocked, TrackID: op.TrackID, Locked: &old}), nil
-	case OperationSetCanvasProfile:
-		old := document.Canvas.ProfileID
-		if err := setCanvasProfileV2(&document.Canvas, op.CanvasProfileID); err != nil {
-			return EditOperation{}, err
-		}
-		return inheritInverse(op, EditOperation{Type: OperationSetCanvasProfile, CanvasProfileID: old}), nil
 	default:
 		return EditOperation{}, fmt.Errorf("operation type %s is not implemented", op.Type)
 	}

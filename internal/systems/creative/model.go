@@ -892,6 +892,8 @@ type CreativeVersion struct {
 	RequestHash    string                  `json:"-"`
 }
 
+const creativeVideoVersionContract = "creative-video-version/v1"
+
 type VideoVersionSnapshot struct {
 	ContractVersion   string                            `json:"contract_version"`
 	Format            CreativeFormat                    `json:"format"`
@@ -1016,7 +1018,7 @@ func (v BrandFilmVersionSnapshot) Validate() error {
 
 func (v VideoVersionSnapshot) Validate() error {
 	if v.Editing != nil {
-		if v.ContractVersion != "creative-video-version/v1" || v.Format != FormatVideo || v.VideoPurpose != "editing" || v.PerformanceMode != "material_edit" ||
+		if v.ContractVersion != creativeVideoVersionContract || v.Format != FormatVideo || v.VideoPurpose != "editing" || v.PerformanceMode != "material_edit" ||
 			v.DraftRevision != v.Editing.TimelineVersion || v.FinalVideo != v.Editing.OutputAsset || strings.TrimSpace(v.RenderJobID) == "" || v.RenderJobID != v.Editing.RenderJobID ||
 			v.BrandFilm != nil || v.StrategyPackage != nil || v.Editing.Validate() != nil {
 			return fmt.Errorf("creative editing video version snapshot is incomplete")
@@ -1024,12 +1026,12 @@ func (v VideoVersionSnapshot) Validate() error {
 		return nil
 	}
 	if v.CommercePrerollV2 != nil {
-		if v.ContractVersion != "creative-video-version/v1" || v.Format != FormatVideo || v.VideoPurpose != "performance" || v.PerformanceMode != PerformanceModeCommercePreroll || v.DraftRevision != v.CommercePrerollV2.Workspace.Revision || v.CommercePrerollV2.ContractVersion != "creative-commerce-preroll-version/v1" || v.CommercePrerollV2.Workspace.Validate() != nil || v.BrandFilm != nil || v.Editing != nil {
+		if v.ContractVersion != creativeVideoVersionContract || v.Format != FormatVideo || v.VideoPurpose != "performance" || v.PerformanceMode != PerformanceModeCommercePreroll || v.DraftRevision != v.CommercePrerollV2.Workspace.Revision || v.CommercePrerollV2.ContractVersion != "creative-commerce-preroll-version/v1" || v.CommercePrerollV2.Workspace.Validate() != nil || v.BrandFilm != nil || v.Editing != nil {
 			return fmt.Errorf("creative commerce preroll version snapshot is incomplete")
 		}
 		return nil
 	}
-	if v.ContractVersion != "creative-video-version/v1" || v.Format != FormatVideo ||
+	if v.ContractVersion != creativeVideoVersionContract || v.Format != FormatVideo ||
 		(v.Channel != ChannelDouyin && v.Channel != ChannelKuaishou) ||
 		v.DraftRevision < 1 {
 		return fmt.Errorf("creative video version snapshot is incomplete")

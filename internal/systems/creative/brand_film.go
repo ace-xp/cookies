@@ -115,13 +115,7 @@ type BrandFilmSourceSnapshot struct {
 func newBrandFilmDraft(task CreativeTask, intake CreativeIntake, route CreativeRouteSnapshot, now time.Time) (*BrandFilmDraft, error) {
 	briefName := "已确认品牌策略"
 	briefText := strings.TrimSpace(string(intake.Request.StrategyHandoffInput))
-	productName := strings.TrimSpace(intake.Request.CoreMessage)
-	if productName == "" {
-		productName = strings.TrimSpace(intake.Request.Concept)
-	}
-	if productName == "" {
-		productName = "未命名品牌项目"
-	}
+	productName := brandFilmProductName(intake)
 	snapshot := BrandFilmSourceSnapshot{
 		SourceKind: string(intake.Source), IntakeID: intake.ID, InputIdentityHash: intake.InputIdentityHash,
 		BriefName: briefName, BriefText: briefText, ProductName: productName,
@@ -194,6 +188,16 @@ func newBrandFilmDraft(task CreativeTask, intake CreativeIntake, route CreativeR
 		},
 		CreatedAt: now, UpdatedAt: now,
 	}, nil
+}
+
+func brandFilmProductName(intake CreativeIntake) string {
+	if value := strings.TrimSpace(intake.Request.CoreMessage); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(intake.Request.Concept); value != "" {
+		return value
+	}
+	return "未命名品牌项目"
 }
 
 type BrandBriefFact struct {

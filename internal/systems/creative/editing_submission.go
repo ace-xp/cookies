@@ -73,7 +73,7 @@ func (s Service) SubmitEditingVersion(ctx context.Context, rc contract.RequestCo
 	}
 	inputs := editingVersionInputAssets(render)
 	editing := &EditingVersionSnapshot{ContractVersion: "creative-editing-version/v1", EditTaskID: editTaskID, TimelineVersion: render.Timeline.Version, TimelineSchema: render.Timeline.Schema(), TimelineHash: render.Timeline.ContentHash, CompilerVersion: render.Timeline.CompilerCompatibility, RendererFingerprint: render.RendererFingerprint, RenderJobID: render.ID, OutputAsset: render.OutputAsset.AssetVersion, InputAssets: inputs, Width: width, Height: height, FrameRate: 30, SampleRate: 48000, DurationMS: duration, VideoCodec: "h264", AudioCodec: "aac", TargetLUFS: -16}
-	video := &VideoVersionSnapshot{ContractVersion: "creative-video-version/v1", Format: FormatVideo, VideoPurpose: "editing", PerformanceMode: "material_edit", DraftRevision: render.Timeline.Version, FinalVideo: render.OutputAsset.AssetVersion, RenderJobID: render.ID, Editing: editing}
+	video := &VideoVersionSnapshot{ContractVersion: creativeVideoVersionContract, Format: FormatVideo, VideoPurpose: "editing", PerformanceMode: "material_edit", DraftRevision: render.Timeline.Version, FinalVideo: render.OutputAsset.AssetVersion, RenderJobID: render.ID, Editing: editing}
 	contentHash, err := contract.NewContentHash(video)
 	if err != nil {
 		return CreativeVersion{}, false, err
