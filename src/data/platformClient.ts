@@ -103,6 +103,7 @@ export type PlatformProjectAsset = {
     created_at?: string;
   };
   created_at?: string;
+  use_decision?: { allowed: boolean; rights_status: 'unverified' | 'active' | 'revoked'; code?: string };
 };
 
 export type PlatformBusinessTask = {
@@ -501,7 +502,7 @@ function toApiProjectMediaAsset(asset: PlatformProjectAsset, projectId: string):
   const version = asset.version?.version ?? asset.ref?.asset_version.version
   const kind = asset.asset?.asset_kind
   const mimeType = asset.version?.mime_type ?? ''
-  if (!id || !version || (kind !== 'video' && kind !== 'image' && kind !== 'document')) return []
+  if (!id || !version || (kind !== 'video' && kind !== 'image' && kind !== 'audio' && kind !== 'document')) return []
   return [{
     id,
     projectId,
@@ -514,6 +515,9 @@ function toApiProjectMediaAsset(asset: PlatformProjectAsset, projectId: string):
     height: asset.version?.height_pixels,
     createdAt: asset.created_at ?? asset.version?.created_at ?? '',
     contentUrl: `/platform/v1/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(id)}/versions/${version}/content`,
+    rightsStatus: asset.use_decision?.rights_status,
+    useAllowed: asset.use_decision?.allowed,
+    useDenialCode: asset.use_decision?.code,
   }]
 }
 
