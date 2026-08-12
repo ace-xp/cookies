@@ -1,6 +1,6 @@
 import {
   Activity, Aperture, Archive, BadgeCheck, BarChart3, BookOpenCheck, Bot,
-  Boxes, BrainCircuit, ChartNoAxesCombined, CircleGauge, ClipboardCheck,
+  Boxes, BrainCircuit, ChartNoAxesCombined, CircleGauge, ClipboardCheck, Compass,
   Database, FileCheck2, FileSearch, Film, FlaskConical, FolderKanban,
   GalleryHorizontalEnd, Library, Lightbulb, ListChecks,
   Megaphone, MonitorCog, PackageCheck, PanelTop, PlaySquare, Rocket, Route,
@@ -38,6 +38,20 @@ export const systems: SystemDefinition[] = [
     key: 'insight', label: '素材洞察', shortLabel: '洞察', icon: ChartNoAxesCombined,
     statement: '投前支持策略与创意，投后解释效果并沉淀经验。',
     nav: [
+      // 「投前」= 原「投前洞察」。8-04 那版重构把它并进了「经验 → 查经验」，理由是
+      // 「同一批数据的两种读法」——数据上没错，但导航上抹掉了「下一轮该做什么」
+      // 这件事：人只看见「经验」，不会意识到那是开工前该来的地方。
+      //
+      // 拎回来之后它跟「查经验」的分工是：这一页只给 ✅ 能归因的，带数据体检闸门和
+      // 跨渠道警告，是**决定**；「查经验」是完整目录，六个维度筛、能看 👁 只是观察的，
+      // 是**翻账**。所以这一页敢少给，那一页不敢。
+      //
+      // 排在最前面：一轮的顺序是投前 → 分析 → 复盘 → 经验，导航顺序就是这个顺序。
+      {
+        id: 'prelaunch', label: '投前', icon: Compass, group: '工作', layout: 'analysis',
+        description: '开工前先看以前什么有效、在什么条件下成立。只列能照着做的结论，数据体检没过会当场说。',
+        views: ['结论', '历史模式'],
+      },
       // 「分析」= 原「投后分析」（六个视图）+ 原「实验中心」（作为 👁 的升级通道）。
       // 合并的理由：实验不是一个独立的地方，它是「只是观察」升成「能归因」的那一步。
       // 摆成独立入口，人得先意识到自己需要一个实验，才会想到点进去。

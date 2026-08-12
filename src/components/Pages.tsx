@@ -8,8 +8,9 @@ import type { BusinessTaskRecord, BusinessTaskType, DataState, NavItem, ProjectR
 import { calculateProjectProgress, progressPercentLabel, progressReasonLabel, progressStatusLabel } from '../lib/project-progress'
 import { TrendChart } from './Icons'
 import { shortId } from '../data/shortId'
-// 洞察五个入口的页面本身在下面跟着其他页面一起 lazy，这里只静态引它们的视图类型
+// 洞察各入口的页面本身在下面跟着其他页面一起 lazy，这里只静态引它们的视图类型
 // ——类型在编译期就消掉了，不会把 chunk 拽回主包。
+import type { PreLaunchView } from './insight/prelaunch'
 import type { AnalysisView } from './insight/analysis'
 import type { AssetsView } from './insight/assets'
 import type { ReviewView } from './insight/review'
@@ -37,6 +38,7 @@ const DeliveryMockEnvironmentBanner = lazy(() => import('./DeliveryTourPage').th
 const DeliveryTourContextBanner = lazy(() => import('./DeliveryTourPage').then(module => ({ default: module.DeliveryTourContextBanner })))
 const DeliveryTourPage = lazy(() => import('./DeliveryTourPage').then(module => ({ default: module.DeliveryTourPage })))
 const ExperimentCenterPage = lazy(() => import('./ExperimentCenterPage').then(module => ({ default: module.ExperimentCenterPage })))
+const PreLaunchPage = lazy(() => import('./insight/prelaunch/PreLaunchPage').then(module => ({ default: module.PreLaunchPage })))
 const AnalysisPage = lazy(() => import('./insight/analysis/AnalysisPage').then(module => ({ default: module.AnalysisPage })))
 const AssetsPage = lazy(() => import('./insight/assets/AssetsPage').then(module => ({ default: module.AssetsPage })))
 const ReviewPage = lazy(() => import('./insight/review/ReviewPage').then(module => ({ default: module.ReviewPage })))
@@ -1445,6 +1447,13 @@ function ObjectDetail({ system, item, objectId, onOpenProject }: { system: Syste
 
 // 侧栏的二级视图名 → 分析页的视图键。认不出来的名字落到总览，
 // 不留空白页：视图名改错了应该看到总览，而不是一片空。
+// 投前入口的两个视图。认不出来的落到「结论」——那是开工前真正要读的一屏，
+// 「历史模式」是回头看统计，不该在人没主动要求时先出现。
+const preLaunchViews: Record<string, PreLaunchView> = {
+  结论: 'conclusions',
+  历史模式: 'patterns',
+}
+
 const analysisViews: Record<string, AnalysisView> = {
   指标总览: 'overview',
   素材对比: 'comparisons',
@@ -1588,6 +1597,7 @@ export function ModulePage({
       />
     </Suspense>
     : system.key === 'creative' && item.id === 'reviews' ? <MaterialCheckWorkspace state={dataState} activeView={activeView} objectId={objectId} onOpenProject={onOpenProject}/>
+    : system.key === 'insight' && item.id === 'prelaunch' ? <PreLaunchPage state={dataState} view={preLaunchViews[activeView] ?? 'conclusions'}/>
     : system.key === 'insight' && item.id === 'analysis' ? <AnalysisPage state={dataState} view={analysisViews[activeView] ?? 'overview'} onOpenExperiments={() => onOpenProject(currentProject.id, 'insight', 'experiments')}/>
     : system.key === 'insight' && item.id === 'assets' ? <AssetsPage
       state={dataState}

@@ -124,8 +124,15 @@ func TestSharedFeatureKeysAcrossUnrelatedTypes(t *testing.T) {
 	if shared := SharedFeatureKeys(AssetTypeXiaohongshuNote, AssetTypeWechatArticle); len(shared) != 0 {
 		t.Fatalf("expected no shared pivot between the two 图文 systems, got %v", shared)
 	}
-	if shared := SharedFeatureKeys(AssetTypeBrandAd, AssetTypePrerollAd); len(shared) != 0 {
-		t.Fatalf("expected no shared pivot between 品牌广告 and 广告前贴, got %v", shared)
+	// 品牌广告 和 广告前贴 只在**量得出来的**那两项上通用：时长和画幅。
+	//
+	// 这两项原来只有品牌广告有（§5.3 渠道适配），效果广告那边一项都没有，于是
+	// 两类视频素材之间一个可比较的维度都没有。补齐之后它们成了唯一的跨类型透视
+	// 列——而这恰恰是应该的：口播、钩子这些是各自体系里的词，含义不通用；
+	// 「15 秒」和「竖版」在哪类素材上都是同一件事。
+	shared := SharedFeatureKeys(AssetTypeBrandAd, AssetTypePrerollAd)
+	if len(shared) != 2 || !contains(shared, "duration") || !contains(shared, "aspect_ratio") {
+		t.Fatalf("品牌广告与广告前贴只应在时长和画幅上通用，实际 %v", shared)
 	}
 }
 

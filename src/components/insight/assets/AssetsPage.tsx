@@ -9,6 +9,7 @@ import { isoDate } from '../analysis/format'
 import { AssetDetail } from './AssetDetail'
 import { ExternalView } from './ExternalView'
 import { FeatureView } from './FeatureView'
+import { ImportFromCreative } from './ImportFromCreative'
 import { IntakeView } from './IntakeView'
 import { OverviewView } from './OverviewView'
 import { SimilarView } from './SimilarView'
@@ -67,6 +68,9 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
   // 登记表单开在右栏。它是这个模块唯一一处「凭空多出一条素材」的入口，三页合并
   // 之后不能跟着旧页面一起消失——没有它，一个新 Project 里后面每一页都是空的。
   const [indexing, setIndexing] = useState(false)
+  // 从创意批量导入。跟登记表单共用右栏，但它们是两条不同的路：登记是「外面做的，
+  // 手工补一条」，导入是「创意组已经批准的，一次全接过来」。
+  const [importing, setImporting] = useState(false)
   // 登记成功后加一，让总览和这里的素材清单都重新取一次数。
   const [reloadKey, setReloadKey] = useState(0)
 
@@ -89,7 +93,7 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
 
   // 换视图就把选中的素材放开：详情面板留在那儿，人会以为新视图说的还是这一条。
   // 登记表单同理：它只属于总览那一屏。
-  useEffect(() => { setSelectedId(''); setIndexing(false) }, [view])
+  useEffect(() => { setSelectedId(''); setIndexing(false); setImporting(false) }, [view])
 
   const heading = headings[view]
   const selected = assets.find(asset => asset.id === selectedId)
@@ -116,14 +120,27 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
           onOpenLibrary={onOpenLibrary}
           onOpenView={onOpenView}
           onOpenAnalysis={onOpenAnalysis}
-          onIndex={() => { setSelectedId(''); setIndexing(true) }}
+          onIndex={() => { setSelectedId(''); setImporting(false); setIndexing(true) }}
+          onImport={() => { setSelectedId(''); setIndexing(false); setImporting(true) }}
           reloadKey={reloadKey}/> : null}
         {view === 'similar' ? <SimilarView/> : null}
         {view === 'external' ? <ExternalView window={window}/> : null}
       </section>
 
       <aside className="prelaunch-detail">
-        {indexing
+        {importing
+          ? <ImportFromCreative
+            projectId={currentProject.id}
+            existing={assets}
+            onCancel={() => setImporting(false)}
+            onRefresh={() => setReloadKey(key => key + 1)}
+            onDone={() => {
+              setImporting(false)
+              // 导进来的是一批不是一条，没有「刚登记的那一条」可选中。
+              // 让总览重新取一次数，人自己在清单里看这一批。
+              setReloadKey(key => key + 1)
+            }}/>
+          : indexing
           ? <AssetIndexForm
             assets={assets}
             projectId={currentProject.id}

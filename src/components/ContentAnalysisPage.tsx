@@ -3,6 +3,7 @@ import { CircleAlert, Layers3, Lightbulb, RefreshCw, ScrollText, Sparkles, UserC
 import { useProject } from '../context/ProjectContext'
 import {
   api,
+  ApiRequestError,
   type ApiAnalysisRun,
   type ApiConfidence,
   type ApiReviewState,
@@ -86,7 +87,8 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
   const [draft, setDraft] = useState('')
   const [notice, setNotice] = useState('')
   const [listState, setListState] = useState<'loading' | 'ready' | 'error'>('loading')
-  // 素材正文不在素材库里（素材库存的是身份和状态，不存正文），提取时必须由人带上。
+  // 图文类的正文不在库里（洞察只存身份和状态，不存正文），提取时必须由人带上。
+  // 视频类不用：画面交给多模态自己去看，这个框只是选填的补充。
   const [content, setContent] = useState('')
   const [note, setNote] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
@@ -171,6 +173,13 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
   const typeSchema = schemas.find(schema =>
     schema.asset_type === (target === 'single' ? selectedAsset?.asset_type : target))
 
+  // 「这一条，模型能自己去看画面吗」——决定正文框是必填还是选填。
+  // 两个条件缺一不可：类型是视频（后端 IsVideo），而且指向了素材库里的文件。
+  // 只满足前一条的，模型没有文件可看，人还是得写一段描述（下面那条提示会说明）。
+  const modelWatchesTheVideo = Boolean(
+    typeSchema?.is_video && selectedAsset?.platform_asset_id && selectedAsset?.platform_asset_version,
+  )
+
   /**
    * 写人工层。后端的 PATCH 是整层替换（ReplaceLayer: human），所以要把已有的人工结论
    * 一起带上，否则会把别人此前的判断抹掉。AI 那一层始终不动（AM-006、§14）。
@@ -224,11 +233,12 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
    * 提出来的结果只写 AI 那一层，状态停在待确认，不会自动变成已确认的结论（09 §8）。
    */
   const analyze = useCallback(async () => {
-    if (!selectedAsset || !content.trim()) return
+    if (!selectedAsset) return
     setAnalyzing(true)
     try {
       const result = await api.analyzeInsightAsset(currentProject.id, selectedAsset.id, {
         expected_version: selectedAsset.version,
+        // 视频类可以空着——后端会去问多模态。填了也不浪费，会当成人的补充一起给模型。
         content: content.trim(),
         note: note.trim() || undefined,
       })
@@ -239,7 +249,21 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
       // loadList 会清空提示，所以放在它之后再写。
       setNotice(`提取完成，AI 给出 ${result.features.length} 项特征${dropped}。这些还只是待确认，需要逐项认可或推翻。`)
     } catch (cause) {
-      // 失败的任务后端也会记一行，所以照样刷新历史，让人看得见它失败过。
+      // 「模型正在看这条视频」不是失败：这一趟压根没跑，后端也没记留痕
+      // （understanding.go），所以不刷新历史，也不说「具体原因见……」——
+      // 那边什么都没有，让人去翻只会更困惑。
+      if (cause instanceof ApiRequestError && cause.code === 'UNDERSTANDING_PENDING') {
+        setNotice(`${cause.message}。视频要先由多模态看一遍关键帧，通常一两分钟。`)
+        return
+      }
+      // 400 是「这个请求本身不成立」（缺正文、模型看不了这条视频），后端在跑之前
+      // 就退回来了，没有留痕。指路「见右侧最新一条」会让人去翻一条不存在的记录，
+      // 而报错里已经把原因说全了。
+      if (cause instanceof ApiRequestError && cause.status === 400) {
+        setNotice(cause.message)
+        return
+      }
+      // 剩下的是真的跑过并且失败了，后端记了一行，所以照样刷新历史，让人看得见。
       // 接口按平台惯例只回一句笼统的错误码文案，真正的原因在那条记录里。
       await loadRuns()
       setNotice(`${cause instanceof Error ? cause.message : '提取失败'}。具体原因见右侧「数据与方法」最新一条。`)
@@ -295,13 +319,26 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
             <div><span className="section-label">AI 提特征</span></div>
             <p>
               照「{typeSchema.label}」自己那套 {typeSchema.fields.length} 个变量提问，不会把别类素材的字段套过来。
-              素材正文没有存在库里，要提取就得先把正文贴进来。提出来的结果只进 AI 那一层，仍然要逐项人工认可才算数。
+              {/* 视频但没有文件引用的那种情况这里不说话——下面那条提示专门讲它，
+                  在这儿再说一句「本体就是那段文字」是错的，视频的本体是画面。 */}
+              {modelWatchesTheVideo
+                ? '这是视频，画面由模型自己去看素材库里的那个文件，你不用再写一遍——写了也行，会当成你的补充一起给模型。'
+                : typeSchema.is_video ? '' : '这类素材的本体就是那段文字，洞察这边没存正文，要提取就得先贴进来。'}
+              提出来的结果只进 AI 那一层，仍然要逐项人工认可才算数。
             </p>
+            {typeSchema.is_video && !modelWatchesTheVideo
+              ? <div className="prelaunch-boundary"><CircleAlert size={16}/><span>
+                <small>模型看不到画面</small>这条视频没指向素材库里的文件，只有从创意导入的素材才带这个引用。
+                现在只能靠你写一段画面描述或脚本——那样模型分析的是这段描述，不是这条视频。
+              </span></div>
+              : null}
             <textarea
               aria-label="素材内容"
               rows={6}
               value={content}
-              placeholder="把这条素材的正文、口播稿或分镜说明贴进来"
+              placeholder={modelWatchesTheVideo
+                ? '选填：模型从画面里看不出来的背景，例如「这条是给老客户的续费提醒」'
+                : '把这条素材的正文、口播稿或分镜说明贴进来'}
               onChange={event => setContent(event.target.value)}
             />
             <input
@@ -311,7 +348,7 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
               onChange={event => setNote(event.target.value)}
             />
             <div className="actions">
-              <button className="primary-button" disabled={analyzing || !content.trim()} onClick={() => { void analyze() }}>
+              <button className="primary-button" disabled={analyzing || (!content.trim() && !modelWatchesTheVideo)} onClick={() => { void analyze() }}>
                 <Wand2 size={15}/>{analyzing ? '提取中…' : '提取特征'}
               </button>
               <span>只有点这个按钮才会真的调一次模型。登记素材时不会自动提——那样只会把待复核的结果堆满，没人看得完。</span>

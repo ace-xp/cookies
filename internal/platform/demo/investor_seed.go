@@ -424,7 +424,10 @@ var investorDemoAssets = []demoAssetSeed{
 	},
 	{
 		key: "creative_video", id: "asset_demo_investor_creative_video", objectKey: "creative-video.mp4", kind: contract.AssetVideo,
-		sourceType: contract.AssetSourceProviderGenerated, mimeType: "video/mp4", sizeBytes: 15728640,
+		// 宽高得有。真实上传走 ffprobe，量不到宽高会被判成无效视频
+		// （video_probe.go 的 Validate），所以「探测成功但没有宽高」是真机上
+		// 出不来的状态。缺了它，洞察那边的客观可测层只能量出时长，画幅永远空着。
+		sourceType: contract.AssetSourceProviderGenerated, mimeType: "video/mp4", sizeBytes: 15728640, width: 1920, height: 1080,
 		media:         assets.MediaMetadata{DurationSeconds: 15, FPS: 30, Codec: "h264", BitrateBPS: 8400000, AudioCodec: "aac", AudioChannels: 2, AudioSampleRate: 48000, ProbeStatus: assets.MediaProbeSucceeded},
 		providerJobID: "providerjob_demo_investor_video", providerOutputID: "output_demo_investor_video",
 		content: "预置 AI 视频创意：15 秒精密制造品牌片，按问题、证据、交付承诺和 CTA 串联完整路演故事线。",

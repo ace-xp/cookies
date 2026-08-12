@@ -670,6 +670,27 @@ export type ApiCreativeIntakeBootstrap = {
   }
 }
 
+/**
+ * 一个创意版本。字段只取洞察这边用得上的那几个，完整结构在
+ * internal/systems/creative/model.go 的 CreativeVersion。
+ *
+ * 洞察要它只为一件事：把创意组已经批准的素材登记进分析索引。批准过的版本是
+ * 不可变的，所以拿它当分析对象不会出现「分析完了原件又改了」。
+ */
+export type ApiCreativeVersionSummary = {
+  id: string
+  creative_task_id: string
+  format: 'image_text' | 'video'
+  version: number
+  status: 'created' | 'checked' | 'approved' | 'superseded'
+  created_at: string
+  snapshot?: { selected_title?: string; title_candidates?: string[] }
+  // 视频版本才有成品文件引用。图文版本的正文和配图存在 snapshot 里，
+  // 没有单一的媒体资产 ID——所以导进来的图文素材不带 platform_asset_id。
+  video_snapshot?: { final_video?: { asset_id: string; version: number } }
+  approval?: { approved_by?: string; approved_at?: string }
+}
+
 export type ApiCreativeTaskSummary = {
   id: string
   display_name: string
@@ -2248,6 +2269,10 @@ export type IndexInsightAssetBody = {
   source_kind: ApiAssetSourceKind
   source_ref?: string
   lineage_id?: string
+  // 媒体资产引用。后端要求这两个要么都给要么都不给（assets.go 的 validate），
+  // 给了才能从洞察点回素材库看原件。
+  platform_asset_id?: string
+  platform_asset_version?: number
   asset_type?: ApiInsightAssetType
   asset_type_source?: ApiFeatureSource
   asset_type_confidence?: ApiConfidence
@@ -2352,6 +2377,10 @@ export type ApiFeatureSchema = {
   label: string
   source: string
   fields: ApiFeatureField[]
+  // 这类素材的本体是不是一段视频。是的话，提取时人不用再写一遍画面描述——
+  // 后端把视频交给多模态自己去看。判断放在后端（insights.AssetType.IsVideo），
+  // 这里只读结果，不再自己列一份类型清单。
+  is_video: boolean
 }
 
 export type ApiFeatureMatrixCell = {
@@ -4002,6 +4031,18 @@ function renameCreativeTask(projectId: string, taskId: string, expectedVersion: 
     `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(taskId)}/metadata`,
     'PATCH',
     { expected_version: expectedVersion, display_name: displayName },
+  )
+}
+
+/**
+ * 列这个 Project 的创意版本。不传 task_id 就是全项目。
+ *
+ * 后端不按状态筛（creative_handlers.go 的 listCreativeVersions 只认 task_id 和
+ * limit），要「只看已批准的」得在调用方自己过一遍。
+ */
+function listCreativeVersions(projectId: string, limit = 100) {
+  return creativeRequest<{ items: ApiCreativeVersionSummary[] }>(
+    `/projects/${encodeURIComponent(projectId)}/creative-versions?limit=${limit}`,
   )
 }
 
@@ -5841,6 +5882,7 @@ export const api = {
   getCreativeTaskHandoffDetail,
   listCreativeTasks,
   renameCreativeTask,
+  listCreativeVersions,
   getBrandFilmWorkspace,
   initializeStrategyBrandFilmWorkspace,
   restoreBrandFilmWorkspace,
@@ -6139,6 +6181,17 @@ export const api = {
     assetId: string,
     body: { expected_version: number; content: string; note?: string },
   ) => request<ApiAnalyzeAssetResult>(`${insightAssetPath(projectId, assetId)}:analyze`, 'POST', body),
+  // 量客观变量：时长、画幅。和 analyze 是两回事——不调模型，不花钱，读的是素材库
+  // 上传这个文件时就探测好的数，同一条素材按几次结果都一样，所以按钮可以随便点。
+  // 落成「客观可测」层，直接能进归因，不进复核队列。
+  // 只对**从创意导入**的素材有效：手工登记的那些洞察这边只有一条索引，没有文件。
+  deriveInsightAssetFeatures: (
+    projectId: string,
+    assetId: string,
+    body: { expected_version: number },
+  ) => request<{ items: ApiInsightAssetFeature[] }>(
+    `${insightAssetPath(projectId, assetId)}:derive-features`, 'POST', body,
+  ),
   // 分析历史。失败的也在里面：只列成功的话，成功率永远是 100%。
   listInsightAssetAnalysisRuns: (projectId: string, assetId: string, limit = 20) =>
     request<{ items: ApiAnalysisRun[] }>(

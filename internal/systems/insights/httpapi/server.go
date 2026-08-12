@@ -52,6 +52,8 @@ type Application interface {
 	ListAssetMappings(context.Context, contract.ActorContext, contract.ProjectID, insights.AssetMappingFilter) ([]insights.AssetMapping, error)
 	ResolveAssetMapping(context.Context, contract.ActorContext, contract.ProjectID, string, insights.ResolveAssetMappingRequest) (insights.AssetMapping, error)
 	ExtractFeatures(context.Context, contract.ActorContext, contract.ProjectID, string, insights.ExtractFeaturesRequest) ([]insights.AssetFeature, error)
+	// DeriveFeatures 写客观可测层：从素材库读文件已探测的元数据，不调模型。
+	DeriveFeatures(context.Context, contract.ActorContext, contract.ProjectID, string, insights.DeriveFeaturesRequest) ([]insights.AssetFeature, error)
 	PatchFeatures(context.Context, contract.ActorContext, contract.ProjectID, string, insights.PatchFeaturesRequest) ([]insights.AssetFeature, error)
 	ListAssetFeatures(context.Context, contract.ActorContext, contract.ProjectID, string) ([]insights.AssetFeature, error)
 	ConfirmAssetAnalysis(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
@@ -618,6 +620,11 @@ func writeError(writer http.ResponseWriter, request *http.Request, err error) {
 	case errors.Is(err, insights.ErrNotFound):
 		status, code, retryable = http.StatusNotFound, "RESOURCE_NOT_FOUND", false
 		message = detailOr(err, insights.ErrNotFound, "洞察资源不存在")
+	// 放在 ErrInvalidState 之前：这一条也是 409，但 retryable 是 true。
+	// 「正在跑，等会儿再来」和「状态不对，你得改点什么」在界面上是两种东西。
+	case errors.Is(err, insights.ErrUnderstandingPending):
+		status, code, retryable = http.StatusConflict, "UNDERSTANDING_PENDING", true
+		message = detailOr(err, insights.ErrUnderstandingPending, "模型正在看这条素材，稍后再试")
 	case errors.Is(err, insights.ErrInvalidState):
 		status, code, retryable = http.StatusConflict, "INVALID_STATE", false
 		message = detailOr(err, insights.ErrInvalidState, "当前状态不允许该操作")

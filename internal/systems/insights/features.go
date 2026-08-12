@@ -57,6 +57,20 @@ func (t AssetType) Label() string {
 	return "待识别"
 }
 
+// IsVideo 说明这类素材的本体是不是一段视频。
+//
+// 分这一刀是因为「怎么把素材喂给模型」这件事上，六种类型只有两类：图文的本体
+// 就是文字，人复制一段正文过来就是原件；视频的本体是画面和声音，人写的那段
+// 「画面描述」只是转述，模型看的是转述而不是素材。视频类因此要走多模态
+// （understanding.go），图文类不需要。
+func (t AssetType) IsVideo() bool {
+	switch t {
+	case AssetTypeBrandAd, AssetTypeDigitalHumanAd, AssetTypePrerollAd, AssetTypeHitReplicaAd:
+		return true
+	}
+	return false
+}
+
 // AllAssetTypes lists the six identifiable types in PRD order.
 func AllAssetTypes() []AssetType {
 	return []AssetType{
@@ -108,6 +122,13 @@ type FeatureSchema struct {
 	Label     string         `json:"label"`
 	Source    string         `json:"source"`
 	Fields    []FeatureField `json:"fields"`
+	// IsVideo 让前端知道这类素材的提取要不要人填正文：视频类由多模态去看画面
+	// （understanding.go），图文类的本体就是那段字，只能人贴进来。
+	//
+	// 从后端带过去而不是让前端自己列一份类型清单：这不是文案，是「输入框必不必填」
+	// 的开关，两边各存一份的话，将来加第七类素材时前端那份不会有人想起来改。
+	// 它由 AssetType.IsVideo() 派生，不单独存——见 FeatureSchemaFor。
+	IsVideo bool `json:"is_video"`
 }
 
 // Groups returns the field groups in declaration order, which follows the PRD's
@@ -320,9 +341,27 @@ var hitReplicaFields = []FeatureField{
 		Note:       "合规项：复刻程度过高时应在此显式登记风险"},
 }
 
+// channelFitMeasuredFields 是效果广告的渠道适配：时长和画幅。
+//
+// 这两项 PRD 只在 §5.3 品牌广告下列过（「渠道适配：开场、时长、画幅、封面和发布
+// 文案」），§5.4 效果广告没有对应的组——那里的「时长」只作为实验变量的一个可选项
+// 出现，说的是「这次改没改时长」，不是「这条素材多长」。
+//
+// 补到效果广告上，是因为这两项是**能从文件本身量出来的**，而效果广告恰恰是最需要
+// 它们的一类：15 秒和 45 秒的前贴不是同一个东西，竖版和横版的数字人也不是。缺了
+// 这两项，同类素材对比就只能拿模型猜的口播、节奏去比，而那些进不了归因。
+//
+// 键名、类型、单位与 brandAdFields 里的同名字段完全一致，跨类型比较才对得上。
+// 词表照样留空——枚举词表归 能力运营 → 特征体系 管（§5 末），不在这里写死。
+var channelFitMeasuredFields = []FeatureField{
+	{Key: "duration", Label: "时长", Group: "渠道适配", Kind: FeatureKindDuration, Unit: "秒"},
+	{Key: "aspect_ratio", Label: "画幅", Group: "渠道适配", Kind: FeatureKindEnum},
+}
+
 func performanceAdSchema(assetType AssetType, extra []FeatureField) FeatureSchema {
-	fields := make([]FeatureField, 0, len(performanceAdBaseFields)+len(extra))
+	fields := make([]FeatureField, 0, len(performanceAdBaseFields)+len(channelFitMeasuredFields)+len(extra))
 	fields = append(fields, performanceAdBaseFields...)
+	fields = append(fields, channelFitMeasuredFields...)
 	fields = append(fields, extra...)
 	return FeatureSchema{AssetType: assetType, Label: assetType.Label(), Source: "03 §5.4", Fields: fields}
 }
@@ -346,8 +385,12 @@ var featureSchemas = map[AssetType]FeatureSchema{
 }
 
 // FeatureSchemaFor returns the feature system of one asset type.
+//
+// IsVideo 在这里补上，不在上面那张表里写死：写死的话六个条目里漏标一个，
+// 那类素材就会莫名其妙要求人填正文，而且不会有任何报错。
 func FeatureSchemaFor(assetType AssetType) (FeatureSchema, bool) {
 	schema, ok := featureSchemas[assetType]
+	schema.IsVideo = assetType.IsVideo()
 	return schema, ok
 }
 
@@ -356,7 +399,8 @@ func FeatureSchemaFor(assetType AssetType) (FeatureSchema, bool) {
 func AllFeatureSchemas() []FeatureSchema {
 	schemas := make([]FeatureSchema, 0, len(featureSchemas))
 	for _, assetType := range AllAssetTypes() {
-		schemas = append(schemas, featureSchemas[assetType])
+		schema, _ := FeatureSchemaFor(assetType)
+		schemas = append(schemas, schema)
 	}
 	return schemas
 }

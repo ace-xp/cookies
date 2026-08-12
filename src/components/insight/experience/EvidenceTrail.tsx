@@ -127,7 +127,7 @@ export function EvidenceTrail({ experience, citation }: {
         : null}
       {references.length ? <ul className="evidence-references">
         {references.map(reference => <li key={reference.id}>
-          {reference.consumer_kind} · {shortId(reference.consumer_id)}
+          {consumerKindLabel[reference.consumer_kind] ?? reference.consumer_kind} · {shortId(reference.consumer_id)}
           <span className={`reference-outcome outcome-${reference.outcome}`}>
             {referenceOutcomeLabel[reference.outcome] ?? reference.outcome}
           </span>
@@ -136,6 +136,15 @@ export function EvidenceTrail({ experience, citation }: {
       </ul> : null}
     </section>
   </div>
+}
+
+// 引用方的类型是后端存的自由文本，这里只把已知的几种翻成中文，认不出来的原样
+// 显示——写死一张表然后把陌生的挡掉，会让一条真实发生过的引用看上去不存在。
+const consumerKindLabel: Record<string, string> = {
+  brief: 'Brief',
+  creative_task: '创意任务',
+  strategy: '策略',
+  experiment: '实验',
 }
 
 // 四挡是有序的：只是引用 → 照做 → 改了之后用 → 没采纳。

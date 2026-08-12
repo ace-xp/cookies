@@ -243,6 +243,19 @@ func (s *Server) assetAction(writer http.ResponseWriter, request *http.Request) 
 			return
 		}
 		writeJSON(writer, http.StatusOK, map[string]any{"items": values})
+	case strings.HasSuffix(action, ":derive-features"):
+		// 量客观变量。和 :analyze 相反——不调模型，不花钱，读的是素材库里
+		// 上传时就探测好的元数据，同一条素材按几次结果都一样。
+		var body insights.DeriveFeaturesRequest
+		if !decode(writer, request, &body) {
+			return
+		}
+		values, err := s.app.DeriveFeatures(request.Context(), actor, project, strings.TrimSuffix(action, ":derive-features"), body)
+		if err != nil {
+			writeError(writer, request, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"items": values})
 	case strings.HasSuffix(action, ":analyze"):
 		// AI 提特征。这是一次真实的模型调用，会花钱也会花时间，
 		// 所以只挂在这条显式的动词上——没有任何地方会自动触发它。

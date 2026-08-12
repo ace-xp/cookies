@@ -585,6 +585,9 @@ func (s *applicationStub) ResolveAssetMapping(context.Context, contract.ActorCon
 func (s *applicationStub) ExtractFeatures(context.Context, contract.ActorContext, contract.ProjectID, string, insights.ExtractFeaturesRequest) ([]insights.AssetFeature, error) {
 	return []insights.AssetFeature{s.feature}, nil
 }
+func (s *applicationStub) DeriveFeatures(context.Context, contract.ActorContext, contract.ProjectID, string, insights.DeriveFeaturesRequest) ([]insights.AssetFeature, error) {
+	return []insights.AssetFeature{s.feature}, nil
+}
 func (s *applicationStub) PatchFeatures(context.Context, contract.ActorContext, contract.ProjectID, string, insights.PatchFeaturesRequest) ([]insights.AssetFeature, error) {
 	return []insights.AssetFeature{s.feature}, nil
 }

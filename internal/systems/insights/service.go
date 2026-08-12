@@ -24,6 +24,13 @@ var (
 	ErrInvalidRequest  = errors.New("insights request is invalid")
 	ErrInvalidState    = errors.New("insights resource is not in a state that allows this action")
 	ErrVersionConflict = errors.New("insights resource version conflict")
+
+	// ErrUnderstandingPending 是「模型正在看这条视频，还没看完」。
+	//
+	// 单独一个哨兵，不并进 ErrInvalidState：那个的意思是「这事现在做不了」，
+	// 人看到会去改点什么；这个的意思是「这事正在做」，人只需要等。两者在界面上
+	// 该长得完全不一样——一个是红的要人处理，一个是转圈的让人喝口水。
+	ErrUnderstandingPending = errors.New("insights media understanding is still running")
 )
 
 type ReportStatus string
@@ -536,6 +543,13 @@ type Service struct {
 	Experiments ExperimentRepository
 	Projects    ActiveProjectResolver
 	Delivery    DeliveryReader
+	// Media 是客观可测层的唯一入口：从素材库读文件已经探测出来的元数据。
+	// 为 nil 时 DeriveFeatures 直接失败，不会退化成「按类型猜一个默认时长」。
+	Media MediaReader
+	// Understanding 是视频语义特征的入口：把视频交给多模态，拿回带帧号的证据。
+	// 为 nil 时视频类退回老路（人填画面描述），不是报错——没接多模态的环境里，
+	// 提取仍然应该做得成，只是做得糙。
+	Understanding MediaUnderstander
 	// Text 是特征提取唯一的模型出口。为 nil 时提取直接失败，
 	// 不会退化成模板产出——库里一条编造的特征，代价远大于一次失败的提取。
 	Text TextGenerator

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, CircleAlert, FolderOpen, Layers3, Plus, RefreshCw } from 'lucide-react'
+import { ArrowLeft, CircleAlert, FolderOpen, Import, Layers3, Plus, RefreshCw } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
 import {
   api,
+  type ApiCreativeVersionSummary,
   type ApiExternalAsset,
   type ApiInsightAsset,
   type ApiInsightAssetMapping,
@@ -21,13 +22,14 @@ import { formatDate } from '../analysis/format'
  * 下面三个队列是「还差什么才能进复盘」。**对不上号的红色置顶**：它是唯一一个
  * 「不处理后面全错」的问题（花费算不到任何素材头上），其余两个只是少几条样本。
  */
-export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, onOpenAnalysis, onIndex, reloadKey }: {
+export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, onOpenAnalysis, onIndex, onImport, reloadKey }: {
   selectedId: string
   onSelect: (assetId: string) => void
   onOpenLibrary: () => void
   onOpenView: (view: string) => void
   onOpenAnalysis: () => void
   onIndex: () => void
+  onImport: () => void
   /** 登记完一条素材之后由壳递增，用来把这一屏重新取一次数。 */
   reloadKey: number
 }) {
@@ -35,25 +37,31 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
   const [assets, setAssets] = useState<ApiInsightAsset[]>([])
   const [unmatched, setUnmatched] = useState<ApiInsightAssetMapping[]>([])
   const [external, setExternal] = useState<ApiExternalAsset[]>([])
+  const [creativeVersions, setCreativeVersions] = useState<ApiCreativeVersionSummary[]>([])
   const [listState, setListState] = useState<'loading' | 'ready' | 'error'>('loading')
 
   const load = useCallback(async () => {
     if (!currentProject.id) return
     setListState('loading')
     try {
-      const [assetPage, mappingPage, externalPage] = await Promise.all([
+      const [assetPage, mappingPage, externalPage, creativePage] = await Promise.all([
         api.listInsightAssets(currentProject.id, {}),
         api.listInsightAssetMappings(currentProject.id, 'unmatched'),
         api.listExternalAssets(currentProject.id),
+        // 创意是另一个系统，它没配好或者报错都不该让这一屏整个读不出来——
+        // 读不到就当没有待导入的，其余三块照常显示。
+        api.listCreativeVersions(currentProject.id).catch(() => ({ items: [] })),
       ])
       setAssets(assetPage.items)
       setUnmatched(mappingPage.items)
       setExternal(externalPage.items)
+      setCreativeVersions(creativePage.items ?? [])
       setListState('ready')
     } catch {
       setAssets([])
       setUnmatched([])
       setExternal([])
+      setCreativeVersions([])
       setListState('error')
     }
   }, [currentProject.id])
@@ -80,6 +88,16 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
   }, [external])
   const purged = external.filter(item => item.original_purged)
 
+  // 创意批准了、洞察这边还没有的。这个数字是这一屏最上游的缺口：另外三个队列说的
+  // 是「进来了但还差点什么」，这一条说的是「压根还没进来」——包括那些「对不上号」，
+  // 有一部分正是因为素材根本没登记，平台回流的对象才找不到东西可认。
+  const notImported = useMemo(() => {
+    const imported = new Set(assets
+      .filter(asset => asset.source_kind === 'creative' && asset.source_ref)
+      .map(asset => asset.source_ref))
+    return creativeVersions.filter(item => item.status === 'approved' && !imported.has(item.id))
+  }, [assets, creativeVersions])
+
   if (listState === 'loading') return <div className="panel-empty">正在读取…</div>
   if (listState === 'error') {
     return <div className="panel-empty">读取失败。<button type="button" className="secondary-button"
@@ -101,10 +119,23 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
           <button type="button" className="link-button" onClick={onIndex}>
             <Plus size={13}/>登记素材
           </button>
+          {/* 「从创意导入」跟旁边两个按钮回答的是同一个问题——素材是怎么进这一栏的。
+              三条路：从素材库看（跳出去）、创意批准的批量导（这个）、外面做的手工登记。
+              放在别处人会以为它是另一件事。 */}
+          <button type="button" className="link-button" onClick={onImport}>
+            <Import size={13}/>从创意导入
+          </button>
         </div>
         <p className="assets-column-lead">
           {live.length} 条。文件躺在素材库里，洞察这边只记住它是哪一条、变量是什么、跑得怎么样。
         </p>
+        {/* 只在真有落下的时候才出现。常态是 0，天天挂一行「还有 0 条」等于噪音。 */}
+        {notImported.length ? <div className="prelaunch-boundary"><CircleAlert size={16}/><span>
+          <small>创意里还有 {notImported.length} 条没进来</small>
+          创意组批准了但洞察这边没登记。它们的投放数据回流时认不到任何素材头上，
+          这一轮的分析等于漏掉了这几条。
+          <button type="button" className="link-button" onClick={onImport}>去导入</button>
+        </span></div> : null}
         {live.length ? <ul className="assets-mini-list">
           {live.slice(0, 8).map(asset => <li key={asset.id}>
             <button type="button" className={selectedId === asset.id ? 'active' : ''}

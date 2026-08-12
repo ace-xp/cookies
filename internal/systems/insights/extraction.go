@@ -33,26 +33,27 @@ type TextGenerator interface {
 
 // AnalyzeAssetRequest 是人点下「提取特征」时带上的东西。
 //
-// Content 必填，而且必须由调用方给。**这是当前的真实边界，不是设计选择**：
-// insight_assets 只存素材的身份和状态，不存正文——正文在创意系统或用户手里。
-// 与其在这里假装能拿到，不如让调用方显式带上，出问题时错误指向清楚。
-// 素材库补齐正文存储之后，这个字段应当变成可选。
+// **Content 什么时候可以不填**：视频类素材，指向了素材库里的文件，而且这个环境
+// 接了多模态——三条都满足时，画面由模型自己去看（understanding.go），人不用再
+// 写一遍画面描述。其余情况仍然必填：图文类的本体就是那段文字，洞察这边不存正文
+// （insight_assets 只有身份和状态），拿不到就只能由调用方带上。
+//
+// 视频类填了 Content 也不浪费——它会和多模态看到的东西一起给模型，当成人的补充。
+// 人知道的东西模型不一定看得出来（「这条是给老客户的续费提醒」）。
 type AnalyzeAssetRequest struct {
 	ExpectedVersion int64 `json:"expected_version"`
-	// Content 是要分析的素材内容：图文类填正文，视频类填脚本或画面描述。
+	// Content 是要分析的素材内容：图文类填正文；视频类不填时由多模态去看画面。
 	Content string `json:"content"`
 	// Note 是人写的补充说明（例如「这条是竖版重剪，画面同 A 版」）。
 	Note string `json:"note,omitempty"`
 }
 
+// validate 只管长度。「填没填」这件事要等素材类型和文件引用都读出来才判得了，
+// 放在 AnalyzeAsset 里（missingContentError）。
 func (r AnalyzeAssetRequest) validate() error {
-	content := strings.TrimSpace(r.Content)
-	if content == "" {
-		return fmt.Errorf("%w: 提取特征需要素材内容，请先补上正文或画面描述", ErrInvalidRequest)
-	}
 	// 上限不是性能考虑，是成本和可解释性：超长输入下模型的注意力会散开，
 	// 提出来的特征更多是「文章里提过」而不是「这篇文章的特点」。
-	if len([]rune(content)) > 20000 {
+	if len([]rune(strings.TrimSpace(r.Content))) > 20000 {
 		return fmt.Errorf("%w: 素材内容超过 2 万字，请截取要分析的部分", ErrInvalidRequest)
 	}
 	if len([]rune(r.Note)) > 1000 {
@@ -115,8 +116,39 @@ func (s Service) AnalyzeAsset(ctx context.Context, actor contract.ActorContext, 
 	}
 
 	instruction := extractionInstruction(skill, schema)
-	content := strings.TrimSpace(request.Content)
-	payload := extractionPayload(asset, content, strings.TrimSpace(request.Note))
+	note := strings.TrimSpace(request.Note)
+	human := strings.TrimSpace(request.Content)
+
+	// 视频类先问多模态。这一步可能什么都不做——不是视频、没指向素材库里的文件、
+	// 或者这个环境没接多模态，那时 sawVideo 为 false，下面照走老路。
+	understanding, sawVideo, err := s.understandingFor(ctx, actor, projectID, asset)
+	if err != nil {
+		return AnalyzeAssetResult{}, err
+	}
+	switch {
+	case sawVideo && understanding.Pending && human == "":
+		// 正在看。**不落 failed 留痕**：这一趟什么都没跑，记成失败会让运营面上
+		// 凭空多出一堆「提取失败」，而真实情况是人来早了。
+		return AnalyzeAssetResult{}, fmt.Errorf("%w: 模型正在看这条视频，看完再点一次提取",
+			ErrUnderstandingPending)
+	case sawVideo && understanding.Ready && understanding.hasContent():
+		// 看完了而且有东西，走多模态那条路。
+	default:
+		// 其余一律回落到人填的正文：还在看但人已经填了（不该让人干等）、
+		// 规格不支持、理解失败、看完了却一句话都没有。
+		sawVideo = false
+	}
+	if !sawVideo && human == "" {
+		return AnalyzeAssetResult{}, missingContentError(asset, understanding)
+	}
+
+	content, promptVersion := human, extractionPromptVersion
+	payload := extractionPayload(asset, content, note)
+	if sawVideo {
+		content = visionContent(understanding)
+		promptVersion = extractionVisionPromptVersion
+		payload = visionExtractionPayload(asset, content, note, human)
+	}
 
 	// 先落一行 running，再调模型。反过来的话，调用期间进程挂掉就什么都不剩，
 	// 而那正是最需要被看见的一类失败——它不会出现在任何统计里。
@@ -125,18 +157,30 @@ func (s Service) AnalyzeAsset(ctx context.Context, actor contract.ActorContext, 
 	if err != nil {
 		return AnalyzeAssetResult{}, err
 	}
-	inputSummary, _ := json.Marshal(map[string]any{
+	summaryFields := map[string]any{
 		"asset_revision": asset.Revision,
 		"content_chars":  len([]rune(content)),
 		"has_note":       request.Note != "",
 		"field_count":    len(schema.Fields),
-	})
+	}
+	if sawVideo {
+		// 视觉那一次调用的来历放在输入侧，不放 ProviderCode/ModelVersion——
+		// 那两格记的是产出特征的那次文本调用，混进来的话，回头查「这批特征哪个
+		// 模型提的」会查到一个根本没提过特征的视觉模型。
+		summaryFields["vision"] = true
+		summaryFields["vision_artifact_id"] = understanding.ArtifactID
+		summaryFields["vision_keyframes"] = understanding.KeyframeCount
+		summaryFields["vision_model_alias"] = understanding.ModelAlias
+		summaryFields["vision_provider_code"] = understanding.ProviderCode
+		summaryFields["human_supplement_chars"] = len([]rune(human))
+	}
+	inputSummary, _ := json.Marshal(summaryFields)
 	run := AnalysisRun{
 		ID: runID, OrganizationID: actor.OrganizationID, ProjectID: projectID,
 		Kind: AnalysisRunFeatureExtraction, AssetID: asset.ID, AssetType: asset.AssetType,
 		Status:  AnalysisRunRunning,
 		SkillID: skill.Name, SkillVersion: skill.Version, SkillContentHash: skill.ContentHash,
-		PromptVersion: extractionPromptVersion,
+		PromptVersion: promptVersion,
 		// 输入指纹算的是真正发出去的那两段，不是原始正文——
 		// 指令变了而正文没变，也应当算作不同的输入。
 		InputHash: hashPayload([]byte(instruction + "\n" + payload)),
@@ -149,7 +193,7 @@ func (s Service) AnalyzeAsset(ctx context.Context, actor contract.ActorContext, 
 		return AnalyzeAssetResult{}, err
 	}
 
-	inputs, dropped, trace, err := s.generateFeatures(ctx, actor, projectContext, schema, instruction, payload, outputSchema, asset.ID)
+	inputs, dropped, trace, err := s.generateFeatures(ctx, actor, projectContext, schema, instruction, payload, outputSchema, asset.ID, run.InputHash)
 	if err != nil {
 		s.failRun(ctx, run, err)
 		return AnalyzeAssetResult{}, err
@@ -213,7 +257,35 @@ func (s Service) ListAnalysisRuns(ctx context.Context, actor contract.ActorConte
 	return s.Runs.ListAnalysisRuns(ctx, actor.OrganizationID, projectID, filter)
 }
 
-const extractionPromptVersion = "insight.extract.v1"
+const (
+	extractionPromptVersion = "insight.extract.v1"
+	// 视频那条路单独一个版本号。喂进去的东西完全不同（视觉证据 vs 人的转述），
+	// 共用一个版本号会让「换了 prompt 之后效果变没变」这个问题永远算不清楚。
+	extractionVisionPromptVersion = "insight.extract.video.v1"
+)
+
+// missingContentError 解释「为什么这条素材必须人填正文」。
+//
+// 四种情况的说法不一样，而这正是这个函数存在的理由：统一回一句「请填素材内容」，
+// 人对着一条明明有视频文件的素材会以为系统坏了。
+func missingContentError(asset Asset, understanding MediaUnderstanding) error {
+	switch {
+	case !asset.AssetType.IsVideo():
+		return fmt.Errorf("%w: %s要分析的是那段文字本身，请把正文贴进来",
+			ErrInvalidRequest, asset.AssetType.Label())
+	case asset.PlatformAssetID == "" || asset.PlatformAssetVersion == 0:
+		return fmt.Errorf("%w: 这条素材没指向素材库里的视频文件，模型看不到画面，"+
+			"请先补一段画面描述或脚本。从创意导入的素材才带这个引用", ErrInvalidRequest)
+	case strings.TrimSpace(understanding.Unavailable) != "":
+		// 理由括起来：它是媒体理解那边原样带过来的一整句话，直接用逗号接上去，
+		// 两句话会糊成一句读不通的长句。
+		return fmt.Errorf("%w: 模型这次看不了这条视频（%s），请补一段画面描述或脚本",
+			ErrInvalidRequest, strings.TrimSpace(understanding.Unavailable))
+	default:
+		return fmt.Errorf("%w: 这个环境还没接多模态，视频画面进不了模型，"+
+			"请补一段画面描述或脚本", ErrInvalidRequest)
+	}
+}
 
 // generationTrace 是一次模型调用留下的可追溯信息。
 type generationTrace struct {
@@ -226,7 +298,7 @@ type generationTrace struct {
 	completionTokens int
 }
 
-func (s Service) generateFeatures(ctx context.Context, actor contract.ActorContext, projectContext contract.ProjectContext, schema FeatureSchema, instruction, payload string, outputSchema json.RawMessage, assetID string) ([]FeatureInput, []string, generationTrace, error) {
+func (s Service) generateFeatures(ctx context.Context, actor contract.ActorContext, projectContext contract.ProjectContext, schema FeatureSchema, instruction, payload string, outputSchema json.RawMessage, assetID, inputHash string) ([]FeatureInput, []string, generationTrace, error) {
 	if s.Text == nil {
 		// 没配供应商时不假装提取。返回空+模板模式，让上层按「一条都没提出来」失败，
 		// 而不是写进一批编造的特征——库里一条假特征的代价，远大于一次失败的提取。
@@ -241,8 +313,10 @@ func (s Service) generateFeatures(ctx context.Context, actor contract.ActorConte
 	}
 	response, err := s.Text.GenerateText(ctx, provider.TextGenerateRequest{
 		Actor: textActor, Project: projectContext, ModelAlias: s.textModelAlias(),
-		// 同一条素材重复点按钮时命中同一个 InvocationKey，避免连点付两次钱。
-		InvocationKey: contract.IdempotencyKey("insight-extract-" + assetID),
+		// 连点两次付两次钱是要避免的，但只按素材 ID 去重会走过头：同一条素材
+		// 先按人填的正文提一次、再走多模态提一次，输入完全不同，却会命中同一个
+		// key 拿回上一次的答案。所以键里带上输入指纹——同样的输入才算重复。
+		InvocationKey: contract.IdempotencyKey("insight-extract-" + assetID + "-" + truncateRunes(inputHash, 16)),
 		Messages: []provider.TextMessage{
 			{Role: provider.TextRoleSystem, Content: instruction},
 			{Role: provider.TextRoleUser, Content: payload},
@@ -353,6 +427,29 @@ func extractionPayload(asset Asset, content, note string) string {
 	}
 	builder.WriteString("\n素材内容：\n")
 	builder.WriteString(content)
+	return builder.String()
+}
+
+// visionExtractionPayload 拼视频那条路的 user 消息。
+//
+// 和图文那条路的关键差别是**要告诉模型这段字是怎么来的**：它读到的不是素材原件，
+// 是另一个模型看画面之后写下的证据。不说明的话，模型会把「模型的推断」那一段
+// 当成画面里确凿存在的东西，两层推断叠起来，落库的特征说不清是从哪来的。
+//
+// 人填的正文放在最后，标明是补充。不覆盖视觉证据，也不被视觉证据覆盖——
+// 人知道的和模型看到的是两种东西（「这条是给老客户的续费提醒」画面里看不出来）。
+func visionExtractionPayload(asset Asset, vision, note, human string) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "素材标题：%s\n", asset.Title)
+	builder.WriteString("\n下面是多模态模型看过这条视频的关键帧之后写下的内容。" +
+		"标着「观察」的是画面里能看到的，标着「推断」的是它的判断，不要当成事实。\n\n")
+	builder.WriteString(vision)
+	if note != "" {
+		fmt.Fprintf(&builder, "\n\n【人写的补充说明】\n%s", note)
+	}
+	if human != "" {
+		fmt.Fprintf(&builder, "\n\n【人补充的脚本或画面描述】\n%s", human)
+	}
 	return builder.String()
 }
 

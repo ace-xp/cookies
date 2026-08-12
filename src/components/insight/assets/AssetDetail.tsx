@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { CircleAlert, ExternalLink, Layers3, Sparkles } from 'lucide-react'
+import { CircleAlert, ExternalLink, Layers3, Ruler, Sparkles } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
-import { api, type ApiInsightAsset, type ApiInsightAssetFeature } from '../../../data/api'
+import { api, type ApiFeatureField, type ApiInsightAsset, type ApiInsightAssetFeature } from '../../../data/api'
 import { admissibleForAttribution, featureSourceLabel } from '../../../data/featureSource'
 import { shortId } from '../../../data/shortId'
 
@@ -28,16 +28,58 @@ export function AssetDetail({ asset, onOpenLibrary }: {
 }) {
   const { currentProject } = useProject()
   const [features, setFeatures] = useState<ApiInsightAssetFeature[]>([])
+  // 素材版本单独存一份。量一次客观变量会让它加一，而外面那份 asset 是列表拉下来的
+  // 快照——不跟着走的话，连按两次「量一下」第二次必然撞乐观锁。
+  const [version, setVersion] = useState(asset.version)
+  const [measuring, setMeasuring] = useState(false)
+  const [measureNote, setMeasureNote] = useState('')
+  // 特征体系。取它只为了两件事：把 duration 显示成「时长」，把 15 显示成「15 秒」。
+  // 名字和单位的权威定义在后端 features.go，不在这儿写死一份。
+  const [fields, setFields] = useState<Record<string, ApiFeatureField>>({})
 
   useEffect(() => {
+    setVersion(asset.version)
+    setMeasureNote('')
     let active = true
     void api.listInsightAssetFeatures(currentProject.id, asset.id)
       .then(page => { if (active) setFeatures(page.items) })
       .catch(() => { if (active) setFeatures([]) })
     return () => { active = false }
-  }, [currentProject.id, asset.id])
+  }, [currentProject.id, asset.id, asset.version])
+
+  useEffect(() => {
+    if (!asset.asset_type) { setFields({}); return }
+    let active = true
+    void api.listFeatureSchemas(currentProject.id)
+      .then(page => {
+        if (!active) return
+        const schema = page.items.find(item => item.asset_type === asset.asset_type)
+        setFields(Object.fromEntries((schema?.fields ?? []).map(field => [field.key, field])))
+      })
+      .catch(() => { if (active) setFields({}) })
+    return () => { active = false }
+  }, [currentProject.id, asset.asset_type])
 
   const admissible = features.filter(feature => admissibleForAttribution(feature.source))
+  const derived = features.filter(feature => feature.source === 'derived')
+
+  // 量客观变量。没有文件引用就不必按了——洞察这边只有一条索引，量不到东西。
+  const hasFile = Boolean(asset.platform_asset_id && asset.platform_asset_version)
+  async function measure() {
+    setMeasuring(true)
+    setMeasureNote('')
+    try {
+      const page = await api.deriveInsightAssetFeatures(currentProject.id, asset.id, { expected_version: version })
+      setFeatures(page.items)
+      // 服务端每写一次就把素材版本推一格，哪怕状态没动。
+      setVersion(current => current + 1)
+      setMeasureNote(`量到 ${page.items.filter(item => item.source === 'derived').length} 项。`)
+    } catch (error) {
+      setMeasureNote(error instanceof Error ? error.message : '量不出来。')
+    } finally {
+      setMeasuring(false)
+    }
+  }
 
   return <div className="asset-detail">
     <section className="asset-detail-upper">
@@ -66,14 +108,28 @@ export function AssetDetail({ asset, onOpenLibrary }: {
       <div className="feature-stack">
         <span>内容变量（{features.length} 项 · 其中 {admissible.length} 项能进归因）</span>
         {features.length ? features.map(feature => <b key={feature.id}>
-          {feature.key}：{formatValue(feature.value)}
+          {fields[feature.key]?.label ?? feature.key}：{formatValue(feature.value)}
+          {feature.value.number !== undefined ? fields[feature.key]?.unit ?? '' : ''}
           <small>（{featureSourceLabel[feature.source]}）</small>
         </b>) : <b>还没有内容变量。去「素材 · 变量」给它提一次。</b>}
       </div>
 
+      {/* 量客观变量。和「提取」分开摆是有意的：那个要调模型、要人复核，这个读的是
+          素材库上传时就探测好的数，按几次结果都一样，也不进复核队列。 */}
+      <div className="feature-measure">
+        <button type="button" className="secondary-button" disabled={!hasFile || measuring} onClick={() => void measure()}>
+          <Ruler size={14}/>{measuring ? '量着…' : derived.length ? '重新量一下' : '量一下'}
+        </button>
+        <small>{hasFile
+          ? '从素材库那个文件本身量出时长和画幅。不调模型，直接能进归因。'
+          : '这条素材没指向素材库里的文件，量不到东西。从创意导入的才带这个引用。'}</small>
+        {measureNote ? <small className="feature-measure-note">{measureNote}</small> : null}
+      </div>
+
       {features.length && !admissible.length ? <div className="prelaunch-boundary">
         <CircleAlert size={16}/><span><small>这些变量还不能拿来归因</small>
-          它们全是模型猜的。要让它们算数，得有人逐项看过并确认——在「素材 · 变量」里做。
+          它们现在全是模型猜的。要让它们算数有两条路：能量的先量一下（时长、画幅），
+          剩下靠判断的得有人逐项看过并确认——在「素材 · 变量」里做。
         </span></div> : null}
 
       <div className="prelaunch-fact"><Sparkles size={17}/><span><small>编号</small><b>
