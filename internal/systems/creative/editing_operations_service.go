@@ -47,29 +47,12 @@ func (s Service) ApplyEditOperations(ctx context.Context, actor contract.ActorCo
 	if task.CurrentTimeline == nil || task.CurrentTimeline.Version != request.Batch.BaseTimelineVersion {
 		return EditTask{}, ErrOperationVersionConflict
 	}
-	if request.Batch.Actor == "" {
-		request.Batch.Actor = actor.Principal.ID
-		for index := range request.Batch.Operations {
-			request.Batch.Operations[index].Actor = actor.Principal.ID
-			request.Batch.Operations[index].BaseTimelineVersion = request.Batch.BaseTimelineVersion
-		}
-	}
-	if request.Batch.Actor != actor.Principal.ID {
+	if err := bindEditOperationActor(&request.Batch, actor.Principal.ID); err != nil {
 		return EditTask{}, fmt.Errorf("operation actor must match the authenticated principal")
 	}
-	document := EditingDocument{}
-	if task.CurrentTimeline.Schema() == EditingTimelineSchemaV2 {
-		copy := *task.CurrentTimeline.TimelineV2
-		ensureC3VisualTracks(&copy)
-		ensureC4CaptionTrack(&copy)
-		ensureC5AudioTracks(&copy)
-		document.V2 = &copy
-	} else {
-		document.V1 = &task.CurrentTimeline.Timeline
-		document, err = DefaultEditingCodecRegistry().MigrateToV2(document)
-		if err != nil {
-			return EditTask{}, err
-		}
+	document, err := editingDocumentForOperations(*task.CurrentTimeline)
+	if err != nil {
+		return EditTask{}, err
 	}
 	result, err := ApplyEditOperations(document, request.Batch)
 	if err != nil {
@@ -90,6 +73,31 @@ func (s Service) ApplyEditOperations(ctx context.Context, actor contract.ActorCo
 		return EditTask{}, ErrOperationVersionConflict
 	}
 	return updated, err
+}
+
+func bindEditOperationActor(batch *EditOperationBatch, principalID string) error {
+	if batch.Actor == "" {
+		batch.Actor = principalID
+		for index := range batch.Operations {
+			batch.Operations[index].Actor = principalID
+			batch.Operations[index].BaseTimelineVersion = batch.BaseTimelineVersion
+		}
+	}
+	if batch.Actor != principalID {
+		return fmt.Errorf("operation actor mismatch")
+	}
+	return nil
+}
+
+func editingDocumentForOperations(timeline TimelineVersion) (EditingDocument, error) {
+	if timeline.Schema() != EditingTimelineSchemaV2 {
+		return DefaultEditingCodecRegistry().MigrateToV2(EditingDocument{V1: &timeline.Timeline})
+	}
+	copy := *timeline.TimelineV2
+	ensureC3VisualTracks(&copy)
+	ensureC4CaptionTrack(&copy)
+	ensureC5AudioTracks(&copy)
+	return EditingDocument{V2: &copy}, nil
 }
 
 func ensureC5AudioTracks(timeline *EditingTimelineV2) {

@@ -129,33 +129,36 @@ func (p AssetUsePolicy) Authorize(ctx context.Context, request AssetUseRequest) 
 		return AssetUseDecision{}, err
 	}
 	decision := AssetUseDecision{RightsID: rights.ID, RightsVersion: rights.Version, RightsStatus: rights.Status}
-	if rights.Status == AssetRightsRevoked || rights.RevokedAt != nil {
-		return deny(decision, AssetRightsRevokedCode)
-	}
-	if rights.Status != AssetRightsActive {
-		return deny(decision, AssetRightsUnverifiedCode)
-	}
 	now := time.Now().UTC()
 	if p.Now != nil {
 		now = p.Now()
 	}
-	if !rights.ValidFrom.IsZero() && now.Before(rights.ValidFrom) {
-		return deny(decision, AssetRightsNotYetValidCode)
-	}
-	if rights.ValidUntil != nil && !now.Before(*rights.ValidUntil) {
-		return deny(decision, AssetRightsExpiredCode)
-	}
-	if len(rights.Purposes) > 0 && !slices.Contains(rights.Purposes, request.Purpose) {
-		return deny(decision, AssetPurposeNotAllowedCode)
-	}
-	if request.Channel != "" && !containsFold(rights.AllowedChannels, request.Channel) {
-		return deny(decision, AssetChannelNotAllowedCode)
-	}
-	if request.Territory != "" && !containsFold(rights.Territories, request.Territory) {
-		return deny(decision, AssetTerritoryNotAllowedCode)
+	if code := assetUseDenial(rights, request, now); code != "" {
+		return deny(decision, code)
 	}
 	decision.Allowed = true
 	return decision, nil
+}
+
+func assetUseDenial(rights AssetRightsVersion, request AssetUseRequest, now time.Time) AssetUseDenialCode {
+	switch {
+	case rights.Status == AssetRightsRevoked || rights.RevokedAt != nil:
+		return AssetRightsRevokedCode
+	case rights.Status != AssetRightsActive:
+		return AssetRightsUnverifiedCode
+	case !rights.ValidFrom.IsZero() && now.Before(rights.ValidFrom):
+		return AssetRightsNotYetValidCode
+	case rights.ValidUntil != nil && !now.Before(*rights.ValidUntil):
+		return AssetRightsExpiredCode
+	case len(rights.Purposes) > 0 && !slices.Contains(rights.Purposes, request.Purpose):
+		return AssetPurposeNotAllowedCode
+	case request.Channel != "" && !containsFold(rights.AllowedChannels, request.Channel):
+		return AssetChannelNotAllowedCode
+	case request.Territory != "" && !containsFold(rights.Territories, request.Territory):
+		return AssetTerritoryNotAllowedCode
+	default:
+		return ""
+	}
 }
 
 func deny(decision AssetUseDecision, code AssetUseDenialCode) (AssetUseDecision, error) {

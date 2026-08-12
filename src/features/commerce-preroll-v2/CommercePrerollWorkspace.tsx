@@ -359,7 +359,9 @@ export function CommercePrerollWorkspace({ onNotice, gateway: suppliedGateway }:
 	  let draft = state.generationDraft ?? await compileDraft()
 	  if (draft && gateway.updateStoryboard) draft = await gateway.updateStoryboard(draft.beats)
 	  if (draft?.creativePrompt && gateway.updatePrompt) draft = await gateway.updatePrompt(draft.creativePrompt)
-      if (!draft) throw new Error('生成依据尚未准备完成。')
+      if (!draft) {
+        throw new Error('生成依据尚未准备完成。')
+      }
       const frames = await gateway.generateFirstFrames(draft, state.productReference, () => undefined)
       dispatch({ type: 'frames-ready', frames })
     } catch (cause) {

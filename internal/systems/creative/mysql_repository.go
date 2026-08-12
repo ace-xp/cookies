@@ -1128,7 +1128,10 @@ func (r MySQLRepository) getVersionByTaskDraft(ctx context.Context, organization
 }
 
 func (r MySQLRepository) getVersionByEditTimeline(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, editTaskID string, timelineVersion int64) (CreativeVersion, error) {
-	version, err := scanCreativeVersion(r.DB.QueryRowContext(ctx, creativeVersionSelect+` WHERE organization_id = ? AND project_id = ? AND edit_task_id = ? AND draft_version = ?`, organizationID, projectID, editTaskID, timelineVersion))
+	const query = `SELECT id, organization_id, project_id, task_id, edit_task_id, version, draft_version, status,
+		creative_format, snapshot_payload, video_snapshot_payload, content_hash, created_by, idempotency_key, request_hash, created_at, check_payload, approval_payload
+		FROM creative_versions WHERE organization_id = ? AND project_id = ? AND edit_task_id = ? AND draft_version = ?`
+	version, err := scanCreativeVersion(r.DB.QueryRowContext(ctx, query, organizationID, projectID, editTaskID, timelineVersion))
 	if errors.Is(err, sql.ErrNoRows) {
 		return CreativeVersion{}, ErrNotFound
 	}

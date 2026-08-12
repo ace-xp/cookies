@@ -179,17 +179,8 @@ type UpdateCommercePrerollV2PromptRequest struct {
 
 func (s Service) UpdateCommercePrerollV2Storyboard(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, request UpdateCommercePrerollV2StoryboardRequest) (TaskDetail, error) {
 	return s.reviseCommercePrerollV2(ctx, actor, projectID, taskID, request.ExpectedRevision, func(draft *VideoDraft, workspace *CommercePrerollV2Workspace) error {
-		if workspace.PromptDraft == nil || len(request.Beats) != 3 {
-			return ErrInvalidState
-		}
-		total := int64(workspace.PromptDraft.DurationSeconds * 1000)
-		for index, beat := range request.Beats {
-			if beat.StartMS < 0 || beat.EndMS <= beat.StartMS || (index > 0 && beat.StartMS != request.Beats[index-1].EndMS) || strings.TrimSpace(beat.VisualDescription) == "" || strings.TrimSpace(beat.SubjectAction) == "" {
-				return fmt.Errorf("commerce storyboard shots must be contiguous and complete")
-			}
-		}
-		if request.Beats[0].StartMS != 0 || request.Beats[len(request.Beats)-1].EndMS != total || strings.TrimSpace(request.Beats[2].ProductState) == "" {
-			return fmt.Errorf("commerce storyboard must cover the selected duration and end with a product lockup")
+		if err := validateCommercePrerollStoryboard(workspace.PromptDraft, request.Beats); err != nil {
+			return err
 		}
 		prompt := *workspace.PromptDraft
 		prompt.Beats = append([]CommercePrerollV2Beat{}, request.Beats...)
@@ -208,6 +199,21 @@ func (s Service) UpdateCommercePrerollV2Storyboard(ctx context.Context, actor co
 		draft.Prompt = prompt.CompiledPrompt
 		return nil
 	}, TaskInProgress)
+}
+
+func validateCommercePrerollStoryboard(prompt *CommercePrerollV2PromptDraft, beats []CommercePrerollV2Beat) error {
+	if prompt == nil || len(beats) != 3 {
+		return ErrInvalidState
+	}
+	for index, beat := range beats {
+		if beat.StartMS < 0 || beat.EndMS <= beat.StartMS || (index > 0 && beat.StartMS != beats[index-1].EndMS) || strings.TrimSpace(beat.VisualDescription) == "" || strings.TrimSpace(beat.SubjectAction) == "" {
+			return fmt.Errorf("commerce storyboard shots must be contiguous and complete")
+		}
+	}
+	if beats[0].StartMS != 0 || beats[len(beats)-1].EndMS != int64(prompt.DurationSeconds*1000) || strings.TrimSpace(beats[2].ProductState) == "" {
+		return fmt.Errorf("commerce storyboard must cover the selected duration and end with a product lockup")
+	}
+	return nil
 }
 
 func (s Service) UpdateCommercePrerollV2Prompt(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, request UpdateCommercePrerollV2PromptRequest) (TaskDetail, error) {

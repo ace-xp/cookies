@@ -101,8 +101,19 @@ function parseASS(source: string): Array<Pick<CaptionClip, 'timelineStartMs' | '
     if (fields.length < 10) continue
     const start = parseTime(fields[1])
     const end = parseTime(fields[2])
-    const text = fields.slice(9).join(',').replace(/\{[^}]*\}/gu, '').replace(/\\[Nn]/gu, '\n').replace(/\\h/gu, ' ').trim()
+    const text = stripAssOverrides(fields.slice(9).join(',')).replace(/\\[Nn]/gu, '\n').replace(/\\h/gu, ' ').trim()
     if (start !== undefined && end !== undefined && end > start && text) result.push({ timelineStartMs: alignFrame(start), timelineEndMs: alignFrame(end), text })
+  }
+  return result
+}
+
+function stripAssOverrides(value: string): string {
+  let result = ''
+  let inOverride = false
+  for (const character of value) {
+    if (character === '{') inOverride = true
+    else if (character === '}') inOverride = false
+    else if (!inOverride) result += character
   }
   return result
 }

@@ -6,7 +6,7 @@ const normalize = (value: string) => value.replace(/\s+/g, '').replace(/[#[\]【
 export function briefProductNames(briefText: string): string[] {
   const result: string[] = []
   const add = (raw: string) => {
-    const value = raw.trim().replace(/^[#\s]+|[#\s]+$/g, '')
+    const value = raw.trim().replace(/^[#\s]+/, '').replace(/[#\s]+$/, '')
     if (
       !value
       || [...value].length > 20

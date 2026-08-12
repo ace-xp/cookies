@@ -466,6 +466,8 @@ func (s Service) CommercePrerollV2ProviderInput(ctx context.Context, actor contr
 	return input, spec.PromptHash, spec.SpecHash, nil
 }
 
+const commercePrerollPendingAttemptPrefix = "pending:"
+
 func (s Service) ReserveCommercePrerollV2VideoOperation(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, expectedRevision int64, operationID string) (TaskDetail, error) {
 	operationID = strings.TrimSpace(operationID)
 	if operationID == "" {
@@ -476,7 +478,7 @@ func (s Service) ReserveCommercePrerollV2VideoOperation(ctx context.Context, act
 			if workspace.GenerationSpec == nil || workspace.GenerationSpec.SpecHash == "" {
 				return ErrInvalidState
 			}
-			workspace.LatestVideoAttemptID = "pending:" + operationID
+			workspace.LatestVideoAttemptID = commercePrerollPendingAttemptPrefix + operationID
 			workspace.VideoError, workspace.OutputAsset, workspace.AdoptedAsset = nil, nil, nil
 			workspace.ActiveStage = CommercePrerollV2StageVideoGenerating
 			return nil
@@ -490,7 +492,7 @@ func (s Service) RegisterCommercePrerollV2VideoJob(ctx context.Context, actor co
 	}
 	return s.reviseCommercePrerollV2(ctx, actor, projectID, taskID, expectedRevision,
 		func(_ *VideoDraft, workspace *CommercePrerollV2Workspace) error {
-			if workspace.GenerationSpec == nil || workspace.LatestVideoAttemptID != "pending:"+operationID {
+			if workspace.GenerationSpec == nil || workspace.LatestVideoAttemptID != commercePrerollPendingAttemptPrefix+operationID {
 				return ErrInvalidState
 			}
 			workspace.LatestVideoAttemptID, workspace.VideoError, workspace.OutputAsset = providerJobID, nil, nil
@@ -503,7 +505,7 @@ func (s Service) FailCommercePrerollV2VideoOperation(ctx context.Context, actor 
 	operationID = strings.TrimSpace(operationID)
 	return s.reviseCommercePrerollV2(ctx, actor, projectID, taskID, expectedRevision,
 		func(_ *VideoDraft, workspace *CommercePrerollV2Workspace) error {
-			if operationID == "" || workspace.LatestVideoAttemptID != "pending:"+operationID {
+			if operationID == "" || workspace.LatestVideoAttemptID != commercePrerollPendingAttemptPrefix+operationID {
 				return ErrInvalidState
 			}
 			workspace.VideoError = &jobError

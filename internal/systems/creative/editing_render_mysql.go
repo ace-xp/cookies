@@ -29,21 +29,7 @@ func (r MySQLRepository) CreateEditingRender(ctx context.Context, job EditingRen
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `INSERT INTO creative_edit_render_jobs (organization_id,project_id,edit_render_job_id,edit_task_id,timeline_version,timeline_schema_version,timeline_payload,timeline_hash,compiler_version,renderer_fingerprint,timeline_created_by,timeline_created_at,kind,status,progress_percent,retry_of,retry_idempotency_key,retry_request_hash,created_by_id,created_by_kind,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, job.OrganizationID, job.ProjectID, job.ID, job.EditTaskID, job.Timeline.Version, job.Timeline.Schema(), payload, job.Timeline.ContentHash, job.Timeline.CompilerCompatibility, job.RendererFingerprint, job.Timeline.CreatedBy, job.Timeline.CreatedAt, job.Kind, job.Status, job.ProgressPercent, sql.NullString{String: job.RetryOf, Valid: job.RetryOf != ""}, sql.NullString{String: string(job.RetryIdempotencyKey), Valid: job.RetryIdempotencyKey != ""}, sql.NullString{String: job.RetryRequestHash, Valid: job.RetryRequestHash != ""}, job.CreatedBy.ID, job.CreatedBy.Kind, job.CreatedAt, job.UpdatedAt)
 	if err != nil {
-		_ = tx.Rollback()
-		if job.RetryIdempotencyKey != "" {
-			existing, getErr := r.GetEditingRenderByRetryKey(ctx, job.OrganizationID, job.ProjectID, job.RetryIdempotencyKey)
-			if getErr == nil && existing.RetryRequestHash == job.RetryRequestHash {
-				if getErr = ensureInitialRenderObservability(ctx, r.DB, ProductionSourceEditingRender, existing.OrganizationID, existing.ProjectID, existing.ID, existing.CreatedAt); getErr != nil {
-					return EditingRenderJob{}, getErr
-				}
-				existing.ProductionUsage, existing.ProductionEvents, getErr = r.loadRenderObservability(ctx, ProductionSourceEditingRender, existing.OrganizationID, existing.ProjectID, existing.ID)
-				if getErr != nil {
-					return EditingRenderJob{}, getErr
-				}
-				return existing, nil
-			}
-		}
-		return EditingRenderJob{}, err
+		return r.resolveEditingRenderInsertFailure(ctx, tx, job, err)
 	}
 	if err = ensureInitialRenderObservability(ctx, tx, ProductionSourceEditingRender, job.OrganizationID, job.ProjectID, job.ID, job.CreatedAt); err != nil {
 		return EditingRenderJob{}, err
@@ -54,14 +40,32 @@ func (r MySQLRepository) CreateEditingRender(ctx context.Context, job EditingRen
 	return job, nil
 }
 
+func (r MySQLRepository) resolveEditingRenderInsertFailure(ctx context.Context, tx *sql.Tx, job EditingRenderJob, insertErr error) (EditingRenderJob, error) {
+	_ = tx.Rollback()
+	if job.RetryIdempotencyKey == "" {
+		return EditingRenderJob{}, insertErr
+	}
+	existing, err := r.GetEditingRenderByRetryKey(ctx, job.OrganizationID, job.ProjectID, job.RetryIdempotencyKey)
+	if err != nil || existing.RetryRequestHash != job.RetryRequestHash {
+		return EditingRenderJob{}, insertErr
+	}
+	if err = ensureInitialRenderObservability(ctx, r.DB, ProductionSourceEditingRender, existing.OrganizationID, existing.ProjectID, existing.ID, existing.CreatedAt); err != nil {
+		return EditingRenderJob{}, err
+	}
+	existing.ProductionUsage, existing.ProductionEvents, err = r.loadRenderObservability(ctx, ProductionSourceEditingRender, existing.OrganizationID, existing.ProjectID, existing.ID)
+	return existing, err
+}
+
 const editingRenderSelect = `SELECT edit_render_job_id,organization_id,project_id,edit_task_id,timeline_version,timeline_schema_version,timeline_payload,timeline_hash,compiler_version,renderer_fingerprint,timeline_created_by,timeline_created_at,kind,status,progress_percent,COALESCE(output_asset_id,''),COALESCE(output_asset_version,0),COALESCE(error_code,''),COALESCE(error_message,''),COALESCE(retry_of,''),COALESCE(retry_idempotency_key,''),COALESCE(retry_request_hash,''),created_by_id,created_by_kind,created_at,updated_at FROM creative_edit_render_jobs`
+
+const editingRenderByRetryKeyQuery = `SELECT edit_render_job_id,organization_id,project_id,edit_task_id,timeline_version,timeline_schema_version,timeline_payload,timeline_hash,compiler_version,renderer_fingerprint,timeline_created_by,timeline_created_at,kind,status,progress_percent,COALESCE(output_asset_id,''),COALESCE(output_asset_version,0),COALESCE(error_code,''),COALESCE(error_message,''),COALESCE(retry_of,''),COALESCE(retry_idempotency_key,''),COALESCE(retry_request_hash,''),created_by_id,created_by_kind,created_at,updated_at FROM creative_edit_render_jobs WHERE organization_id=? AND project_id=? AND retry_idempotency_key=?`
 
 func (r MySQLRepository) GetEditingRender(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, id string) (EditingRenderJob, error) {
 	job, err := scanEditingRender(r.DB.QueryRowContext(ctx, editingRenderSelect+` WHERE organization_id=? AND project_id=? AND edit_render_job_id=?`, org, project, id))
 	return r.attachEditingRenderObservability(ctx, job, err)
 }
 func (r MySQLRepository) GetEditingRenderByRetryKey(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, key contract.IdempotencyKey) (EditingRenderJob, error) {
-	job, err := scanEditingRender(r.DB.QueryRowContext(ctx, editingRenderSelect+` WHERE organization_id=? AND project_id=? AND retry_idempotency_key=?`, org, project, key))
+	job, err := scanEditingRender(r.DB.QueryRowContext(ctx, editingRenderByRetryKeyQuery, org, project, key))
 	return r.attachEditingRenderObservability(ctx, job, err)
 }
 func (r MySQLRepository) FindReusableEditingRender(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, fingerprint string, kind EditingRenderKind) (EditingRenderJob, error) {
