@@ -1151,7 +1151,7 @@ func (u insightMediaUnderstander) UnderstandMedia(ctx context.Context, actor con
 	return insights.MediaUnderstanding{
 		Ready: true, ArtifactID: artifact.ID, Summary: artifact.Summary,
 		Observations: evidenceTexts(artifact.Observations), Inferences: evidenceTexts(artifact.Inferences),
-		VisibleText:  evidenceTexts(artifact.VisibleText), Transcript: evidenceTexts(artifact.Transcript),
+		VisibleText: evidenceTexts(artifact.VisibleText), Transcript: evidenceTexts(artifact.Transcript),
 		KeyframeCount: len(artifact.Keyframes), ProviderCode: artifact.Lineage.ProviderCode,
 		ModelAlias: artifact.Lineage.ModelAlias, ModelVersion: artifact.Lineage.ModelVersion,
 		ContentHash: artifact.ContentHash,
