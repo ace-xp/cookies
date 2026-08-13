@@ -170,6 +170,8 @@ func (w GeneratedIntakeWorker) ProcessOnce(ctx context.Context, workerID string)
 		Kind: commit.Kind, SourceType: commit.SourceType,
 		Title: LedgerTitle("", commit.SourceType, w.now()),
 	})
+	w.Upload.ensurePoster(ctx, intake.OrganizationID, intake.ProjectID,
+		contract.AssetVersionRef{AssetID: commit.AssetID, Version: commit.Version}, commit.Kind)
 	return true, nil
 }
 

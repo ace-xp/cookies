@@ -180,6 +180,7 @@ func (s ExternalImportService) Import(ctx context.Context, requestContext contra
 			Kind: commit.Kind, SourceType: commit.SourceType,
 			Title: LedgerTitle("", commit.SourceType, s.now()),
 		})
+		s.Upload.ensurePoster(ctx, stored.OrganizationID, projectID, ref.AssetVersion, commit.Kind)
 		return ref, nil
 	}
 	return s.reconcileUnknown(ctx, stored, err)

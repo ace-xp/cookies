@@ -26,6 +26,7 @@ import (
 	"github.com/shikanon/cookies/internal/integrations/deliveryinsights"
 	"github.com/shikanon/cookies/internal/integrations/gotenberg"
 	"github.com/shikanon/cookies/internal/integrations/insightsledger"
+	"github.com/shikanon/cookies/internal/integrations/insightsposter"
 	"github.com/shikanon/cookies/internal/integrations/lasdocument"
 	"github.com/shikanon/cookies/internal/integrations/productsource"
 	"github.com/shikanon/cookies/internal/integrations/projectdelivery"
@@ -324,6 +325,18 @@ func main() {
 		log.Printf("Creative viral analysis configured: model_alias=%s prompt_version=%s asr=%s", "cookies.text.standard", "viral.analyze.v1", cfg.Provider.VolcengineASR.ResourceID)
 	}
 	runtimeStore := jobruntime.MySQLStore{DB: db}
+	// 派生物（目前只有视频首帧图）。ffmpeg 没配就整条不启用——本地开发机
+	// 没装 ffmpeg 也要能把服务跑起来，清单退回类型图标即可。
+	var derivativeService *assets.DerivativeService
+	if ffmpegPath != "" {
+		derivativeService = &assets.DerivativeService{
+			Repository: assetRepository,
+			Scheduler: assets.JobRuntimeDerivativeScheduler{
+				Store: runtimeStore, NewID: func() (string, error) { return ids.New("assetderivativeexec") },
+			},
+		}
+		uploadService.Derivatives = derivativeService
+	}
 	creativeService.DirectionScheduler = creative.JobRuntimeDirectionGenerationScheduler{Store: runtimeStore}
 	creativeService.AINativeOperationCanceller = creativeAINativeOperationCanceller{store: runtimeStore}
 	var researchRunner knowledge.ExternalResearchRunner
@@ -552,6 +565,11 @@ func main() {
 	// 回填台账钩子。必须在 insightsService 构造完之后——
 	// 在这之前，素材库那边每一次入库都从 relay 上读到 nil，什么都不做。
 	ledgerRelay.Recorder = insightsledger.Recorder{Service: insightsService}
+	// 封面取用口。derivativeService 为 nil（没配 ffmpeg）时不接，
+	// ReadAssetPoster 会明说没接通，前端退回类型图标。
+	if derivativeService != nil {
+		insightsService.Posters = insightsposter.Reader{Derivatives: *derivativeService, Uploads: uploadService}
+	}
 	// Text 为 nil 时提取会直接失败，不会退化成模板产出——
 	// 库里一条编造的特征，代价远大于一次失败的提取。
 	if textProvider != nil {
@@ -571,6 +589,16 @@ func main() {
 	if cfg.Miyun.Enabled {
 		runtimeHandlers[insights.MiyunCrawlJobKind] = insightsService.HandleMiyunCrawlJob
 		runtimeHandlers[insights.MiyunMaterialImportJobKind] = insightsService.HandleMiyunMaterialImportJob
+	}
+	// 抽帧 worker。要有系统身份：IngestDerivedImage 认 assets.write，
+	// 而这条路上没有人在点，只有 worker。
+	if derivativeService != nil && actor != nil {
+		runtimeHandlers[assets.DerivativeJobKind] = assets.DerivativeRuntimeHandler(assets.DerivativeRunner{
+			Repository: assetRepository, Assets: assetRepository, Blobs: blobs,
+			Upload: *uploadService,
+			Poster: assets.FFmpegPosterExtractor{Path: ffmpegPath, WorkRoot: cfg.Media.VideoWorkRoot},
+			Actor:  *actor,
+		})
 	}
 	runtimeHandlers[creative.DirectionGenerationJobKind] = creativeService.HandleDirectionGenerationJob
 	creativeService.AINativeScriptScheduler = creative.JobRuntimeAINativeScriptScheduler{

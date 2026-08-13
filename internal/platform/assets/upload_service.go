@@ -45,6 +45,9 @@ type UploadService struct {
 	// Ledger 是洞察那边的素材台账。留空就不记，素材库照常工作——
 	// 台账是个旁路账本，不该有能力让上传失败。
 	Ledger LedgerRecorder
+	// Derivatives 是派生物（现在只有视频首帧图）。和 Ledger 一样是旁路：
+	// 留空就不排任务，上传照常成功。
+	Derivatives *DerivativeService
 }
 
 func (s UploadService) Create(ctx context.Context, requestContext contract.RequestContext, projectID contract.ProjectID, key contract.IdempotencyKey, request CreateUploadRequest) (CreateUploadResponse, error) {
@@ -212,6 +215,7 @@ func (s UploadService) Finalize(ctx context.Context, requestContext contract.Req
 		Kind: commit.Kind, SourceType: commit.SourceType,
 		Title: LedgerTitle(session.Filename, commit.SourceType, s.now()),
 	})
+	s.ensurePoster(ctx, session.OrganizationID, session.ProjectID, ref.AssetVersion, commit.Kind)
 	session.Status = UploadSucceeded
 	session.ProjectAssetRef = &ref
 	session.UpdatedAt = s.now()
@@ -391,6 +395,7 @@ func (s UploadService) ingestRenderedVideo(ctx context.Context, requestContext c
 		Kind: commit.Kind, SourceType: commit.SourceType,
 		Title: LedgerTitle("", commit.SourceType, s.now()),
 	})
+	s.ensurePoster(ctx, requestContext.Actor.OrganizationID, projectID, ref.AssetVersion, commit.Kind)
 	return ref, nil
 }
 
@@ -677,6 +682,7 @@ func (s UploadService) IngestRenderedImage(
 		Kind: commit.Kind, SourceType: commit.SourceType,
 		Title: LedgerTitle("", commit.SourceType, s.now()),
 	})
+	s.ensurePoster(ctx, requestContext.Actor.OrganizationID, projectID, ref.AssetVersion, commit.Kind)
 	return ref, nil
 }
 
@@ -913,6 +919,21 @@ func (s UploadService) recordLedger(ctx context.Context, entry LedgerEntry) {
 	}
 	if err := s.Ledger.Record(ctx, entry); err != nil {
 		log.Printf("记素材台账失败 asset=%s version=%d: %v", entry.AssetID, entry.Version, err)
+	}
+}
+
+// ensurePoster 给刚入库的视频排一个抽帧任务。
+//
+// 只对视频排：图片自己就是自己的缩略图，音频和文档没有画面。
+// 失败只记日志：封面做不出来不影响素材本身，清单退回类型图标就是了。
+func (s UploadService) ensurePoster(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, ref contract.AssetVersionRef, kind contract.AssetKind) {
+	if s.Derivatives == nil || kind != contract.AssetVideo {
+		return
+	}
+	if _, _, _, err := s.Derivatives.EnsureDerivative(ctx, EnsureDerivativeRequest{
+		OrganizationID: organizationID, ProjectID: projectID, AssetRef: ref, Profile: DerivativePoster,
+	}); err != nil {
+		log.Printf("排素材封面任务失败 asset=%s version=%d: %v", ref.AssetID, ref.Version, err)
 	}
 }
 
