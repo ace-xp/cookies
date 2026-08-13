@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
+	"github.com/shikanon/cookies/internal/platform/jobruntime"
 )
 
 type derivativeRepoStub struct {
@@ -101,6 +102,49 @@ func TestFindDerivativeRequiresConfiguredRepository(t *testing.T) {
 		contract.AssetVersionRef{AssetID: "asset_1", Version: 1}, DerivativePoster)
 	if err == nil {
 		t.Fatal("没有仓储时应当报错")
+	}
+}
+
+func TestDerivativeSchedulerRequiresStore(t *testing.T) {
+	scheduler := JobRuntimeDerivativeScheduler{}
+	if err := scheduler.ScheduleAssetDerivative(context.Background(), ProcessingJob{ID: "assetjob_1"}); err == nil {
+		t.Fatal("没有 job store 时应当报错")
+	}
+}
+
+func TestDerivativeHandlerRejectsWrongKind(t *testing.T) {
+	handler := DerivativeRuntimeHandler(DerivativeRunner{})
+	_, err := handler(context.Background(), jobruntime.Claim{
+		Job:     contract.Job{Kind: "creative.video.render"},
+		Payload: []byte(`{"derivative_id":"derivative_1"}`),
+	})
+	if err == nil {
+		t.Fatal("别人的任务类型不该被这个 handler 接下来")
+	}
+}
+
+func TestDerivativeHandlerRejectsEmptyPayload(t *testing.T) {
+	handler := DerivativeRuntimeHandler(DerivativeRunner{})
+	_, err := handler(context.Background(), jobruntime.Claim{
+		Job: contract.Job{Kind: DerivativeJobKind}, Payload: []byte(`{}`),
+	})
+	if err == nil {
+		t.Fatal("载荷里没有派生物 ID 时应当报不可重试的错")
+	}
+	var executionErr jobruntime.ExecutionError
+	if !errors.As(err, &executionErr) {
+		t.Fatalf("应当是 ExecutionError，得到 %T", err)
+	}
+	// 载荷坏了重试多少次都还是坏的，重试只是在浪费 worker。
+	if executionErr.JobError.Retryable {
+		t.Fatal("载荷错误不该标成可重试")
+	}
+}
+
+func TestDerivativeRunnerNeedsConfigurationAndID(t *testing.T) {
+	runner := DerivativeRunner{}
+	if err := runner.Run(context.Background(), ""); err == nil {
+		t.Fatal("没有派生物 ID 时应当报错")
 	}
 }
 
