@@ -48,7 +48,8 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
     setListState('loading')
     try {
       const [assetPage, mappingPage, externalPage, creativePage, runPage] = await Promise.all([
-        api.listInsightAssets(currentProject.id, {}),
+        // 显式写 analysis：这里数出来的是四个队列和红点，绝不能混进台账那几千条。
+        api.listInsightAssets(currentProject.id, { roles: ['analysis'] }),
         api.listInsightAssetMappings(currentProject.id, 'unmatched'),
         api.listExternalAssets(currentProject.id),
         // 创意是另一个系统，它没配好或者报错都不该让这一屏整个读不出来——

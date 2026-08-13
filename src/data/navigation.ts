@@ -116,7 +116,7 @@ export const systems: SystemDefinition[] = [
       {
         id: 'assets', label: '素材', icon: Library, group: '工作', layout: 'table',
         description: '能拿来分析的素材有哪些、还差什么、样本不够时从哪里补。',
-        views: ['总览', '数据接入', '变量', '找相似', '外部素材'],
+        views: ['总览', '台账', '数据接入', '变量', '找相似', '外部素材'],
       },
       // 米云素材（同步自上游 shikanon/cookies）。没有并进上面的「素材」，因为它不是
       // 备料的另一种方式，是另一条生产线：从产品资料出发去外部授权采集，人工挑候选，

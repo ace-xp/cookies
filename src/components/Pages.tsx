@@ -1466,11 +1466,12 @@ const analysisViews: Record<string, AnalysisView> = {
   驱动因素: 'drivers',
 }
 
-// 素材入口的五个视图。数据接入和变量这两段是整页委托过去的，它们自己还有分段
+// 素材入口的六个视图。数据接入和变量这两段是整页委托过去的，它们自己还有分段
 // （数据源/导入任务/…、按素材类型），那些分段名不在这张表里——落到默认值即可，
 // 委托过去的页面认得它们。
 const assetsViews: Record<string, AssetsView> = {
   总览: 'overview',
+  台账: 'ledger',
   数据接入: 'intake',
   变量: 'features',
   找相似: 'similar',

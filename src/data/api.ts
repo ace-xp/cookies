@@ -2247,10 +2247,18 @@ export type ApiFeatureValue = {
   bool?: boolean
 }
 
+/**
+ * 素材身份。ledger 是台账——平台里所有素材的账本，绝大多数永远不会投流；
+ * analysis 是分析对象——真投过、有花费、要跑归因的成品。
+ * 四个队列和红点一律只数 analysis，否则几千条台账会把它们全部灌满。
+ */
+export type ApiAssetRole = 'ledger' | 'analysis'
+
 export type ApiInsightAsset = {
   id: string
   organization_id: string
   project_id: string
+  role: ApiAssetRole
   lineage_id: string
   revision: number
   title: string
@@ -2475,7 +2483,13 @@ export type ApiInsightAssetFilter = {
   statuses?: ApiAnalysisStatus[]
   assetTypes?: ApiInsightAssetType[]
   sourceKinds?: ApiAssetSourceKind[]
+  /** 不传等于只看分析对象。台账要显式要，免得谁忘了传就拉回来几千条。 */
+  roles?: ApiAssetRole[]
   lineageId?: string
+  /** 上一页返回的 next_cursor，不透明串。 */
+  cursor?: string
+  /** 按标题模糊搜。 */
+  query?: string
   limit?: number
 }
 
@@ -6326,8 +6340,11 @@ export const api = {
     filter.statuses?.forEach(status => search.append('status', status))
     filter.assetTypes?.forEach(assetType => search.append('asset_type', assetType))
     filter.sourceKinds?.forEach(sourceKind => search.append('source_kind', sourceKind))
+    filter.roles?.forEach(role => search.append('role', role))
     if (filter.lineageId) search.set('lineage_id', filter.lineageId)
-    return request<{ items: ApiInsightAsset[] }>(
+    if (filter.cursor) search.set('cursor', filter.cursor)
+    if (filter.query) search.set('q', filter.query)
+    return request<{ items: ApiInsightAsset[]; next_cursor?: string }>(
       `${insightProjectPath(projectId)}/assets?${search.toString()}`,
     )
   },
@@ -6336,6 +6353,18 @@ export const api = {
   // 否则平台回流的广告对象认不到任何素材上，它的花费就永远算不到人头上。
   indexInsightAsset: (projectId: string, body: IndexInsightAssetBody) =>
     request<ApiInsightAsset>(`${insightProjectPath(projectId)}/assets`, 'POST', body),
+  // 把一条台账素材拉进分析。台账里绝大多数素材永远不会投流，
+  // 所以这一步必须有人点——自动往里拉只会把四个队列重新灌满。
+  promoteInsightAsset: (
+    projectId: string, assetId: string,
+    body: { expected_version: number; reason: string },
+  ) => request<ApiInsightAsset>(`${insightAssetPath(projectId, assetId)}:promote`, 'POST', body),
+  // 把拉错的素材退回台账。已经和广告对象对上号的会被后端拒掉——
+  // 那意味着它有花费，退回去等于把数据藏起来。
+  returnInsightAssetToLedger: (
+    projectId: string, assetId: string,
+    body: { expected_version: number; reason: string },
+  ) => request<ApiInsightAsset>(`${insightAssetPath(projectId, assetId)}:return-to-ledger`, 'POST', body),
   getInsightAsset: (projectId: string, assetId: string) =>
     request<ApiInsightAsset>(`${insightAssetPath(projectId, assetId)}`),
   listInsightAssetLineage: (projectId: string, assetId: string) =>

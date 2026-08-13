@@ -11,6 +11,7 @@ import { ExternalView } from './ExternalView'
 import { FeatureView } from './FeatureView'
 import { ImportFromCreative } from './ImportFromCreative'
 import { IntakeView } from './IntakeView'
+import { LedgerView } from './LedgerView'
 import { OverviewView } from './OverviewView'
 import { SimilarView } from './SimilarView'
 
@@ -24,13 +25,18 @@ import { SimilarView } from './SimilarView'
  * 另外补了两件原来没有的：按变量重叠找相似素材（❓「算不出来」的升级通道），
  * 以及把平台外的素材作为**证据**收进来。
  */
-export type AssetsView = 'overview' | 'intake' | 'features' | 'similar' | 'external'
+export type AssetsView = 'overview' | 'ledger' | 'intake' | 'features' | 'similar' | 'external'
 
 const headings: Record<AssetsView, { label: string; title: string; lead: string }> = {
   overview: {
     label: 'ASSETS',
     title: '手上有哪些素材，它们还差什么才能进复盘',
     lead: '左边是平台内的（躺在素材库里），右边是外部证据（洞察自己存的，有到期日）。下面四个队列是还差的那几样。',
+  },
+  ledger: {
+    label: 'LEDGER',
+    title: '平台里一共有哪些素材',
+    lead: '创意做的每一张图、每一版剪辑都记在这儿。绝大多数永远不会投流——它们不进队列、不催你做事。真要投的那几条，点「拉进分析」。',
   },
   intake: {
     label: 'DATA INTAKE',
@@ -85,7 +91,8 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
   useEffect(() => {
     if (!currentProject.id) return
     let active = true
-    void api.listInsightAssets(currentProject.id, {})
+    // 同上：右栏这份清单喂的是登记表单和详情面板，也只要分析对象。
+    void api.listInsightAssets(currentProject.id, { roles: ['analysis'] })
       .then(page => { if (active) setAssets(page.items) })
       .catch(() => { if (active) setAssets([]) })
     return () => { active = false }
@@ -123,6 +130,7 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
           onIndex={() => { setSelectedId(''); setImporting(false); setIndexing(true) }}
           onImport={() => { setSelectedId(''); setIndexing(false); setImporting(true) }}
           reloadKey={reloadKey}/> : null}
+        {view === 'ledger' ? <LedgerView onPromoted={() => setReloadKey(key => key + 1)}/> : null}
         {view === 'similar' ? <SimilarView/> : null}
         {view === 'external' ? <ExternalView window={window}/> : null}
       </section>

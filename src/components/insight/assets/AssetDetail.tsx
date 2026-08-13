@@ -41,6 +41,10 @@ export function AssetDetail({ asset, onOpenLibrary }: {
   // （PRD §11.1），跑挂的素材原地停在「可分析」，不看留痕的话，界面上和「还没轮到它」
   // 长得一模一样。
   const [lastRun, setLastRun] = useState<ApiAnalysisRun | null>(null)
+  // 同一条创意的历版。listInsightAssetLineage 这个接口一直在，只是从来没人调过——
+  // 「同一条创意改了三版」和「三条不同创意」在别处是靠 lineage_id 分的，
+  // 详情页不显示的话，人只能靠标题猜。
+  const [lineage, setLineage] = useState<ApiInsightAsset[]>([])
 
   useEffect(() => {
     setVersion(asset.version)
@@ -49,6 +53,9 @@ export function AssetDetail({ asset, onOpenLibrary }: {
     void api.listInsightAssetFeatures(currentProject.id, asset.id)
       .then(page => { if (active) setFeatures(page.items) })
       .catch(() => { if (active) setFeatures([]) })
+    void api.listInsightAssetLineage(currentProject.id, asset.id)
+      .then(page => { if (active) setLineage(page.items) })
+      .catch(() => { if (active) setLineage([]) })
     void api.listInsightAssetAnalysisRuns(currentProject.id, asset.id, 1)
       .then(page => { if (active) setLastRun(page.items[0] ?? null) })
       .catch(() => { if (active) setLastRun(null) })
@@ -167,6 +174,16 @@ export function AssetDetail({ asset, onOpenLibrary }: {
       <div className="prelaunch-fact"><Sparkles size={17}/><span><small>编号</small><b>
         {shortId(asset.id)} · 血缘 {shortId(asset.lineage_id)} · 第 {asset.revision} 版
       </b></span></div>
+
+      {/* 只有一版就不摆这一段：一条「第 1 版」的清单说不出任何东西。 */}
+      {lineage.length > 1 ? <div className="asset-lineage">
+        <span className="section-label">这条创意的版本</span>
+        <ol>
+          {lineage.map(item => <li key={item.id} className={item.id === asset.id ? 'current' : ''}>
+            第 {item.revision} 版 · {item.title}
+          </li>)}
+        </ol>
+      </div> : null}
     </section>
   </div>
 }

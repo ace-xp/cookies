@@ -6162,6 +6162,24 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .asset-detail-lower .feature-stack { margin: 14px 0; }
 .asset-detail-lower .feature-stack b { display: inline-flex; align-items: baseline; gap: 3px; }
 .asset-detail-lower .feature-stack small { color: var(--muted); font-size: 8px; }
+/* 同一条创意的历版。当前这一版加重，否则一列「第 N 版」里看不出自己在哪。 */
+.asset-lineage { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.asset-lineage ol { display: grid; gap: 5px; margin: 8px 0 0; padding-left: 16px; }
+.asset-lineage li { color: var(--muted); font-size: 10px; line-height: 1.6; }
+.asset-lineage li.current { color: var(--text); font-weight: 650; }
+
+/* 台账。它不催人做事，所以没有队列、没有红点，只有搜索框和一条条记录。 */
+.assets-ledger { display: grid; gap: 12px; }
+.assets-ledger-search { display: flex; gap: 8px; align-items: center; }
+.assets-ledger-search input { flex: 1; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; }
+.assets-ledger-search button { height: 30px; padding: 0 14px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); color: var(--text); font-size: 10px; cursor: pointer; }
+.assets-ledger-list { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; background: var(--line); }
+.assets-ledger-list > li { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--surface); }
+.assets-ledger-list > li > div { display: grid; gap: 3px; min-width: 0; }
+.assets-ledger-list strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.assets-ledger-list small { color: var(--muted); font-size: 9px; }
+.assets-ledger-list button { height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); color: var(--text); font-size: 9px; white-space: nowrap; cursor: pointer; }
+.assets-ledger > button { justify-self: center; height: 30px; padding: 0 16px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); color: var(--text); font-size: 10px; cursor: pointer; }
 
 /* 三来源里少的那一档：derived 是量出来的，颜色和人标的分开，但同属可归因。 */
 .content-layer.derived { color: var(--cobalt); font-weight: 650; }
