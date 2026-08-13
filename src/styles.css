@@ -6174,7 +6174,10 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .assets-ledger-search input { flex: 1; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; }
 .assets-ledger-search button { height: 30px; padding: 0 14px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); color: var(--text); font-size: 10px; cursor: pointer; }
 .assets-ledger-list { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; background: var(--line); }
-.assets-ledger-list > li { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--surface); }
+/* 三列：缩略图、文字、按钮。文字那列吃掉剩下的宽度，长标题在里面省略号。 */
+.assets-ledger-list > li { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; background: var(--surface); }
+.ledger-thumb { width: 64px; height: 36px; border-radius: 4px; background: var(--subtle); object-fit: cover; }
+.ledger-thumb-empty { display: grid; place-items: center; color: var(--muted); }
 .assets-ledger-list > li > div { display: grid; gap: 3px; min-width: 0; }
 .assets-ledger-list strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .assets-ledger-list small { color: var(--muted); font-size: 9px; }

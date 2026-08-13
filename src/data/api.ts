@@ -6369,6 +6369,11 @@ export const api = {
     request<ApiInsightAsset>(`${insightAssetPath(projectId, assetId)}`),
   listInsightAssetLineage: (projectId: string, assetId: string) =>
     request<{ items: ApiInsightAsset[] }>(`${insightAssetPath(projectId, assetId)}/lineage`),
+  // 缩略图给 <img src> 用，所以是同步拼地址而不是发请求——一屏几十张图
+  // 各发一次 JSON 再取地址，清单会卡住。后端 302 到带签名的对象存储地址；
+  // 没有封面时返回 404，浏览器的 onError 会把它换成类型图标。
+  insightAssetPosterUrl: (projectId: string, assetId: string) =>
+    `${apiBase}${insightAssetPath(projectId, assetId)}/poster`,
   listInsightAssetFeatures: (projectId: string, assetId: string) =>
     request<{ items: ApiInsightAssetFeature[] }>(`${insightAssetPath(projectId, assetId)}/features`),
   // 人工结论另起一行写入，不改 AI 那一层，后台再跑也不会盖掉（03 AM-006、§14）。

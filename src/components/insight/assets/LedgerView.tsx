@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { CircleAlert } from 'lucide-react'
+import { CircleAlert, ImageOff } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
 import { api, type ApiAssetSourceKind, type ApiInsightAsset } from '../../../data/api'
 import { isoDate } from '../analysis/format'
@@ -23,6 +23,23 @@ const sourceLabels: Record<ApiAssetSourceKind, string> = {
 
 export function ledgerSourceLabel(kind: ApiAssetSourceKind): string {
   return sourceLabels[kind] ?? '来源未知'
+}
+
+/**
+ * 缩略图。取不到就退回一个类型图标——封面是锦上添花，
+ * 一张图裂了不该让整行看起来像坏了。
+ *
+ * 非视频的素材本来就没有首帧，后端会回 404，这里落到同一条退路上。
+ */
+export function LedgerThumb({ projectId, assetId, title }: { projectId: string; assetId: string; title: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return <span className="ledger-thumb ledger-thumb-empty" aria-hidden="true"><ImageOff size={16}/></span>
+  return <img
+    className="ledger-thumb"
+    src={api.insightAssetPosterUrl(projectId, assetId)}
+    alt={`${title} 的封面`}
+    loading="lazy"
+    onError={() => setFailed(true)}/>
 }
 
 export function LedgerView({ onPromoted }: { onPromoted: () => void }) {
@@ -84,6 +101,7 @@ export function LedgerView({ onPromoted }: { onPromoted: () => void }) {
 
     <ul className="assets-ledger-list">
       {items.map(asset => <li key={asset.id}>
+        <LedgerThumb projectId={currentProject.id} assetId={asset.id} title={asset.title}/>
         <div>
           <strong>{asset.title}</strong>
           <small>{ledgerSourceLabel(asset.source_kind)} · {isoDate(new Date(asset.created_at))}</small>
