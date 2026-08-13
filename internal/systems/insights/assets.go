@@ -628,6 +628,17 @@ type TransitionAssetInput struct {
 	Now             time.Time
 }
 
+// UpdateAssetRoleInput 只换身份，不碰 analysis_status。
+// 两个维度分开写，是为了让「拉进分析 → 退回台账 → 再拉进分析」全程无损。
+type UpdateAssetRoleInput struct {
+	OrganizationID  contract.OrganizationID
+	ProjectID       contract.ProjectID
+	ID              string
+	ExpectedVersion int64
+	To              AssetRole
+	Now             time.Time
+}
+
 // UpsertAssetFeaturesInput writes one data layer and advances the asset in the
 // same transaction. Only rows in ReplaceLayer are touched, so re-extraction can
 // never overwrite a human conclusion (AM-006).
@@ -654,6 +665,7 @@ type AssetRepository interface {
 	ListAssetLineage(context.Context, contract.OrganizationID, contract.ProjectID, string) ([]Asset, error)
 	UpdateAssetType(context.Context, UpdateAssetTypeInput) (Asset, error)
 	TransitionAsset(context.Context, TransitionAssetInput) (Asset, error)
+	UpdateAssetRole(context.Context, UpdateAssetRoleInput) (Asset, error)
 
 	CreateAssetMapping(context.Context, AssetMapping) (AssetMapping, error)
 	ListAssetMappings(context.Context, contract.OrganizationID, contract.ProjectID, AssetMappingFilter) ([]AssetMapping, error)
@@ -1082,6 +1094,63 @@ func (s Service) transitionAsset(ctx context.Context, actor contract.ActorContex
 	return s.Assets.TransitionAsset(ctx, TransitionAssetInput{
 		OrganizationID: actor.OrganizationID, ProjectID: projectID, ID: assetID,
 		ExpectedVersion: request.ExpectedVersion, From: from, To: to, Reason: reason, Now: s.now(),
+	})
+}
+
+// PromoteAssetToAnalysis 把一条台账素材拉进分析。
+//
+// 这是唯一一条从台账进分析的路，而且必须有人点：台账里绝大多数素材永远不会投流，
+// 自动往里拉只会把四个队列重新灌满。
+func (s Service) PromoteAssetToAnalysis(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, assetID string, request AssetTransitionRequest) (Asset, error) {
+	if err := s.assetsReady(actor, projectID, ScopeWrite); err != nil {
+		return Asset{}, err
+	}
+	if len(strings.TrimSpace(request.Reason)) > 1000 {
+		return Asset{}, fmt.Errorf("%w: 原因超长", ErrInvalidRequest)
+	}
+	asset, err := s.Assets.GetAsset(ctx, actor.OrganizationID, projectID, assetID)
+	if err != nil {
+		return Asset{}, err
+	}
+	if asset.Role == AssetRoleAnalysis {
+		return Asset{}, fmt.Errorf("%w: 这条素材已经是分析对象", ErrInvalidState)
+	}
+	return s.Assets.UpdateAssetRole(ctx, UpdateAssetRoleInput{
+		OrganizationID: actor.OrganizationID, ProjectID: projectID, ID: assetID,
+		ExpectedVersion: request.ExpectedVersion, To: AssetRoleAnalysis, Now: s.now(),
+	})
+}
+
+// ReturnAssetToLedger 把拉错的素材退回台账。
+//
+// 只有从没对上号的素材能退：对上号意味着它有广告对象、有花费、进过归因，
+// 这时候退回台账就是把已经产生的数据从队列里藏起来。
+func (s Service) ReturnAssetToLedger(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, assetID string, request AssetTransitionRequest) (Asset, error) {
+	if err := s.assetsReady(actor, projectID, ScopeWrite); err != nil {
+		return Asset{}, err
+	}
+	if len(strings.TrimSpace(request.Reason)) > 1000 {
+		return Asset{}, fmt.Errorf("%w: 原因超长", ErrInvalidRequest)
+	}
+	asset, err := s.Assets.GetAsset(ctx, actor.OrganizationID, projectID, assetID)
+	if err != nil {
+		return Asset{}, err
+	}
+	if asset.Role == AssetRoleLedger {
+		return Asset{}, fmt.Errorf("%w: 这条素材本来就在台账里", ErrInvalidState)
+	}
+	matched, err := s.Assets.ListAssetMappings(ctx, actor.OrganizationID, projectID, AssetMappingFilter{
+		AssetID: assetID, Statuses: []MappingStatus{MappingMatched}, Limit: 1,
+	})
+	if err != nil {
+		return Asset{}, err
+	}
+	if len(matched) > 0 {
+		return Asset{}, fmt.Errorf("%w: 这条素材已经和广告对象对上号，有投放数据，不能退回台账", ErrInvalidState)
+	}
+	return s.Assets.UpdateAssetRole(ctx, UpdateAssetRoleInput{
+		OrganizationID: actor.OrganizationID, ProjectID: projectID, ID: assetID,
+		ExpectedVersion: request.ExpectedVersion, To: AssetRoleLedger, Now: s.now(),
 	})
 }
 

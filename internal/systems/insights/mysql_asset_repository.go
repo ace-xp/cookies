@@ -147,6 +147,41 @@ func (r MySQLRepository) TransitionAsset(ctx context.Context, input TransitionAs
 	return value, nil
 }
 
+// UpdateAssetRole 换身份。乐观锁和 TransitionAsset 用同一套：版本对不上就报冲突，
+// 两个人同时把一条素材一个拉进分析一个退回台账时，后到的那个必须知道自己晚了。
+func (r MySQLRepository) UpdateAssetRole(ctx context.Context, input UpdateAssetRoleInput) (Asset, error) {
+	var value Asset
+	err := r.inTx(ctx, func(tx *sql.Tx) error {
+		current, txErr := getAssetForUpdate(ctx, tx, input.OrganizationID, input.ProjectID, input.ID)
+		if txErr != nil {
+			return txErr
+		}
+		if current.Version != input.ExpectedVersion {
+			return ErrVersionConflict
+		}
+		if current.Role == input.To {
+			value = current
+			return nil
+		}
+		if _, execErr := tx.ExecContext(ctx, `UPDATE insight_assets
+			SET role = ?, version = version + 1, updated_at = ?
+			WHERE organization_id = ? AND project_id = ? AND id = ? AND version = ?`,
+			input.To, input.Now,
+			input.OrganizationID, input.ProjectID, input.ID, input.ExpectedVersion); execErr != nil {
+			return execErr
+		}
+		current.Role = input.To
+		current.Version++
+		current.UpdatedAt = input.Now
+		value = current
+		return nil
+	})
+	if err != nil {
+		return Asset{}, err
+	}
+	return value, nil
+}
+
 func (r MySQLRepository) CreateAssetMapping(ctx context.Context, value AssetMapping) (AssetMapping, error) {
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO insight_asset_mappings (
 		id, organization_id, project_id, platform, platform_object_kind, platform_object_id, platform_object_name,

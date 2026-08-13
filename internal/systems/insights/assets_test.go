@@ -651,6 +651,24 @@ func (r *memoryAssetRepository) TransitionAsset(ctx context.Context, input Trans
 	return asset, nil
 }
 
+func (r *memoryAssetRepository) UpdateAssetRole(ctx context.Context, input UpdateAssetRoleInput) (Asset, error) {
+	asset, err := r.GetAsset(ctx, input.OrganizationID, input.ProjectID, input.ID)
+	if err != nil {
+		return Asset{}, err
+	}
+	if asset.Version != input.ExpectedVersion {
+		return Asset{}, ErrVersionConflict
+	}
+	if asset.Role == input.To {
+		return asset, nil
+	}
+	asset.Role = input.To
+	asset.Version++
+	asset.UpdatedAt = input.Now
+	r.assets[asset.ID] = asset
+	return asset, nil
+}
+
 func (r *memoryAssetRepository) CreateAssetMapping(_ context.Context, value AssetMapping) (AssetMapping, error) {
 	r.mappings[value.ID] = value
 	return value, nil
@@ -870,5 +888,81 @@ func TestListAssetsHidesLedgerByDefault(t *testing.T) {
 	}
 	if len(ledger) != 1 || ledger[0].Title != "台账素材" {
 		t.Fatalf("显式要台账时应只拿到台账，得到 %d 条", len(ledger))
+	}
+}
+
+func TestPromoteAssetToAnalysisKeepsProgress(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	ctx := context.Background()
+	asset, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+		Title: "台账里的成片", SourceKind: AssetSourceUpload, Role: AssetRoleLedger,
+	})
+	if err != nil {
+		t.Fatalf("登记台账素材失败：%v", err)
+	}
+	before := asset.AnalysisStatus
+
+	promoted, err := service.PromoteAssetToAnalysis(ctx, actor, "project_1", asset.ID,
+		AssetTransitionRequest{ExpectedVersion: asset.Version, Reason: "这条要投了"})
+	if err != nil {
+		t.Fatalf("拉进分析失败：%v", err)
+	}
+	if promoted.Role != AssetRoleAnalysis {
+		t.Fatalf("拉进分析后身份应是分析对象，得到 %q", promoted.Role)
+	}
+	// 身份换了，进度不清零——这是 role 独立于 analysis_status 的全部意义。
+	if promoted.AnalysisStatus != before {
+		t.Fatalf("拉进分析不该动分析进度：%q -> %q", before, promoted.AnalysisStatus)
+	}
+}
+
+func TestReturnAssetToLedgerRefusesMatchedAsset(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	ctx := context.Background()
+	asset, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+		Title: "已经对上号的成片", SourceKind: AssetSourceUpload,
+	})
+	if err != nil {
+		t.Fatalf("登记失败：%v", err)
+	}
+	mapping, err := service.RegisterAssetMapping(ctx, actor, "project_1", RegisterAssetMappingRequest{
+		Platform: "douyin", PlatformObjectKind: "creative", PlatformObjectID: "cr_1", PlatformObjectName: "计划一",
+	})
+	if err != nil {
+		t.Fatalf("登记映射失败：%v", err)
+	}
+	if _, err := service.ResolveAssetMapping(ctx, actor, "project_1", mapping.ID, ResolveAssetMappingRequest{
+		ExpectedVersion: mapping.Version, Status: MappingMatched, AssetID: asset.ID, Note: "人工对上",
+	}); err != nil {
+		t.Fatalf("对号失败：%v", err)
+	}
+
+	// 对上号意味着它有广告对象、有花费。这时候退回台账等于把已经产生的数据藏起来。
+	_, err = service.ReturnAssetToLedger(ctx, actor, "project_1", asset.ID,
+		AssetTransitionRequest{ExpectedVersion: asset.Version, Reason: "看错了"})
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("对上号的素材不该能退回台账，得到 %v", err)
+	}
+}
+
+func TestReturnAssetToLedgerAllowsUnmatchedAsset(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	ctx := context.Background()
+	asset, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+		Title: "拉错了的素材", SourceKind: AssetSourceUpload,
+	})
+	if err != nil {
+		t.Fatalf("登记失败：%v", err)
+	}
+	returned, err := service.ReturnAssetToLedger(ctx, actor, "project_1", asset.ID,
+		AssetTransitionRequest{ExpectedVersion: asset.Version, Reason: "这条其实没投"})
+	if err != nil {
+		t.Fatalf("退回台账失败：%v", err)
+	}
+	if returned.Role != AssetRoleLedger {
+		t.Fatalf("退回后身份应是台账，得到 %q", returned.Role)
 	}
 }
