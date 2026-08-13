@@ -788,3 +788,15 @@ func containsMappingStatus(values []MappingStatus, value MappingStatus) bool {
 	}
 	return false
 }
+
+func TestAssetRoleValidAndLabel(t *testing.T) {
+	if !AssetRoleLedger.valid() || !AssetRoleAnalysis.valid() {
+		t.Fatal("台账与分析对象都应是合法身份")
+	}
+	if AssetRole("archive").valid() {
+		t.Fatal("身份只有两种，第三种必须被拒")
+	}
+	if AssetRoleLedger.Label() != "台账" || AssetRoleAnalysis.Label() != "分析对象" {
+		t.Fatalf("身份的中文名不对：%q / %q", AssetRoleLedger.Label(), AssetRoleAnalysis.Label())
+	}
+}

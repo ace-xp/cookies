@@ -605,7 +605,10 @@ func (s Service) HandleMiyunMaterialImportJob(ctx context.Context, claim jobrunt
 	}
 	now := s.now()
 	insightAsset := Asset{
-		ID: insightID, OrganizationID: payload.OrganizationID, ProjectID: payload.ProjectID, LineageID: insightID, Revision: 1,
+		// 米云采回来的素材现在就是分析对象——它们进队列、跑特征提取。
+		// 台账那一套是给平台自己产的素材用的，米云不走那条路。
+		Role: AssetRoleAnalysis,
+		ID:   insightID, OrganizationID: payload.OrganizationID, ProjectID: payload.ProjectID, LineageID: insightID, Revision: 1,
 		Title: material.Title, SourceKind: AssetSourceExternal, SourceRef: miyunTraceableSourceRef(material),
 		SourceJobID:     material.FirstSeenCrawlJobID,
 		PlatformAssetID: string(result.AssetRef.AssetID), PlatformAssetVersion: result.AssetRef.Version,

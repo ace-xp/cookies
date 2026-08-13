@@ -78,6 +78,40 @@ func (k AssetSourceKind) valid() bool {
 	return false
 }
 
+// AssetRole 是素材的**身份**，和 AnalysisStatus 说的**进度**是两回事。
+//
+// 台账（ledger）是平台里所有素材的账本：创意做的每一张图、每一版剪辑、每一段配音
+// 都在里面，绝大多数永远不会拿去投流。分析对象（analysis）是真正投出去、有花费、
+// 要跑归因的那些成品。
+//
+// 不做成第九个 analysis_status 的理由：一条素材从台账被拉进分析时，它走到过哪一步
+// 应该原样保留；退回台账再拉回来也不该清零。两个正交维度各管各的，队列一律按
+// role 过滤，而不是靠把状态归零来实现。
+type AssetRole string
+
+const (
+	AssetRoleLedger   AssetRole = "ledger"   // 台账：登记在册，不进分析队列
+	AssetRoleAnalysis AssetRole = "analysis" // 分析对象：投过流、要跑归因
+)
+
+func (r AssetRole) valid() bool {
+	switch r {
+	case AssetRoleLedger, AssetRoleAnalysis:
+		return true
+	}
+	return false
+}
+
+func (r AssetRole) Label() string {
+	switch r {
+	case AssetRoleLedger:
+		return "台账"
+	case AssetRoleAnalysis:
+		return "分析对象"
+	}
+	return string(r)
+}
+
 // FeatureSource separates the data layers 03 §14 insists must not overwrite
 // each other: AI 推断、人工结论，以及从文件本身算出来的客观量。
 type FeatureSource string
@@ -191,6 +225,9 @@ type Asset struct {
 	ID             string                  `json:"id"`
 	OrganizationID contract.OrganizationID `json:"organization_id"`
 	ProjectID      contract.ProjectID      `json:"project_id"`
+
+	// 台账还是分析对象。登记时不填默认是分析对象——现有的每一条都是分析对象。
+	Role AssetRole `json:"role"`
 
 	LineageID string `json:"lineage_id"`
 	Revision  int    `json:"revision"`
@@ -655,6 +692,7 @@ func (s Service) IndexAsset(ctx context.Context, actor contract.ActorContext, pr
 	}
 	return s.Assets.CreateAsset(ctx, Asset{
 		ID: id, OrganizationID: actor.OrganizationID, ProjectID: projectID,
+		Role:      AssetRoleAnalysis,
 		LineageID: lineageID, Revision: revision, Title: strings.TrimSpace(request.Title),
 		SourceKind: request.SourceKind, SourceRef: strings.TrimSpace(request.SourceRef),
 		SourceJobID:     strings.TrimSpace(request.SourceJobID),

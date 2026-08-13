@@ -464,7 +464,8 @@ func (s Service) ManualImportMiyunMaterial(ctx context.Context, actor contract.A
 			SanitizedRaw: sanitizedRaw, CreatedAt: now,
 		},
 		InsightAsset: Asset{
-			ID: insightAssetID, OrganizationID: actor.OrganizationID, ProjectID: projectID,
+			Role: AssetRoleAnalysis,
+			ID:   insightAssetID, OrganizationID: actor.OrganizationID, ProjectID: projectID,
 			LineageID: insightAssetID, Revision: 1, Title: title, SourceKind: AssetSourceExternal,
 			SourceRef: request.SourceRef, PlatformAssetID: string(request.AssetRef.AssetID),
 			PlatformAssetVersion: request.AssetRef.Version, AnalysisStatus: AnalysisAwaitingData,

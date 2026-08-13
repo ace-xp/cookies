@@ -16,13 +16,13 @@ import (
 
 func (r MySQLRepository) CreateAsset(ctx context.Context, value Asset) (Asset, error) {
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO insight_assets (
-		id, organization_id, project_id, lineage_id, revision, title,
+		id, organization_id, project_id, role, lineage_id, revision, title,
 		source_kind, source_ref, source_job_id, platform_asset_id, platform_asset_version,
 		asset_type, asset_type_source, asset_type_confidence,
 		analysis_status, analysis_status_reason, analysis_status_changed_at,
 		version, created_by, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		value.ID, value.OrganizationID, value.ProjectID, value.LineageID, value.Revision, value.Title,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		value.ID, value.OrganizationID, value.ProjectID, value.Role, value.LineageID, value.Revision, value.Title,
 		value.SourceKind, value.SourceRef, nullableString(value.SourceJobID),
 		nullableString(value.PlatformAssetID), nullableInt64(value.PlatformAssetVersion),
 		value.AssetType, value.AssetTypeSource, value.AssetTypeConfidence,
@@ -385,7 +385,7 @@ func getAssetForUpdate(ctx context.Context, tx *sql.Tx, organizationID contract.
 	return value, err
 }
 
-const insightAssetSelect = `SELECT id, organization_id, project_id, lineage_id, revision, title, source_kind, source_ref, source_job_id, platform_asset_id, platform_asset_version, asset_type, asset_type_source, asset_type_confidence, analysis_status, analysis_status_reason, analysis_status_changed_at, version, created_by, created_at, updated_at FROM insight_assets`
+const insightAssetSelect = `SELECT id, organization_id, project_id, role, lineage_id, revision, title, source_kind, source_ref, source_job_id, platform_asset_id, platform_asset_version, asset_type, asset_type_source, asset_type_confidence, analysis_status, analysis_status_reason, analysis_status_changed_at, version, created_by, created_at, updated_at FROM insight_assets`
 const assetMappingSelect = `SELECT id, organization_id, project_id, platform, platform_object_kind, platform_object_id, platform_object_name, insight_asset_id, status, match_source, matched_by, matched_at, note, version, created_at, updated_at FROM insight_asset_mappings`
 const assetFeatureSelect = `SELECT id, organization_id, project_id, insight_asset_id, asset_type, feature_key, value_kind, value_text, value_number, value_bool, value_terms, source, confidence, review_state, skill_id, skill_version, extracted_at, version, created_by, created_at, updated_at FROM insight_asset_features`
 
@@ -394,7 +394,7 @@ func scanAsset(row rowScanner) (Asset, error) {
 	var sourceJobID, platformAssetID sql.NullString
 	var platformAssetVersion sql.NullInt64
 	var statusChangedAt sql.NullTime
-	err := row.Scan(&value.ID, &value.OrganizationID, &value.ProjectID, &value.LineageID, &value.Revision,
+	err := row.Scan(&value.ID, &value.OrganizationID, &value.ProjectID, &value.Role, &value.LineageID, &value.Revision,
 		&value.Title, &value.SourceKind, &value.SourceRef, &sourceJobID,
 		&platformAssetID, &platformAssetVersion,
 		&value.AssetType, &value.AssetTypeSource, &value.AssetTypeConfidence,
