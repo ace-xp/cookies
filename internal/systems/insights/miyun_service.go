@@ -469,7 +469,8 @@ func (s Service) ManualImportMiyunMaterial(ctx context.Context, actor contract.A
 			LineageID: insightAssetID, Revision: 1, Title: title, SourceKind: AssetSourceMiyun,
 			SourceRef: request.SourceRef, PlatformAssetID: string(request.AssetRef.AssetID),
 			PlatformAssetVersion: request.AssetRef.Version, AnalysisStatus: AnalysisAwaitingData,
-			AnalysisStatusReason:    "Manual Miyun import registered; awaiting type identification and analysis.",
+			// 同 miyun_crawl.go：这句会显示给人看，用中文说清等的是类型识别。
+			AnalysisStatusReason:    "米云手工导入已登记，等待识别广告类型后即可提取变量。",
 			AnalysisStatusChangedAt: &now, Version: 1, CreatedBy: actor.Principal.ID,
 			CreatedAt: now, UpdatedAt: now,
 		},

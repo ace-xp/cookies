@@ -612,7 +612,9 @@ func (s Service) HandleMiyunMaterialImportJob(ctx context.Context, claim jobrunt
 		Title: material.Title, SourceKind: AssetSourceMiyun, SourceRef: miyunTraceableSourceRef(material),
 		SourceJobID:     material.FirstSeenCrawlJobID,
 		PlatformAssetID: string(result.AssetRef.AssetID), PlatformAssetVersion: result.AssetRef.Version,
-		AnalysisStatus: AnalysisAwaitingData, AnalysisStatusReason: "Authorized Miyun import; awaiting analysis.",
+		// 这句直接显示在界面上，所以用中文，并说清下一步该谁做什么：
+		// 采回来的素材已经是分析对象，只差有人认出它是哪类广告。
+		AnalysisStatus: AnalysisAwaitingData, AnalysisStatusReason: "米云采集已入库，等待识别广告类型后即可提取变量。",
 		AnalysisStatusChangedAt: &now, Version: 1, CreatedBy: payload.ActorID, CreatedAt: now, UpdatedAt: now,
 	}
 	material, err = s.MiyunCrawl.CompleteMiyunMaterialImport(ctx, MiyunMaterialImportCompletion{Material: material, ExpectedVersion: material.Version, Result: result, InsightAsset: insightAsset})

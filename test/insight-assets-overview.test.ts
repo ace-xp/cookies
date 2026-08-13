@@ -54,7 +54,10 @@ test('两种已提变量的状态说的是同一句话', () => {
 })
 
 test('等着的几种各说各的，都不算好也不算坏', () => {
-  assert.deepEqual(assetStatusLabel('awaiting_data', false), { text: '等投放数据', tone: 'waiting' })
+  // awaiting_data 等的是类型识别，不是投放数据——提变量那一段压根不查投放数据
+  // （ExtractFeatures 的前置条件只有「是分析对象 + 类型已识别」）。这里冻住这个说法：
+  // 照枚举名译回「等投放数据」，人会去接一遍不缺的数据，回来素材还停在原地。
+  assert.deepEqual(assetStatusLabel('awaiting_data', false), { text: '等认类型', tone: 'waiting' })
   assert.deepEqual(assetStatusLabel('awaiting_match', false), { text: '等对上号', tone: 'waiting' })
   assert.deepEqual(assetStatusLabel('analysable', false), { text: '等提变量', tone: 'waiting' })
 })

@@ -71,12 +71,23 @@ const reviewLabels: Record<ApiReviewState, string> = {
   authored: '人工填写',
 }
 
+// awaiting_data 显示成「待认类型」：它等的是类型识别，不是投放数据。
+// 这一页正是判类型的地方，照字面译成「待数据」会把人支去接数据。
 const statusLabels: Record<string, string> = {
-  awaiting_data: '待数据', awaiting_match: '待匹配', analysable: '可分析', analysing: '分析中',
+  awaiting_data: '待认类型', awaiting_match: '待匹配', analysable: '可分析', analysing: '分析中',
   pending_confirmation: '待确认', confirmed: '已确认', needs_review: '待复审', retired: '已失效',
 }
 
-export function ContentAnalysisPage({ state, activeView }: { state: DataState; activeView: string }) {
+export function ContentAnalysisPage({ state, activeView, focusAssetId }: {
+  state: DataState
+  activeView: string
+  /**
+   * 进来就选中这一条。别处（米云素材那一页）把人送过来时带的素材 ID——
+   * 那边的人心里想的是「分析我刚导进来的这一条」，落到这一屏却要自己在一排
+   * 素材里认出它是哪个，这一路就白接了。
+   */
+  focusAssetId?: string
+}) {
   const { currentProject } = useProject()
   const target = viewTargets[activeView] ?? 'single'
   const [schemas, setSchemas] = useState<ApiFeatureSchema[]>([])
@@ -132,8 +143,14 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
 
   useEffect(() => {
     const ids = breakdownAssets.map(asset => asset.id)
-    setSelectedId(current => (ids.includes(current) ? current : ids[0] ?? ''))
-  }, [breakdownAssets.map(asset => asset.id).join('|')])
+    // 人已经选过的那一条优先——列表刷新（提完特征会刷）不该把人挪到别处去。
+    // 其次才是别处指名送过来的那一条，最后退回第一条。
+    setSelectedId(current => {
+      if (ids.includes(current)) return current
+      if (focusAssetId && ids.includes(focusAssetId)) return focusAssetId
+      return ids[0] ?? ''
+    })
+  }, [breakdownAssets.map(asset => asset.id).join('|'), focusAssetId])
 
   const selectedAsset = breakdownAssets.find(asset => asset.id === selectedId)
 

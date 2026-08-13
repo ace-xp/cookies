@@ -39,7 +39,8 @@ const viewTargets: Record<string, ViewTarget> = {
 }
 
 const statusLabels: Record<ApiAnalysisStatus, string> = {
-  awaiting_data: '待数据',
+  // 等的是类型识别，不是投放数据。理由见 AssetDetail 同名表上的注释。
+  awaiting_data: '待认类型',
   awaiting_match: '待匹配',
   analysable: '可分析',
   analysing: '分析中',

@@ -1606,12 +1606,14 @@ export function ModulePage({
     : system.key === 'insight' && item.id === 'assets' ? <AssetsPage
       state={dataState}
       view={assetsViews[activeView] ?? 'overview'}
+      objectId={objectId}
       onOpenView={setActiveView}
       onOpenLibrary={() => onOpenProject(currentProject.id, 'creative', 'production', undefined, '源素材')}
       onOpenAnalysis={() => onOpenProject(currentProject.id, 'insight', 'analysis')}/>
     : system.key === 'insight' && item.id === 'experience' ? <ExperiencePage state={dataState} view={experienceViews[activeView] ?? 'lookup'}/>
     : system.key === 'insight' && item.id === 'review' ? <ReviewPage state={dataState} view={reviewViews[activeView] ?? 'current'} objectId={objectId}/>
-    : system.key === 'insight' && item.id === 'miyun-materials' ? <MiyunMaterialsPage state={dataState} activeView={activeView}/>
+    : system.key === 'insight' && item.id === 'miyun-materials' ? <MiyunMaterialsPage state={dataState} activeView={activeView}
+      onOpenAssetAnalysis={assetId => onOpenProject(currentProject.id, 'insight', 'assets', assetId, '变量')}/>
     : system.key === 'insight' && item.id === 'experiments' ? <ExperimentCenterPage state={dataState} activeView={activeView}/>
     : system.key === 'insight' && item.id === 'settings' ? <SettingsPage state={dataState} view={settingsViews[activeView] ?? 'thresholds'}/>
     : system.key === 'delivery' && item.id === 'tour' ? <DeliveryTourPage projectId={currentProject.id} routeRunId={tourRunId}/>

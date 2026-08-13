@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, FileText, RefreshCw, RotateCcw, Search, Upload, X } from "lucide-react";
+import { Check, FileText, RefreshCw, RotateCcw, Search, SlidersHorizontal, Upload, X } from "lucide-react";
 import { useProject } from "../context/ProjectContext";
 import {
   api,
@@ -450,9 +450,17 @@ function miyunHandoffStatusCopy(status: ApiMiyunHandoff["status"]) {
 export function MiyunMaterialsPage({
   state,
   activeView,
+  onOpenAssetAnalysis,
 }: {
   state: DataState;
   activeView: string;
+  /**
+   * 把人送到某条素材的逐项拆解上去（「素材 → 变量 → 单素材拆解」）。
+   *
+   * 导进来的米云素材跟平台内素材一样是分析对象，判形态、提特征都在那一屏。
+   * 这一页原来一个字都没提它在哪，人看着一条「已导入」的素材，界面上没有下一步。
+   */
+  onOpenAssetAnalysis: (insightAssetId: string) => void;
 }) {
   const { currentProject } = useProject();
   const view = viewMap[activeView] ?? "analysis";
@@ -1795,6 +1803,9 @@ export function MiyunMaterialsPage({
                         "失败导入已请求重试。",
                       )
                     }
+                    onAnalyse={() => {
+                      if (material.insight_asset_id) onOpenAssetAnalysis(material.insight_asset_id);
+                    }}
                     preview={
                       material.import_method === "crawler"
                         ? api.getMiyunMaterialPreviewUrl(
@@ -2336,6 +2347,7 @@ function MaterialCard({
   onConfirm,
   onReject,
   onRetry,
+  onAnalyse,
   preview,
 }: {
   material: MaterialDetail;
@@ -2348,6 +2360,7 @@ function MaterialCard({
   onConfirm: () => void;
   onReject: () => void;
   onRetry: () => void;
+  onAnalyse: () => void;
   preview?: string;
 }) {
   const card = latestMiyunCard(material);
@@ -2456,6 +2469,15 @@ function MaterialCard({
           <button type="button" className="primary-button" disabled={busy} onClick={onRetry}>
             <RotateCcw size={14} aria-hidden="true" />
             重试导入
+          </button>
+        ) : null}
+        {/* 导进来之后这一页就没有下一步了，而素材其实已经是分析对象，只差有人
+            告诉系统它是哪类广告。措辞说的是意图不是步骤——形态判没判过，这一句
+            都成立；到了那一屏，界面自己会说该先判类型。 */}
+        {material.import_status === "imported" && material.insight_asset_id ? (
+          <button type="button" className="secondary-button" onClick={onAnalyse}>
+            <SlidersHorizontal size={14} aria-hidden="true" />
+            拿去分析
           </button>
         ) : null}
       </div>

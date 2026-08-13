@@ -759,7 +759,12 @@ func (s Service) IndexAsset(ctx context.Context, actor contract.ActorContext, pr
 	now := s.now()
 	// A freshly indexed asset is 待数据 until a type is identified; without a
 	// type there is no feature system to extract into (03 §11.1).
-	status, reason := AnalysisAwaitingData, "已登记，等待类型识别与投放数据。"
+	//
+	// 这句话直接显示在界面的「最近一次状态说明」上，所以只说它真正缺的那一样。
+	// 原来写的是「等待类型识别与投放数据」——提特征这一整段不查任何投放数据
+	// （见 ExtractFeatures 的前置条件），多提一句「与投放数据」会把人支去接数据，
+	// 接完回来素材还停在原地。
+	status, reason := AnalysisAwaitingData, "已登记，等待识别广告类型；认了类型才知道该提哪套变量。"
 	if request.AssetType.valid() {
 		status, reason = AnalysisAnalysable, "登记时已知类型，可开始特征提取。"
 	}

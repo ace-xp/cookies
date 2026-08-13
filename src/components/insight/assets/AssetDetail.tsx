@@ -6,8 +6,10 @@ import { admissibleForAttribution, featureSourceLabel } from '../../../data/feat
 import { isModelSetupFailure, modelSetupHint, readableError } from '../../../data/readableError'
 import { shortId } from '../../../data/shortId'
 
+// awaiting_data 显示成「待认类型」而不是照枚举名译作「待数据」：它等的是有人认出
+// 这是哪类广告，不是等投放数据回流。译错一个词，人就会去接一遍不缺的数据。
 const statusLabels: Record<string, string> = {
-  awaiting_data: '待数据', awaiting_match: '待匹配', analysable: '可分析', analysing: '分析中',
+  awaiting_data: '待认类型', awaiting_match: '待匹配', analysable: '可分析', analysing: '分析中',
   pending_confirmation: '待确认', confirmed: '已确认', needs_review: '待复审', retired: '已失效',
 }
 

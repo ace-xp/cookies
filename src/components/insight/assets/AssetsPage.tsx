@@ -60,9 +60,14 @@ const headings: Record<AssetsView, { label: string; title: string; lead: string 
   },
 }
 
-export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnalysis }: {
+export function AssetsPage({ state, view, objectId, onOpenView, onOpenLibrary, onOpenAnalysis }: {
   state: DataState
   view: AssetsView
+  /**
+   * 路由上带的素材 ID。别处指名把人送到某一条素材上时用——目前只有米云素材页会带，
+   * 它把刚导进来的那条素材直接送到「变量」里去判形态。
+   */
+  objectId?: string
   /** 切到另一个二级视图。传的是侧栏上的那个中文名，不是 AssetsView 的键。 */
   onOpenView: (view: string) => void
   onOpenLibrary: () => void
@@ -111,7 +116,7 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
   // 数据接入和变量这两段是整页委托过去的，它们自带工具条和两栏布局。
   // 再套一层壳会得到两个标题、两条工具条，人分不清哪条是当前这一屏的。
   if (view === 'intake') return <IntakeView state={state}/>
-  if (view === 'features') return <FeatureView state={state}/>
+  if (view === 'features') return <FeatureView state={state} focusAssetId={objectId}/>
 
   // 右栏只在真有东西要放的时候才占位置。四样都没有时整页并成一栏——
   // 这一屏的主角是那份清单，不是旁边那段说明。

@@ -34,7 +34,11 @@ export type AssetTone = 'ready' | 'waiting' | 'bad'
 const statusLabels: Record<ApiAnalysisStatus, { text: string; tone: AssetTone }> = {
   confirmed: { text: '已可解释', tone: 'ready' },
   pending_confirmation: { text: '已可解释', tone: 'ready' },
-  awaiting_data: { text: '等投放数据', tone: 'waiting' },
+  // 「等认类型」不是「等投放数据」。这个状态的枚举名叫 awaiting_data，读起来
+  // 像在等回流数据，实际上它等的是有人认出这是哪类广告——没有类型就不知道该问
+  // 哪套变量，提取无从谈起（assets.go 那一段的注释写得很明白）。照字面译过来，
+  // 人会去接数据，接完发现素材还停在原地。
+  awaiting_data: { text: '等认类型', tone: 'waiting' },
   awaiting_match: { text: '等对上号', tone: 'waiting' },
   analysable: { text: '等提变量', tone: 'waiting' },
   analysing: { text: '正在提变量', tone: 'waiting' },
@@ -262,7 +266,7 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
   const unaccounted = useMemo(() => ([
     { count: awaitingExtraction.length, note: '等提变量' },
     { count: failedExtraction.length, note: '提取失败' },
-    { count: live.filter(asset => asset.analysis_status === 'awaiting_data').length, note: '等投放数据' },
+    { count: live.filter(asset => asset.analysis_status === 'awaiting_data').length, note: '等认类型' },
     { count: live.filter(asset => asset.analysis_status === 'awaiting_match').length, note: '等对上号' },
     { count: live.filter(asset => asset.analysis_status === 'analysing').length, note: '正在提变量' },
     { count: needsReview.length, note: '等人复审' },
