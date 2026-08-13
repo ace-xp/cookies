@@ -349,7 +349,7 @@ func (s Service) hydrateTourRun(ctx context.Context, actor contract.ActorContext
 		byCase[plan.TourCase] = plan
 	}
 	definitions := []struct{ key, title, expected, view string }{
-		{TourCaseGoldenPath, "黄金路径", "完整走到既有人工操作包", "配置映射"},
+		{TourCaseGoldenPath, "黄金路径", "完整走到第二次人工审批", "配置映射"},
 		{TourCasePreflightFailure, "预检失败", "必填字段被服务端阻断并给出修复入口", "检查与提交"},
 		{TourCaseApprovalExpired, "审批过期", "过期审批明确阻止执行", "检查与提交"},
 		{TourCasePlanStale, "计划版本过期", "旧审批失效并要求重新预检和审批", "检查与提交"},
@@ -450,8 +450,7 @@ func (s Service) goldenTourSteps(ctx context.Context, actor contract.ActorContex
 		{Key: "monitoring", Title: "运行投放效果情景模拟并生成告警", CompletionCondition: "同一 SimulationRun 的三段指标窗口已产生可追溯告警", URL: base("monitoring", "全部告警"), Explanation: "显式选择情景与稳定 seed；规则模型先产出指标和事件，告警规则再读取同一运行的指标。"},
 		{Key: "recommendation", Title: "在优化中心根据指标与告警生成建议", CompletionCondition: "建议明确引用 SimulationRun、Execution、指标窗口和告警", URL: base("optimization", "待处理建议"), Explanation: "没有同一投后演练的完整证据链就不能生成建议。"},
 		{Key: "new_change_set", Title: "在优化中心采纳建议并生成优化草稿", CompletionCondition: "建议只关联一个新的 draft 变更申请", URL: base("optimization", "待处理建议"), Explanation: "采纳只起草修改；随后前往内部配置编排检查并提交，不自动应用。"},
-		{Key: "second_approval", Title: "提交优化申请并前往审批中心", CompletionCondition: "优化变更申请在审批中心形成有效批准", URL: base("configuration", "检查与提交"), Explanation: "配置页面只负责提交；第二次批准针对新的优化写入，不是重复审批同一内容。"},
-		{Key: "manual_action_package", Title: "生成既有人工操作包", CompletionCondition: "获批优化变更申请已编译不可变 ManualActionPackage", URL: base("configuration", "人工操作包"), Explanation: "操作包说明人工步骤，不代表平台已经执行。"},
+		{Key: "second_approval", Title: "提交优化申请并前往审批中心", CompletionCondition: "优化变更申请在审批中心形成有效批准", URL: base("configuration", "检查与提交"), Explanation: "配置页面只负责提交；第二次批准针对新的优化配置快照，不是重复审批同一内容。"},
 	}
 	if plan.ID == "" {
 		return steps
@@ -462,14 +461,12 @@ func (s Service) goldenTourSteps(ctx context.Context, actor contract.ActorContex
 		if len(plan.CurrentVersion.DeliveryIntent.Payload.MaterialReferences) > 0 {
 			materialID = plan.CurrentVersion.DeliveryIntent.Payload.MaterialReferences[0].ID
 		}
-	} else if len(plan.CurrentVersion.CreativeReferences) > 0 {
-		materialID = plan.CurrentVersion.CreativeReferences[0].AssetID
 	}
 	steps[0].Complete = plan.TourRunID == run.ID && plan.TourOwnerID == actor.Principal.ID && plan.TourCase == string(TourCaseGoldenPath) && strategyID != "" && materialID != ""
 	if steps[0].Complete {
 		steps[0].Evidence = []string{"run=" + run.ID, "plan=" + plan.ID, "strategy=" + strategyID, "creative=" + materialID}
 	}
-	steps[1].Complete = plan.CurrentVersion.PlatformConfiguration != nil || plan.CurrentVersion.ThreeTierConfiguration != nil
+	steps[1].Complete = plan.CurrentVersion.IsPlatformConfigurationV2()
 	if steps[1].Complete {
 		steps[1].Evidence = []string{"plan_version=" + fmt.Sprint(plan.CurrentVersionNumber), "snapshot=" + plan.CurrentVersion.CanonicalHash}
 	}
@@ -520,7 +517,7 @@ func (s Service) goldenTourSteps(ctx context.Context, actor contract.ActorContex
 			break
 		}
 	}
-	workflow, workflowErr := s.configurationWorkflow()
+	_, workflowErr := s.configurationWorkflow()
 	if workflowErr == nil {
 		recommendations, _ := repository.ListTourPlanRecommendations(ctx, actor.OrganizationID, run.ProjectID, plan.ID)
 		for _, recommendation := range recommendations {
@@ -537,25 +534,11 @@ func (s Service) goldenTourSteps(ctx context.Context, actor contract.ActorContex
 			if recommendationChangeSet.Status != ChangeSetDraft && recommendationChangeSet.Status != ChangeSetPreflightFailed {
 				steps[7].URL = tourApprovalPageURL(run.ProjectID, run.ID, TourCaseGoldenPath, plan.ID, recommendationChangeSet.ID)
 			}
-			currentConfigurationHash := currentPlanConfigurationHash(plan.CurrentVersion)
-			approvedTargetMaterialized := currentConfigurationHash != "" && currentConfigurationHash == recommendationChangeSet.TargetSnapshotHash
-			steps[7].Complete = recommendationChangeSet.Approval != nil && (recommendationChangeSet.Approval.Valid || approvedTargetMaterialized)
+			steps[7].Complete = recommendationChangeSet.Approval != nil && recommendationChangeSet.Approval.Valid
 			steps[7].Evidence = []string{"change_set=" + recommendationChangeSet.ID, "status=" + string(recommendationChangeSet.Status)}
-			if _, packageErr := workflow.GetManualActionPackage(ctx, actor.OrganizationID, run.ProjectID, recommendationChangeSet.ID); packageErr == nil {
-				steps[8].Complete = true
-				steps[8].Evidence = []string{"change_set=" + recommendationChangeSet.ID, "package=present"}
-			}
 		}
 	}
 	return steps
-}
-
-func currentPlanConfigurationHash(version DeliveryPlanVersion) string {
-	if version.IsPlatformConfigurationV2() {
-		return version.PlatformConfiguration.CanonicalHash
-	}
-	hash, _ := snapshotHash(version.ThreeTierConfiguration)
-	return hash
 }
 
 func tourPageURL(projectID contract.ProjectID, nav, runID, tourCase, planID, view string) string {

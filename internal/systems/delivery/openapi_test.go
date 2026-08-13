@@ -56,6 +56,55 @@ func TestOpenAPIContractCoversPlanLifecyclePreflightAndErrors(t *testing.T) {
 	}
 }
 
+func TestOpenAPIContractCoversDecisionWorkflowAuthorityBoundary(t *testing.T) {
+	t.Parallel()
+	contents, err := os.ReadFile(filepath.Join("..", "..", "..", "api", "openapi", "delivery-v1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := string(contents)
+	required := []string{
+		"/plans/{plan_id}/decisions:generate:",
+		"/decisions/{decision_id}:select:",
+		"DeliveryDecision:",
+		"DecisionSelection:",
+		"CompiledDeliveryWorkflow:",
+		"FinalApprovalBinding:",
+		"const: ready_for_final_approval",
+		"const: false",
+		"PHASE_C_REMOTE_WRITE_PROHIBITED",
+	}
+	for _, expected := range required {
+		if !strings.Contains(contract, expected) {
+			t.Errorf("Delivery OpenAPI is missing %q", expected)
+		}
+	}
+}
+
+func TestOpenAPIContractCoversMockReplayObservatoryBoundary(t *testing.T) {
+	t.Parallel()
+	contents, err := os.ReadFile(filepath.Join("..", "..", "..", "api", "openapi", "delivery-v1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := string(contents)
+	for _, expected := range []string{
+		"/decision-selections/{selection_id}/observatory-runs:",
+		"/observatory-runs/{run_id}/feedback:",
+		"DeliveryObservatoryRun:",
+		"DeliveryObservatoryFeedback:",
+		"enum: [mock, replay]",
+		"enum: [observe, prepare_local_form]",
+		"enum: [accepted, modified, rejected]",
+		"PHASE_C_REMOTE_WRITE_PROHIBITED",
+		"const: false",
+	} {
+		if !strings.Contains(contract, expected) {
+			t.Errorf("Delivery observatory OpenAPI is missing %q", expected)
+		}
+	}
+}
+
 func TestOpenAPIContractCoversProjectScopedMonitoringAlerts(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join("..", "..", "..", "api", "openapi", "delivery-v1.yaml")
@@ -128,7 +177,7 @@ func TestOpenAPIContractCoversOwnerScopedDeliveryTour(t *testing.T) {
 		"isolation_key:",
 		"observed_at:",
 		"suggested_next_url:",
-		"enum: [plan_creation, configuration, first_approval, execution, monitoring, recommendation, new_change_set, second_approval, manual_action_package]",
+		"enum: [plan_creation, configuration, first_approval, execution, monitoring, recommendation, new_change_set, second_approval]",
 	}
 	for _, expected := range required {
 		if !strings.Contains(contract, expected) {

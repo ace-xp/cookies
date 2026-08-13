@@ -28,6 +28,11 @@ type creativeBrandBriefManager interface {
 	ConfirmBrandBriefReview(context.Context, contract.ActorContext, contract.ProjectID, string, creative.ConfirmBrandBriefReviewRequest) (creative.BrandBriefReview, error)
 }
 
+type creativeStrategyBrandWorkflowManager interface {
+	GetStrategyBrandWorkflow(context.Context, contract.ActorContext, contract.ProjectID, string) (creative.StrategyBrandWorkflowResult, error)
+	PrepareStrategyBrandWorkflow(context.Context, contract.ActorContext, contract.ProjectID, string, creative.PrepareStrategyBrandWorkflowRequest) (creative.StrategyBrandWorkflowResult, error)
+}
+
 type creativeImageTextManager interface {
 	GetImageTextWorkspace(context.Context, contract.ActorContext, contract.ProjectID, string) (creative.ImageTextWorkspace, error)
 	GenerateImageTextDraft(context.Context, contract.ActorContext, contract.ProjectID, string, creative.GenerateImageTextDraftRequest) (creative.ImageTextDraft, error)
@@ -923,6 +928,48 @@ func (s *Server) prepareCreativeBrandBrief(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, value)
 }
 
+func (s *Server) getCreativeStrategyBrandWorkflow(w http.ResponseWriter, r *http.Request) {
+	manager, ok := s.creative.(creativeStrategyBrandWorkflowManager)
+	if !ok {
+		s.notImplemented(w, r)
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	value, err := manager.GetStrategyBrandWorkflow(
+		r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("intake_id"),
+	)
+	if err != nil {
+		s.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) prepareCreativeStrategyBrandWorkflow(w http.ResponseWriter, r *http.Request) {
+	if _, ok := idempotencyKey(w, r); !ok {
+		return
+	}
+	manager, ok := s.creative.(creativeStrategyBrandWorkflowManager)
+	if !ok {
+		s.notImplemented(w, r)
+		return
+	}
+	var body creative.PrepareStrategyBrandWorkflowRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.badRequest(w, r, err)
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	value, err := manager.PrepareStrategyBrandWorkflow(
+		r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("intake_id"), body,
+	)
+	if err != nil {
+		s.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
 func (s *Server) getCreativeBrandBrief(w http.ResponseWriter, r *http.Request) {
 	manager, ok := s.creative.(creativeBrandBriefManager)
 	if !ok {
@@ -1130,6 +1177,25 @@ func (s *Server) getCreativeTask(w http.ResponseWriter, r *http.Request) {
 	}
 	rc, _ := contract.RequestContextFrom(r.Context())
 	value, err := s.creative.GetTaskDetail(r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("task_id"))
+	if err != nil {
+		s.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) renameCreativeTask(w http.ResponseWriter, r *http.Request) {
+	if s.creative == nil {
+		s.notImplemented(w, r)
+		return
+	}
+	var body creative.RenameTaskRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.badRequest(w, r, err)
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	value, err := s.creative.RenameTask(r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("task_id"), body)
 	if err != nil {
 		s.writeServiceError(w, r, err)
 		return

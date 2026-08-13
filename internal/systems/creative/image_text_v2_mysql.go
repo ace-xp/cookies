@@ -330,6 +330,26 @@ func (r MySQLRepository) GetImageGenerationAttempt(
 	return value, err
 }
 
+func (r MySQLRepository) FindImageGenerationAttemptByProviderJob(
+	ctx context.Context,
+	organizationID contract.OrganizationID,
+	projectID contract.ProjectID,
+	providerJobID string,
+) (ImageGenerationAttempt, error) {
+	const query = `SELECT organization_id, project_id, id, task_id,
+		draft_revision, image_plan_order, attempt_no, prompt_package_id,
+		generation_spec_payload, generation_spec_hash, COALESCE(provider_job_id, ''),
+		COALESCE(render_job_id, ''), status, COALESCE(base_asset_id, ''),
+		COALESCE(base_asset_version, 0), COALESCE(final_asset_id, ''),
+		COALESCE(final_asset_version, 0), COALESCE(reused_from_attempt_id, ''),
+		COALESCE(stale_reason, ''), COALESCE(error_code, ''), COALESCE(error_message, ''),
+		idempotency_key, request_hash, created_by_kind, created_by, created_at, updated_at
+		FROM creative_image_generation_attempts
+		WHERE organization_id=? AND project_id=? AND provider_job_id=?`
+	return scanImageGenerationAttempt(r.DB.QueryRowContext(ctx, query,
+		organizationID, projectID, providerJobID))
+}
+
 func (r MySQLRepository) MarkImageAttemptBaseReady(
 	ctx context.Context,
 	organizationID contract.OrganizationID,

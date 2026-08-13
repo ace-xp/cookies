@@ -1,5 +1,7 @@
 # 智能投放只读校准收口与 Delivery 配置契约
 
+> 2026-08-11 运行时说明：本文件中的页面校准、历史字段归属和哈希结论继续有效；早期“操作包”与旧配置运行时描述仅作为历史决策记录。当前活动运行时、八步 Tour 和能力边界以 [`architecture-and-implementation.md`](./architecture-and-implementation.md) 为准，新配置不再生成操作包。
+
 ## 运行时执行状态（2026-08-10）
 
 此前冻结的切换规则现已在代码中执行。新的公共 Plan 写请求必须同时提交完整 DeliveryIntent 与 tagged PlatformConfiguration；旧 flat-plan 与 ThreeTier 写请求返回 `LEGACY_CONFIGURATION_UNSUPPORTED`。持久化旧版本在读取后标记为 `legacy_unsupported`/只读，保留原 canonical hash，不能进入新预检、提交、审批或执行链。

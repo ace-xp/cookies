@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shikanon/cookies/docs/delivery/schemas/delivery-decision-v1.json",
+  "title": "DeliveryDecision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "organization_id", "project_id", "policy_version", "diagnostic", "inputs", "candidates", "recommended_candidate_id", "evidence", "canonical_hash", "created_by", "created_at"],
+  "properties": {
+    "schema_version": { "const": "delivery-decision/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "organization_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "policy_version": { "const": "delivery-decision-policy/v1" },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "explanation", "next_action"],
+      "properties": {
+        "code": { "enum": ["ready", "insufficient_data", "stale_data", "blocked_by_asset", "platform_pending"] },
+        "explanation": { "type": "string" },
+        "next_action": { "type": "string" }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan_id", "plan_version", "plan_canonical_hash", "intent_id", "intent_version", "intent_canonical_hash", "configuration_id", "configuration_version", "configuration_canonical_hash", "fact_snapshot_ref"],
+      "properties": {
+        "plan_id": { "type": "string" },
+        "plan_version": { "type": "integer", "minimum": 1 },
+        "plan_canonical_hash": { "$ref": "#/$defs/hash" },
+        "intent_id": { "type": "string" },
+        "intent_version": { "type": "integer", "minimum": 1 },
+        "intent_canonical_hash": { "$ref": "#/$defs/hash" },
+        "configuration_id": { "type": "string" },
+        "configuration_version": { "type": "integer", "minimum": 1 },
+        "configuration_canonical_hash": { "$ref": "#/$defs/hash" },
+        "fact_snapshot_ref": { "type": "string" },
+        "simulation_run_id": { "type": "string" },
+        "simulation_input_hash": { "type": "string" },
+        "baseline_metric_id": { "type": "string" },
+        "baseline_metric_hash": { "type": "string" },
+        "current_metric_id": { "type": "string" },
+        "current_metric_hash": { "type": "string" }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "target_configuration", "budget_change_percent", "rationale", "constraints", "risks", "uncertainty"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "enum": ["conservative", "balanced", "exploratory"] },
+          "target_configuration": { "$ref": "delivery-platform-configuration-v2.json" },
+          "budget_change_percent": { "type": "integer", "maximum": 0 },
+          "rationale": { "type": "array", "items": { "type": "string" } },
+          "constraints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "passed", "explanation"],
+              "properties": {
+                "code": { "type": "string" },
+                "passed": { "type": "boolean" },
+                "explanation": { "type": "string" }
+              }
+            }
+          },
+          "risks": { "type": "array", "items": { "type": "string" } },
+          "uncertainty": { "enum": ["low", "medium", "high"] }
+        }
+      }
+    },
+    "recommended_candidate_id": { "type": "string" },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "canonical_hash": { "$ref": "#/$defs/hash" },
+    "created_by": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": { "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+}

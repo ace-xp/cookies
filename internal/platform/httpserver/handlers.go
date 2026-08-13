@@ -1844,6 +1844,20 @@ func (s *Server) confirmKnowledgeDocumentVisionReconciliation(w http.ResponseWri
 	writeJSON(w, status, value)
 }
 
+func (s *Server) extractKnowledgeDocumentMedia(w http.ResponseWriter, r *http.Request) {
+	if s.knowledge == nil {
+		s.notImplemented(w, r)
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	items, err := s.knowledge.ExtractDocumentMedia(r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("document_id"))
+	if err != nil {
+		s.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) openKnowledgeDocumentOriginal(w http.ResponseWriter, r *http.Request) {
 	if s.knowledge == nil {
 		s.notImplemented(w, r)
@@ -2152,6 +2166,16 @@ func (s *Server) writeServiceError(w http.ResponseWriter, r *http.Request, err e
 		status, code, message, retryable = http.StatusNotFound, "RESOURCE_NOT_FOUND", "The scoped Creative resource does not exist.", false
 	case errors.Is(err, creative.ErrIdempotencyConflict):
 		status, code, message, retryable = http.StatusConflict, contract.ErrorIdempotencyConflict, "The idempotency key conflicts with an earlier Creative request.", false
+	case errors.Is(err, creative.ErrOperationVersionConflict):
+		status, code, message, retryable = http.StatusConflict, "EDIT_OPERATION_VERSION_CONFLICT", "The operation base version no longer matches the current timeline.", false
+	case errors.Is(err, creative.ErrEditTimelineVersionConflict):
+		status, code, message, retryable = http.StatusConflict, "EDIT_TIMELINE_VERSION_CONFLICT", "The timeline version no longer matches the current EditTask.", false
+	case errors.Is(err, creative.ErrStrategyBrandDirectionRequired):
+		status, code, message, retryable = http.StatusConflict, "STRATEGY_BRAND_DIRECTION_REQUIRED", "Select and confirm a brand direction before creating the Strategy-sourced brand task.", false
+	case errors.Is(err, creative.ErrStrategyBrandLineageMismatch):
+		status, code, message, retryable = http.StatusConflict, "STRATEGY_BRAND_LINEAGE_MISMATCH", "The Strategy brand workflow no longer matches its frozen intake lineage.", false
+	case errors.Is(err, creative.ErrStrategyBrandLegacyTaskNeedsReview):
+		status, code, message, retryable = http.StatusConflict, "STRATEGY_BRAND_LEGACY_TASK_REQUIRES_REVIEW", "An earlier brand task contains user work and requires manual review.", false
 	case errors.Is(err, creative.ErrIntakeNotReady):
 		status, code, message, retryable = http.StatusConflict, "INTAKE_NEEDS_CLARIFICATION", "The Creative intake needs the missing fields before a task can be created.", false
 	case errors.Is(err, creative.ErrProviderJobConflict):

@@ -149,7 +149,7 @@ export function DeliveryTourPage({ projectId, routeRunId }: { projectId: string;
     <section className="delivery-tour-hero">
       <div>
         <span className="delivery-tour-kicker"><Play size={14}/>20–30 分钟业务演示</span>
-        <h2>从计划创建到优化操作包，一次走完上线后闭环</h2>
+        <h2>从计划创建到优化审批，一次走完上线后闭环</h2>
         <p>从计划来源、首次上线授权、平台操作演练，一直走到上线后指标、告警、优化建议与第二次授权。</p>
       </div>
       <div className="delivery-tour-trust">

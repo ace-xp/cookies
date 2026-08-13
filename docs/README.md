@@ -33,6 +33,7 @@
 | [Project 中心化页面路径整改规划](./22-project-centered-navigation-remediation-plan.md) | Project 管理、唯一工作台、八阶段落点、四模块逐页问题、整改计划与全面评估 | 产品、设计、前端、后端、测试 |
 | [Strategy × Creative 并行开发契约（已废止）](./23-strategy-creative-parallel-contracts-v2.md) | 仅保留为历史记录；前端已改为单一负责人，本文不再约束职责、路由或实施顺序 | 历史资料 |
 | [Strategy → Creative 开发契约 v2](./25-strategy-to-creative-development-contract-v2.md) | 冻结 StrategyPackage、CreativeHandoff、CreativeIntake、CreativeVideoIntake、稳定 Route ID 与三级 readiness 边界 | Strategy、Creative、后端、测试 |
+| [Strategy → 品牌广告 Brief 断裂修复方案](./plans/2026-08-12-strategy-brand-brief-continuity-implementation-and-adversarial-review.md) | 消除已批准策略进入品牌广告后的重复 Brief 分析，统一编排、状态门禁、兼容迁移与反方评审 | 产品、Creative、Strategy、前端、后端、测试 |
 | [爆款复刻 MVP 技术实施方案](./plans/2026-07-28-viral-remake-mvp-technical-plan.md) | Strategy 未接线时以 manual Intake 跑通 Creative 爆款分析、原创改写、Provider 生成、Assets 入库和检查闭环 | Creative、平台、前端、后端、测试 |
 | [Kanon 前端 × Go 后端集成技术方案](./plans/2026-07-29-kanon-frontend-go-backend-integration-plan.md) | 冻结 Kanon 前端权威范围、cookies-platform Go 后端事实来源、适配 seam、Workbench 数据映射与分阶段验收 | 前端、后端、架构、测试 |
 | [广告 AIGC 与 AI 混剪开发知识沉淀](./23-ad-aigc-remix-development-knowledge.md) | 从飞书 Base 重点资料沉淀素材工厂、AI 混剪、RenderJob、VLM 质检、Agent/RAG、评测和合规开发知识 | 产品、架构、后端、前端、算法、音视频研发 |

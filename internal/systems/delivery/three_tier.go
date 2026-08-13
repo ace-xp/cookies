@@ -1,12 +1,10 @@
 package delivery
 
-import (
-	"fmt"
-	"strings"
-	"time"
-)
+import "time"
 
 const ThreeTierSchema = "delivery-three-tier/v1"
+
+type ThreeTierFixture = Scenario
 
 // ThreeTierConfiguration is a complete, mock-only delivery snapshot. It is
 // deliberately attached to a PlanVersion rather than a mutable plan row.
@@ -61,64 +59,6 @@ type ThreeTierField struct {
 	Confirmed        bool            `json:"confirmation"`
 }
 
-func (c ThreeTierConfiguration) Validate() error {
-	if c.Schema != "delivery-three-tier/v1" || c.Source != SourceMock || strings.TrimSpace(string(c.Scenario)) == "" || c.FixtureScenario != c.Scenario || c.GeneratedAt.IsZero() || len(c.Evidence) == 0 {
-		return fmt.Errorf("three_tier_configuration must be a mock delivery-three-tier/v1 snapshot")
-	}
-	if len(c.Groups) == 0 {
-		return fmt.Errorf("three_tier_configuration.groups is required")
-	}
-	groups := map[string]bool{}
-	for _, g := range c.Groups {
-		if g.ID == "" || g.Name == "" || groups[g.ID] || len(g.Plans) == 0 {
-			return fmt.Errorf("three_tier_configuration groups must have unique ids and names and plans")
-		}
-		groups[g.ID] = true
-		if err := validateLayerFields(g.Fields); err != nil {
-			return err
-		}
-		plans := map[string]bool{}
-		for _, p := range g.Plans {
-			if p.ID == "" || p.Name == "" || plans[p.ID] || len(p.Creatives) == 0 {
-				return fmt.Errorf("three_tier_configuration plans must have unique ids and creatives")
-			}
-			plans[p.ID] = true
-			if err := validateLayerFields(p.Fields); err != nil {
-				return err
-			}
-			creatives := map[string]bool{}
-			for _, cr := range p.Creatives {
-				if cr.ID == "" || cr.Name == "" || creatives[cr.ID] || len(cr.Fields) == 0 {
-					return fmt.Errorf("three_tier_configuration creatives must have unique ids and fields")
-				}
-				creatives[cr.ID] = true
-				if err := validateLayerFields(cr.Fields); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-func validateLayerFields(values []ThreeTierField) error {
-	if len(values) == 0 {
-		return fmt.Errorf("three_tier_configuration layer fields are required")
-	}
-	seen := map[string]bool{}
-	for _, f := range values {
-		if f.Key == "" || f.Label == "" || seen[f.Key] || f.Recommended.Type == "" || f.Effective.Type == "" || f.Source == "" || len(f.SourceRefs) == 0 || f.EffectiveSource == "" || f.PlatformStatus == "" || len(f.RiskRefs) == 0 || len(f.EvidenceRefs) == 0 {
-			return fmt.Errorf("three_tier_configuration field %q is invalid", f.Key)
-		}
-		seen[f.Key] = true
-		if f.PlatformRequired && f.PlatformStatus != "pending" {
-			return fmt.Errorf("real-platform field %q must remain pending", f.Key)
-		}
-		if f.Manual != nil && !f.Editable {
-			return fmt.Errorf("manual value requires editable field %q", f.Key)
-		}
-	}
-	return nil
-}
 func cloneThreeTierConfiguration(v *ThreeTierConfiguration) *ThreeTierConfiguration {
 	if v == nil {
 		return nil

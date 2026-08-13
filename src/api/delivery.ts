@@ -181,44 +181,10 @@ export type DeliveryPlanVersion = DeliveryPlanDraft & {
   scenario: DeliveryScenario
   createdBy: { kind: 'user' | 'service'; id: string }
   createdAt: string
-  /** Server-compiled, three-tier mock configuration. */
-  threeTierConfiguration?: DeliveryThreeTierConfiguration
+  /** Frozen historical payload exists; its internal tree is intentionally not exposed. */
+  legacyConfiguration?: true
   deliveryIntent?: DeliveryIntent
   platformConfiguration?: PlatformConfiguration
-}
-
-export type DeliveryFieldValue = string | number | boolean | null | string[]
-
-export type DeliveryThreeTierField = {
-  key: string
-  label: string
-  recommendedValue?: DeliveryFieldValue
-  manualValue?: DeliveryFieldValue
-  effectiveValue?: DeliveryFieldValue
-  valueType: string
-  effectiveSource: string
-  sourceRefs: string[]
-  dependencyRefs: string[]
-  riskRefs: string[]
-  evidenceRefs: string[]
-  mockRequired: boolean
-  platformRequired: boolean
-  platformStatus: string
-  editable: boolean
-  confirmation?: { required: boolean; label?: string; confirmed?: boolean }
-}
-
-export type DeliveryThreeTierCreative = { id: string; label: string; fields: DeliveryThreeTierField[] }
-export type DeliveryThreeTierPlan = { id: string; label: string; fields: DeliveryThreeTierField[]; creatives: DeliveryThreeTierCreative[] }
-export type DeliveryThreeTierGroup = { id: string; label: string; fields: DeliveryThreeTierField[]; plans: DeliveryThreeTierPlan[] }
-
-export type DeliveryThreeTierConfiguration = {
-  schema: string
-  source: DeliverySource
-  scenario: string
-  generatedAt: string
-  evidenceRefs: string[]
-  groups: DeliveryThreeTierGroup[]
 }
 
 export type DeliveryRecommendation = {
@@ -239,24 +205,106 @@ export type DeliveryRecommendation = {
   targetConfiguration?: PlatformConfiguration
   baseSnapshotHash?: string
   targetSnapshotHash?: string
+  runtimeStatus?: 'active' | 'capability_pending' | 'legacy_unsupported'
+  readOnly?: boolean
   createdAt?: string
   updatedAt?: string
 }
 
-export type ManualActionPackage = {
+export type DeliveryDecisionCandidate = {
   id: string
-  changeSetId: string
-  planId: string
-  source: DeliverySource
-  scenario: string
-  generatedAt: string
-  optimizedPlanVersion: number
-  optimizedPlanHash: string
-  configuration?: { schemaVersion: string; id: string; version: number; platform: DeliveryPlatform; profileVersion: string; canonicalHash: string }
-  intent?: { schemaVersion: string; id: string; version: number; canonicalHash: string }
-  instructions: Array<{ fieldKey: string; effectiveValue: DeliveryFieldValue; source: string; confirmationRequired: boolean; expectedResult: string; evidenceRefs: string[] }>
-  forbiddenActions: string[]
+  kind: 'conservative' | 'balanced' | 'exploratory'
+  targetConfiguration: PlatformConfiguration
+  budgetChangePercent: number
+  rationale: string[]
+  constraints: Array<{ code: string; passed: boolean; explanation: string }>
+  risks: string[]
+  uncertainty: 'low' | 'medium' | 'high'
+}
+
+export type DeliveryDecision = {
+  schemaVersion: 'delivery-decision/v1'
+  id: string
+  organizationId: string
+  projectId: string
+  policyVersion: 'delivery-decision-policy/v1'
+  diagnostic: { code: 'ready' | 'insufficient_data' | 'stale_data' | 'blocked_by_asset' | 'platform_pending'; explanation: string; nextAction: string }
+  inputs: { planId: string; planVersion: number; planCanonicalHash: string; intentCanonicalHash: string; configurationCanonicalHash: string; factSnapshotRef: string; simulationRunId?: string; simulationInputHash?: string }
+  candidates: DeliveryDecisionCandidate[]
+  recommendedCandidateId: string
+  evidence: string[]
+  canonicalHash: string
+  createdBy: string
+  createdAt: string
+}
+
+export type CompiledDeliveryWorkflow = {
+  schemaVersion: 'compiled-delivery-workflow/v1'
+  id: string
+  decisionId: string
+  decisionCanonicalHash: string
+  selectedCandidateId: string
+  configurationCanonicalHash: string
+  configurationId: string
+  configurationVersion: number
+  platform: 'ocean_engine'
+  profileVersion: 'oceanengine-configuration/v1'
+  accountReference: StableReference
+  capabilityContractVersion: 'oceanengine-capability/v0.1'
+  selectorContractVersion: 'oceanengine-selector-contract/v0.1'
+  actionContractVersion: 'oceanengine-action-contract/v0.1'
+  compilerVersion: 'oceanengine-workflow-compiler/v1'
+  status: 'ready_for_final_approval'
+  remoteWriteEnabled: false
+  steps: Array<{ id: string; sequence: number; page: string; action: string; risk: 'observe' | 'prepare_local_form' | 'remote_write'; preconditions: string[]; fields: Array<{ key: string; value: unknown; expectedReadback: unknown; evidenceRef: string }>; timeoutSeconds: number; recovery: string; blocked: boolean; blockReason?: 'PHASE_C_REMOTE_WRITE_PROHIBITED' }>
+  canonicalHash: string
+  createdAt: string
+}
+
+export type DeliveryDecisionSelection = {
+  id: string
+  decisionId: string
+  decisionCanonicalHash: string
+  candidateId: string
+  configuration: PlatformConfiguration
+  workflow: CompiledDeliveryWorkflow
+  finalApprovalBinding: { status: 'ready_for_final_approval'; action: 'remote_write'; planCanonicalHash: string; intentCanonicalHash: string; decisionCanonicalHash: string; configurationCanonicalHash: string; workflowCanonicalHash: string }
+  createdAt: string
+}
+
+export type DeliveryObservatoryRun = {
+  schemaVersion: 'delivery-observatory-run/v1'
+  id: string
+  source: 'mock' | 'replay'
+  mode: 'observe_existing' | 'prepare_new_local_form'
+  inputHash: string
+  binding: { selectionId: string; decisionId: string; decisionCanonicalHash: string; configurationCanonicalHash: string; workflowId: string; workflowCanonicalHash: string }
+  dataState: 'ready' | 'insufficient_data' | 'stale_data' | 'blocked_by_asset' | 'platform_pending'
+  dataStateReason: string
+  status: 'completed' | 'blocked' | 'runner_failed'
+  outcome: 'in_sync' | 'drift_detected' | 'local_form_prepared' | 'insufficient_data' | 'stale_data' | 'blocked_by_asset' | 'platform_pending' | 'runner_failure'
+  remoteWriteEnabled: false
+  steps: Array<{ stepId: string; sequence: number; page: string; workflowAction: string; executedAction: 'observe' | 'prepare_local_form'; status: string; selectorMatches: string[]; evidenceRefs: string[]; pageRefs: string[]; diffs: Array<{ key: string; evidenceRef: string; expectedValue: unknown; observedValue: unknown; matches: boolean }>; blockReason?: string }>
   evidenceRefs: string[]
+  pageRefs: string[]
+  canonicalHash: string
+  createdAt: string
+}
+
+export type DeliveryObservatoryFeedback = {
+  schemaVersion: 'delivery-observatory-feedback/v1'
+  id: string
+  runId: string
+  runCanonicalHash: string
+  runOutcome: DeliveryObservatoryRun['outcome']
+  disposition: 'accepted' | 'modified' | 'rejected'
+  reason: string
+  diffKeys: string[]
+  finalConfiguration?: PlatformConfiguration
+  finalConfigurationCanonicalHash?: string
+  canonicalHash: string
+  createdBy: string
+  createdAt: string
 }
 
 export type DeliveryPlan = {
@@ -279,7 +327,7 @@ export type DeliveryPlan = {
 }
 
 export type DeliveryPreflightCheck = {
-  code: 'advertiser_available' | 'budget_positive' | 'schedule_valid' | 'creative_present' | 'creative_confirmed' | 'tracking_complete' | 'upstream_references_resolved' | 'three_tier_structure' | 'three_tier_required_fields' | 'three_tier_dependencies' | 'three_tier_confirmation' | 'three_tier_platform_pending' | 'delivery_intent_valid' | 'platform_configuration_valid' | 'INVALID_STABLE_REFERENCE' | 'CANONICAL_HASH_MISMATCH' | 'CAPABILITY_PENDING' | 'platform_pending' | 'blocked_by_event_asset' | 'write_validation_pending'
+  code: 'delivery_intent_valid' | 'platform_configuration_valid' | 'INVALID_STABLE_REFERENCE' | 'CANONICAL_HASH_MISMATCH' | 'CAPABILITY_PENDING' | 'platform_pending' | 'blocked_by_event_asset' | 'write_validation_pending'
   severity: 'error' | 'warning'
   passed: boolean
   message: string
@@ -334,8 +382,10 @@ export type DeliveryControlChangeSet = {
   planVersion: number
   planCanonicalHash: string
   targetSnapshot?: PlatformConfiguration
-  legacyTargetSnapshot?: DeliveryThreeTierConfiguration
+  legacySnapshot?: true
   targetSnapshotHash?: string
+  runtimeStatus?: 'active' | 'capability_pending' | 'legacy_unsupported'
+  readOnly?: boolean
   recommendationId?: string
   budgetLimit: { totalMinor: number; currency: 'CNY' }
   status: 'draft' | 'preflight_passed' | 'preflight_failed' | 'approved' | 'rejected' | 'executed' | 'rolled_back'
@@ -450,7 +500,7 @@ type WireDeliveryPlanVersion = Partial<WireDeliveryPlanDraft> & {
   scenario: DeliveryScenario
   created_by: { kind: 'user' | 'service'; id: string }
   created_at: string
-  three_tier_configuration?: WireDeliveryThreeTierConfiguration | null
+  three_tier_configuration?: unknown
   intent?: DeliveryIntent | null
   platform_configuration?: PlatformConfiguration | null
 }
@@ -555,51 +605,17 @@ type WireDeliveryOutcomeSimulation = {
   replay: boolean
 }
 
-type WireDeliveryThreeTierField = {
-  key: string
-  label?: string
-  recommended: { type: string; value: DeliveryFieldValue }
-  manual?: { type: string; value: DeliveryFieldValue } | null
-  effective: { type: string; value: DeliveryFieldValue }
-  source: string
-  effective_source?: string
-  source_refs?: string[] | null
-  dependency?: string
-  dependency_refs?: string[] | null
-  risk?: string
-  risk_refs?: string[] | null
-  evidence_refs: string[]
-  mock_required: boolean
-  platform_required: boolean
-  platform_status: string
-  editable: boolean
-  confirmation: boolean
-}
-
-type WireDeliveryThreeTierCreative = { id: string; name: string; fields: WireDeliveryThreeTierField[] }
-type WireDeliveryThreeTierPlan = { id: string; name: string; fields?: WireDeliveryThreeTierField[] | null; creatives: WireDeliveryThreeTierCreative[] }
-type WireDeliveryThreeTierGroup = { id: string; name: string; fields?: WireDeliveryThreeTierField[] | null; plans: WireDeliveryThreeTierPlan[] }
-type WireDeliveryThreeTierConfiguration = {
-  schema?: string
-  contract_version?: string
-  source: DeliverySource
-  scenario: string
-  fixture_scenario?: string
-  generated_at?: string
-  evidence?: string[] | null
-  evidence_refs?: string[] | null
-  groups: WireDeliveryThreeTierGroup[]
-}
-
 type WireDeliveryRecommendation = {
   id: string
   plan_id: string
   plan_version: number
-  target_snapshot?: WireDeliveryThreeTierConfiguration | null
+  target_snapshot?: unknown
   base_configuration?: PlatformConfiguration | null
   target_configuration?: PlatformConfiguration | null
   base_snapshot_hash?: string
   target_snapshot_hash?: string
+  runtime_status?: 'active' | 'capability_pending' | 'legacy_unsupported'
+  read_only?: boolean
   status?: string
   state?: string
   version: number
@@ -619,29 +635,48 @@ type WireDeliveryRecommendation = {
   updated_at?: string
 }
 
-type WireManualActionPackage = {
+type WireDeliveryDecision = {
+  schema_version: 'delivery-decision/v1'
   id: string
-  change_set_id: string
-  instructions?: Array<{ field_key: string; effective: { type: string; value: DeliveryFieldValue }; source: string; confirmation_required: boolean; expected_result: string; evidence_refs?: string[] | null }> | null
-  layers?: Array<{ fields: Array<{ field_key: string; value: { type: string; value: DeliveryFieldValue }; source: string; confirmation: { required: boolean; confirmed: boolean }; expected_result: string; evidence_refs?: string[] | null }> }> | null
-  source?: DeliverySource
-  scenario?: string
-  evidence?: string[] | null
-  evidence_refs?: string[] | null
-  forbidden_actions?: string[] | null
+  organization_id: string
+  project_id: string
+  policy_version: 'delivery-decision-policy/v1'
+  diagnostic: { code: DeliveryDecision['diagnostic']['code']; explanation: string; next_action: string }
+  inputs: { plan_id: string; plan_version: number; plan_canonical_hash: string; intent_canonical_hash: string; configuration_canonical_hash: string; fact_snapshot_ref: string; simulation_run_id?: string; simulation_input_hash?: string }
+  candidates: Array<{ id: string; kind: DeliveryDecisionCandidate['kind']; target_configuration: PlatformConfiguration; budget_change_percent: number; rationale: string[]; constraints: DeliveryDecisionCandidate['constraints']; risks: string[]; uncertainty: DeliveryDecisionCandidate['uncertainty'] }>
+  recommended_candidate_id: string
+  evidence: string[]
+  canonical_hash: string
+  created_by: string
   created_at: string
-  optimized_plan_version: number
-  optimized_plan_hash: string
-  configuration_schema_version?: string
-  configuration_id?: string
-  configuration_version?: number
-  configuration_platform?: DeliveryPlatform
-  configuration_profile_version?: string
-  configuration_canonical_hash?: string
-  intent_schema_version?: string
-  intent_id?: string
-  intent_version?: number
-  intent_canonical_hash?: string
+}
+
+type WireDecisionSelection = {
+  id: string
+  decision_id: string
+  decision_canonical_hash: string
+  candidate_id: string
+  configuration: PlatformConfiguration
+  workflow: {
+    schema_version: 'compiled-delivery-workflow/v1'; id: string; decision_id: string; decision_canonical_hash: string; selected_candidate_id: string; configuration_canonical_hash: string; configuration_id: string; configuration_version: number; platform: 'ocean_engine'; profile_version: 'oceanengine-configuration/v1'; account_reference: StableReference; capability_contract_version: 'oceanengine-capability/v0.1'; selector_contract_version: 'oceanengine-selector-contract/v0.1'; action_contract_version: 'oceanengine-action-contract/v0.1'; compiler_version: 'oceanengine-workflow-compiler/v1'; status: 'ready_for_final_approval'; remote_write_enabled: false
+    steps: Array<{ id: string; sequence: number; page: string; action: string; risk: 'observe' | 'prepare_local_form' | 'remote_write'; preconditions: string[]; fields: Array<{ key: string; value: unknown; expected_readback: unknown; evidence_ref: string }>; timeout_seconds: number; recovery: string; blocked: boolean; block_reason?: 'PHASE_C_REMOTE_WRITE_PROHIBITED' }>
+    canonical_hash: string; created_at: string
+  }
+  final_approval_binding: { status: 'ready_for_final_approval'; action: 'remote_write'; plan_canonical_hash: string; intent_canonical_hash: string; decision_canonical_hash: string; configuration_canonical_hash: string; workflow_canonical_hash: string }
+  created_at: string
+}
+
+type WireObservatoryRun = {
+  schema_version: 'delivery-observatory-run/v1'; id: string; source: DeliveryObservatoryRun['source']; mode: DeliveryObservatoryRun['mode']; input_hash: string
+  binding: { selection_id: string; decision_id: string; decision_canonical_hash: string; configuration_canonical_hash: string; workflow_id: string; workflow_canonical_hash: string }
+  data_state: DeliveryObservatoryRun['dataState']; data_state_reason: string; status: DeliveryObservatoryRun['status']; outcome: DeliveryObservatoryRun['outcome']; remote_write_enabled: false
+  steps: Array<{ step_id: string; sequence: number; page: string; workflow_action: string; executed_action: 'observe' | 'prepare_local_form'; status: string; selector_matches: string[]; evidence_refs: string[]; page_refs: string[]; diffs: Array<{ key: string; evidence_ref: string; expected_value: unknown; observed_value: unknown; matches: boolean }>; block_reason?: string }>
+  evidence_refs: string[]; page_refs: string[]; canonical_hash: string; created_at: string
+}
+
+type WireObservatoryFeedback = {
+  schema_version: 'delivery-observatory-feedback/v1'; id: string; run_id: string; run_canonical_hash: string; run_outcome: DeliveryObservatoryRun['outcome']; disposition: DeliveryObservatoryFeedback['disposition']; reason: string; diff_keys: string[]
+  final_configuration?: PlatformConfiguration; final_configuration_canonical_hash?: string; canonical_hash: string; created_by: string; created_at: string
 }
 
 type WireDeliveryPlan = {
@@ -721,8 +756,10 @@ type WireDeliveryControlChangeSet = {
   plan_version: number
   plan_canonical_hash: string
   target_snapshot?: PlatformConfiguration
-  legacy_target_snapshot?: WireDeliveryThreeTierConfiguration
+  legacy_target_snapshot?: unknown
   target_snapshot_hash?: string
+  runtime_status?: 'active' | 'capability_pending' | 'legacy_unsupported'
+  read_only?: boolean
   recommendation_id?: string
   budget_limit: { total_minor: number; currency: 'CNY' }
   status: DeliveryControlChangeSet['status']
@@ -863,21 +900,50 @@ export const deliveryPlanApi = {
   },
 }
 
-/** Three-tier configuration compilation and recommendation lifecycle; all records remain mock-only. */
-export const deliveryConfigurationApi = {
-  async compile(_projectId: string, _planId: string, _expectedVersion: number, _fixture: string): Promise<DeliveryPlan> {
-    throw new DeliveryApiError('LEGACY_CONFIGURATION_UNSUPPORTED', 409, '旧版 ThreeTier 配置仅支持只读访问。')
+/** Phase C Decision -> CompiledWorkflow authority spine. Recommendation methods below remain historical-tour compatibility only. */
+export const deliveryOptimizationApi = {
+  async generateDecision(projectId: string, planId: string, expectedVersion: number): Promise<DeliveryDecision> {
+    return toDeliveryDecision(await deliveryPlanRequest<WireDeliveryDecision>(
+      projectId,
+      `/plans/${encodeURIComponent(planId)}/decisions:generate`,
+      { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) },
+    ))
   },
-  async override(_projectId: string, _planId: string, _input: {
-    expectedVersion: number
-    groupId: string
-    planId: string
-    creativeId: string
-    fieldKey: string
-    value: { type: string; value: DeliveryFieldValue }
-    confirmed: boolean
-  }): Promise<DeliveryPlan> {
-    throw new DeliveryApiError('LEGACY_CONFIGURATION_UNSUPPORTED', 409, '旧版 ThreeTier 配置仅支持只读访问。')
+  async listDecisions(projectId: string): Promise<DeliveryDecision[]> {
+    const response = await deliveryPlanRequest<{ items?: WireDeliveryDecision[] | null }>(projectId, '/decisions')
+    return (response.items ?? []).map(toDeliveryDecision)
+  },
+  async getDecision(projectId: string, decisionId: string): Promise<DeliveryDecision> {
+    return toDeliveryDecision(await deliveryPlanRequest<WireDeliveryDecision>(projectId, `/decisions/${encodeURIComponent(decisionId)}`))
+  },
+  async selectDecision(projectId: string, decisionId: string, candidateId: string, expectedPlanVersion: number, idempotencyKey: string): Promise<DeliveryDecisionSelection> {
+    return toDecisionSelection(await deliveryPlanRequest<WireDecisionSelection>(
+      projectId,
+      `/decisions/${encodeURIComponent(decisionId)}:select`,
+      { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ candidate_id: candidateId, expected_plan_version: expectedPlanVersion }) },
+    ))
+  },
+  async runObservatory(projectId: string, selectionId: string, mode: DeliveryObservatoryRun['mode'], source: DeliveryObservatoryRun['source'] = 'replay'): Promise<DeliveryObservatoryRun> {
+    const now = new Date()
+    return toObservatoryRun(await deliveryPlanRequest<WireObservatoryRun>(projectId, `/decision-selections/${encodeURIComponent(selectionId)}/observatory-runs`, {
+      method: 'POST', body: JSON.stringify({ source, mode, fixture: { fixture_id: `workspace-${selectionId}`, data_state: 'ready', data_state_reason: '', observed_at: now.toISOString(), data_through: now.toISOString(), observed_values: {}, selector_matches: {}, evidence_refs: [`${source}://workspace/${selectionId}`], page_refs: ['replay://local/observatory'] } }),
+    }))
+  },
+  async listObservatoryRuns(projectId: string): Promise<DeliveryObservatoryRun[]> {
+    const response = await deliveryPlanRequest<{ items?: WireObservatoryRun[] | null }>(projectId, '/observatory-runs')
+    return (response.items ?? []).map(toObservatoryRun)
+  },
+  async getObservatoryRun(projectId: string, runId: string): Promise<DeliveryObservatoryRun> {
+    return toObservatoryRun(await deliveryPlanRequest<WireObservatoryRun>(projectId, `/observatory-runs/${encodeURIComponent(runId)}`))
+  },
+  async listObservatoryFeedback(projectId: string, runId: string): Promise<DeliveryObservatoryFeedback[]> {
+    const response = await deliveryPlanRequest<{ items?: WireObservatoryFeedback[] | null }>(projectId, `/observatory-runs/${encodeURIComponent(runId)}/feedback`)
+    return (response.items ?? []).map(toObservatoryFeedback)
+  },
+  async submitObservatoryFeedback(projectId: string, runId: string, disposition: DeliveryObservatoryFeedback['disposition'], reason: string, diffKeys: string[], idempotencyKey: string, finalConfiguration?: PlatformConfiguration): Promise<DeliveryObservatoryFeedback> {
+    return toObservatoryFeedback(await deliveryPlanRequest<WireObservatoryFeedback>(projectId, `/observatory-runs/${encodeURIComponent(runId)}/feedback`, {
+      method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ disposition, reason, diff_keys: diffKeys, ...(finalConfiguration ? { final_configuration: finalConfiguration } : {}) }),
+    }))
   },
   async generateRecommendations(projectId: string, planId: string, expectedVersion: number): Promise<DeliveryRecommendation> {
     const response = await deliveryPlanRequest<WireDeliveryRecommendation>(
@@ -910,19 +976,6 @@ export const deliveryConfigurationApi = {
       projectId,
       `/recommendations/${encodeURIComponent(recommendationId)}:reject`,
       { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) },
-    ))
-  },
-  async compileManualActionPackage(projectId: string, changeSetId: string, expectedVersion: number): Promise<ManualActionPackage> {
-    return toManualActionPackage(await deliveryPlanRequest<WireManualActionPackage>(
-      projectId,
-      `/change-sets/${encodeURIComponent(changeSetId)}/manual-action-package`,
-      { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) },
-    ))
-  },
-  async getManualActionPackage(projectId: string, changeSetId: string): Promise<ManualActionPackage> {
-    return toManualActionPackage(await deliveryPlanRequest<WireManualActionPackage>(
-      projectId,
-      `/change-sets/${encodeURIComponent(changeSetId)}/manual-action-package`,
     ))
   },
 }
@@ -1590,56 +1643,62 @@ function toDeliveryPlanVersion(version: WireDeliveryPlanVersion): DeliveryPlanVe
     scenario: version.scenario,
     createdBy: version.created_by,
     createdAt: version.created_at,
-    threeTierConfiguration: version.three_tier_configuration ? toThreeTierConfiguration(version.three_tier_configuration, version.created_at) : undefined,
+    legacyConfiguration: version.three_tier_configuration ? true : undefined,
     deliveryIntent: intent,
     platformConfiguration: configuration,
   }
 }
 
-function toThreeTierField(value: WireDeliveryThreeTierField): DeliveryThreeTierField {
+function toDeliveryDecision(value: WireDeliveryDecision): DeliveryDecision {
   return {
-    key: value.key,
-    label: value.label ?? '未标注字段',
-    recommendedValue: value.recommended.value,
-    manualValue: value.manual?.value,
-    effectiveValue: value.effective.value,
-    valueType: value.effective.type,
-    effectiveSource: value.effective_source ?? value.source,
-    sourceRefs: value.source_refs ?? [],
-    dependencyRefs: value.dependency_refs ?? (value.dependency ? [value.dependency] : []),
-    riskRefs: value.risk_refs ?? (value.risk ? [value.risk] : []),
-    evidenceRefs: value.evidence_refs ?? [],
-    mockRequired: value.mock_required,
-    platformRequired: value.platform_required,
-    platformStatus: value.platform_status,
-    editable: value.editable,
-    confirmation: { required: !value.confirmation, confirmed: value.confirmation },
+    schemaVersion: value.schema_version, id: value.id, organizationId: value.organization_id, projectId: value.project_id, policyVersion: value.policy_version,
+    diagnostic: { code: value.diagnostic.code, explanation: value.diagnostic.explanation, nextAction: value.diagnostic.next_action },
+    inputs: {
+      planId: value.inputs.plan_id, planVersion: value.inputs.plan_version, planCanonicalHash: value.inputs.plan_canonical_hash,
+      intentCanonicalHash: value.inputs.intent_canonical_hash, configurationCanonicalHash: value.inputs.configuration_canonical_hash,
+      factSnapshotRef: value.inputs.fact_snapshot_ref, simulationRunId: value.inputs.simulation_run_id, simulationInputHash: value.inputs.simulation_input_hash,
+    },
+    candidates: value.candidates.map(candidate => ({
+      id: candidate.id, kind: candidate.kind, targetConfiguration: candidate.target_configuration, budgetChangePercent: candidate.budget_change_percent,
+      rationale: candidate.rationale ?? [], constraints: candidate.constraints ?? [], risks: candidate.risks ?? [], uncertainty: candidate.uncertainty,
+    })),
+    recommendedCandidateId: value.recommended_candidate_id, evidence: value.evidence ?? [], canonicalHash: value.canonical_hash, createdBy: value.created_by, createdAt: value.created_at,
   }
 }
 
-function toThreeTierConfiguration(value: WireDeliveryThreeTierConfiguration, versionCreatedAt: string): DeliveryThreeTierConfiguration {
+function toDecisionSelection(value: WireDecisionSelection): DeliveryDecisionSelection {
   return {
-    schema: value.schema ?? value.contract_version ?? 'delivery-three-tier/v1',
-    source: value.source,
-    scenario: value.fixture_scenario ?? value.scenario,
-    generatedAt: value.generated_at ?? versionCreatedAt,
-    evidenceRefs: value.evidence_refs ?? value.evidence ?? [],
-    groups: value.groups.map(group => ({
-      id: group.id,
-      label: group.name,
-      fields: (group.fields ?? []).map(toThreeTierField),
-      plans: group.plans.map(plan => ({
-        id: plan.id,
-        label: plan.name,
-        fields: (plan.fields ?? []).map(toThreeTierField),
-        creatives: plan.creatives.map(creative => ({
-          id: creative.id,
-          label: creative.name,
-          fields: creative.fields.map(toThreeTierField),
-        })),
-      })),
-    })),
+    id: value.id, decisionId: value.decision_id, decisionCanonicalHash: value.decision_canonical_hash, candidateId: value.candidate_id, configuration: value.configuration,
+    workflow: {
+      schemaVersion: value.workflow.schema_version, id: value.workflow.id, decisionId: value.workflow.decision_id, decisionCanonicalHash: value.workflow.decision_canonical_hash,
+      selectedCandidateId: value.workflow.selected_candidate_id, configurationCanonicalHash: value.workflow.configuration_canonical_hash, compilerVersion: value.workflow.compiler_version,
+      configurationId: value.workflow.configuration_id, configurationVersion: value.workflow.configuration_version, platform: value.workflow.platform, profileVersion: value.workflow.profile_version,
+      accountReference: value.workflow.account_reference, capabilityContractVersion: value.workflow.capability_contract_version, selectorContractVersion: value.workflow.selector_contract_version, actionContractVersion: value.workflow.action_contract_version,
+      status: value.workflow.status, remoteWriteEnabled: value.workflow.remote_write_enabled,
+      steps: value.workflow.steps.map(step => ({ id: step.id, sequence: step.sequence, page: step.page, action: step.action, risk: step.risk, preconditions: step.preconditions ?? [], fields: step.fields.map(field => ({ key: field.key, value: field.value, expectedReadback: field.expected_readback, evidenceRef: field.evidence_ref })), timeoutSeconds: step.timeout_seconds, recovery: step.recovery, blocked: step.blocked, blockReason: step.block_reason })),
+      canonicalHash: value.workflow.canonical_hash, createdAt: value.workflow.created_at,
+    },
+    finalApprovalBinding: {
+      status: value.final_approval_binding.status, action: value.final_approval_binding.action, planCanonicalHash: value.final_approval_binding.plan_canonical_hash,
+      intentCanonicalHash: value.final_approval_binding.intent_canonical_hash, decisionCanonicalHash: value.final_approval_binding.decision_canonical_hash,
+      configurationCanonicalHash: value.final_approval_binding.configuration_canonical_hash, workflowCanonicalHash: value.final_approval_binding.workflow_canonical_hash,
+    },
+    createdAt: value.created_at,
   }
+}
+
+function toObservatoryRun(value: WireObservatoryRun): DeliveryObservatoryRun {
+  return {
+    schemaVersion: value.schema_version, id: value.id, source: value.source, mode: value.mode, inputHash: value.input_hash,
+    binding: { selectionId: value.binding.selection_id, decisionId: value.binding.decision_id, decisionCanonicalHash: value.binding.decision_canonical_hash, configurationCanonicalHash: value.binding.configuration_canonical_hash, workflowId: value.binding.workflow_id, workflowCanonicalHash: value.binding.workflow_canonical_hash },
+    dataState: value.data_state, dataStateReason: value.data_state_reason, status: value.status, outcome: value.outcome, remoteWriteEnabled: value.remote_write_enabled,
+    steps: value.steps.map(step => ({ stepId: step.step_id, sequence: step.sequence, page: step.page, workflowAction: step.workflow_action, executedAction: step.executed_action, status: step.status, selectorMatches: step.selector_matches ?? [], evidenceRefs: step.evidence_refs ?? [], pageRefs: step.page_refs ?? [], diffs: (step.diffs ?? []).map(diff => ({ key: diff.key, evidenceRef: diff.evidence_ref, expectedValue: diff.expected_value, observedValue: diff.observed_value, matches: diff.matches })), blockReason: step.block_reason })),
+    evidenceRefs: value.evidence_refs ?? [], pageRefs: value.page_refs ?? [], canonicalHash: value.canonical_hash, createdAt: value.created_at,
+  }
+}
+
+function toObservatoryFeedback(value: WireObservatoryFeedback): DeliveryObservatoryFeedback {
+  return { schemaVersion: value.schema_version, id: value.id, runId: value.run_id, runCanonicalHash: value.run_canonical_hash, runOutcome: value.run_outcome, disposition: value.disposition, reason: value.reason, diffKeys: value.diff_keys ?? [], finalConfiguration: value.final_configuration, finalConfigurationCanonicalHash: value.final_configuration_canonical_hash, canonicalHash: value.canonical_hash, createdBy: value.created_by, createdAt: value.created_at }
 }
 
 function toDeliveryRecommendation(value: WireDeliveryRecommendation): DeliveryRecommendation {
@@ -1655,12 +1714,14 @@ function toDeliveryRecommendation(value: WireDeliveryRecommendation): DeliveryRe
     risks: (value.risks ?? []).map(stringValue),
     observation: stringValue(value.observation_window ?? value.observation),
     cooldown: value.cooldown_until ?? (value.cooldown === undefined ? undefined : stringValue(value.cooldown)),
-    source: value.source ?? value.target_snapshot?.source ?? 'mock',
-    scenario: value.scenario ?? value.target_snapshot?.scenario ?? (value.target_configuration ? 'platform_configuration' : 'golden_path'),
+    source: value.source ?? 'mock',
+    scenario: value.scenario ?? (value.target_configuration ? 'platform_configuration' : 'legacy_unsupported'),
     baseConfiguration: value.base_configuration ?? undefined,
     targetConfiguration: value.target_configuration ?? undefined,
     baseSnapshotHash: value.base_snapshot_hash,
     targetSnapshotHash: value.target_snapshot_hash,
+    runtimeStatus: value.runtime_status,
+    readOnly: value.read_only,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   }
@@ -1670,44 +1731,6 @@ function stringValue(value: unknown) {
   if (typeof value === 'string') return value
   if (value === undefined || value === null) return '未提供'
   return JSON.stringify(value)
-}
-
-function toManualActionPackage(value: WireManualActionPackage): ManualActionPackage {
-  const layerInstructions = (value.layers ?? []).flatMap(layer => layer.fields.map(field => ({
-    fieldKey: field.field_key,
-    effectiveValue: field.value.value,
-    source: field.source,
-    confirmationRequired: field.confirmation.required && !field.confirmation.confirmed,
-    expectedResult: field.expected_result,
-    evidenceRefs: field.evidence_refs ?? [],
-  })))
-  return {
-    id: value.id,
-    changeSetId: value.change_set_id,
-    planId: '',
-    source: value.source ?? 'mock',
-    scenario: value.scenario ?? 'manual_action_package',
-    generatedAt: value.created_at,
-    optimizedPlanVersion: value.optimized_plan_version,
-    optimizedPlanHash: value.optimized_plan_hash,
-    configuration: value.configuration_id && value.configuration_version && value.configuration_platform && value.configuration_schema_version && value.configuration_profile_version && value.configuration_canonical_hash ? {
-      schemaVersion: value.configuration_schema_version, id: value.configuration_id, version: value.configuration_version,
-      platform: value.configuration_platform, profileVersion: value.configuration_profile_version, canonicalHash: value.configuration_canonical_hash,
-    } : undefined,
-    intent: value.intent_id && value.intent_version && value.intent_schema_version && value.intent_canonical_hash ? {
-      schemaVersion: value.intent_schema_version, id: value.intent_id, version: value.intent_version, canonicalHash: value.intent_canonical_hash,
-    } : undefined,
-    instructions: layerInstructions.length ? layerInstructions : (value.instructions ?? []).map(instruction => ({
-      fieldKey: instruction.field_key,
-      effectiveValue: instruction.effective.value,
-      source: instruction.source,
-      confirmationRequired: instruction.confirmation_required,
-      expectedResult: instruction.expected_result,
-      evidenceRefs: instruction.evidence_refs ?? [],
-    })),
-    forbiddenActions: value.forbidden_actions ?? [],
-    evidenceRefs: value.evidence_refs ?? value.evidence ?? [],
-  }
 }
 
 function toDeliveryControlChangeSet(value: WireDeliveryControlChangeSet): DeliveryControlChangeSet {
@@ -1720,8 +1743,10 @@ function toDeliveryControlChangeSet(value: WireDeliveryControlChangeSet): Delive
     planVersion: value.plan_version,
     planCanonicalHash: value.plan_canonical_hash,
     targetSnapshot: value.target_snapshot,
-    legacyTargetSnapshot: value.legacy_target_snapshot ? toThreeTierConfiguration(value.legacy_target_snapshot, value.created_at) : undefined,
+    legacySnapshot: value.legacy_target_snapshot ? true : undefined,
     targetSnapshotHash: value.target_snapshot_hash,
+    runtimeStatus: value.runtime_status,
+    readOnly: value.read_only,
     recommendationId: value.recommendation_id,
     budgetLimit: {
       totalMinor: value.budget_limit.total_minor,

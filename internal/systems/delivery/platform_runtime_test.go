@@ -139,22 +139,6 @@ func TestMagneticEngineRuntimeIsCapabilityPendingAndBlocked(t *testing.T) {
 	}
 }
 
-func TestTypedChangeSetManualInstructionsDoNotDereferenceLegacySnapshot(t *testing.T) {
-	_, configuration := readyOceanRuntimeInputs(t, 0)
-	instructions := manualInstructionsForChangeSet(ChangeSet{TargetSnapshot: &configuration})
-	if len(instructions) != 1 || instructions[0].Layer != "project" || instructions[0].FieldKey != "daily_budget_minor" {
-		t.Fatalf("typed manual instructions = %#v", instructions)
-	}
-}
-
-func TestTourUsesTypedConfigurationHashAfterRecommendationMaterialization(t *testing.T) {
-	intent, configuration := readyOceanRuntimeInputs(t, 0)
-	version := DeliveryPlanVersion{SchemaVersion: DeliveryPlanVersionSchemaV2, DeliveryIntent: &intent, PlatformConfiguration: &configuration}
-	if got := currentPlanConfigurationHash(version); got != configuration.CanonicalHash {
-		t.Fatalf("tour configuration hash = %q, want %q", got, configuration.CanonicalHash)
-	}
-}
-
 func TestDecodedLegacyPlanIsReadOnlyAndKeepsCanonicalHash(t *testing.T) {
 	legacy, err := versionFromDraft(
 		DeliveryPlan{ID: "legacy-plan", OrganizationID: "org_a", ProjectID: "project_a"},

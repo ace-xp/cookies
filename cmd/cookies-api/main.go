@@ -21,13 +21,11 @@ import (
 	"time"
 
 	"github.com/shikanon/cookies/internal/integrations/crawler"
-	"github.com/shikanon/cookies/internal/integrations/creativedelivery"
 	"github.com/shikanon/cookies/internal/integrations/creativeprovider"
 	"github.com/shikanon/cookies/internal/integrations/deliveryinsights"
 	"github.com/shikanon/cookies/internal/integrations/gotenberg"
 	"github.com/shikanon/cookies/internal/integrations/lasdocument"
 	"github.com/shikanon/cookies/internal/integrations/productsource"
-	"github.com/shikanon/cookies/internal/integrations/projectdelivery"
 	"github.com/shikanon/cookies/internal/integrations/seedresearch"
 	"github.com/shikanon/cookies/internal/integrations/strategycreative"
 	"github.com/shikanon/cookies/internal/platform/agent"
@@ -129,16 +127,24 @@ func main() {
 	scanner := buildScanner(cfg)
 	projectService := &project.Service{Store: projectStore, Authorizer: projectStore}
 	assetRepository := assets.MySQLRepository{DB: db}
-	uploadService := &assets.UploadService{Repository: assetRepository, Projects: projectService, Blobs: blobs, Scanner: scanner, QuarantineBucket: cfg.ObjectStorage.QuarantineBucket, AssetsBucket: cfg.ObjectStorage.AssetsBucket}
+	uploadService := &assets.UploadService{Repository: assetRepository, Projects: projectService, Blobs: blobs, Scanner: scanner, QuarantineBucket: cfg.ObjectStorage.QuarantineBucket, AssetsBucket: cfg.ObjectStorage.AssetsBucket, UsePolicy: assets.AssetUsePolicy{Rights: assetRepository}}
 	if ffprobePath != "" {
 		uploadService.VideoProbe = assets.FFprobeVideoProbe{Path: ffprobePath, WorkRoot: cfg.Media.VideoWorkRoot}
 		uploadService.AudioProbe = assets.FFprobeAudioProbe{Path: ffprobePath, WorkRoot: cfg.Media.VideoWorkRoot}
 	}
 	intakeService := &assets.GeneratedIntakeService{Repository: assetRepository, Projects: projectService}
 	creativeRepository := creative.MySQLRepository{DB: db}
+	productionCenter := &creative.ProductionCenterService{
+		Projects: projectService,
+		Sources: []creative.ProductionRunSource{
+			creative.CreativeRenderRunAdapter{Jobs: creativeRepository},
+			creative.EditingRenderRunAdapter{Jobs: creativeRepository},
+		},
+		Assets: creative.AssetReadAdapter{Assets: uploadService},
+	}
 	creativeService := &creative.Service{
 		Repository: creativeRepository, ViralRemakes: creativeRepository, EditTasks: creativeRepository, EditingRenders: creativeRepository,
-		Projects: projectService, Assets: creativeAssetReader{uploads: uploadService},
+		Projects: projectService, Assets: creativeAssetReader{uploads: uploadService}, AssetUses: assets.AssetUsePolicy{Rights: assetRepository},
 		AudioAssets:        creativeAudioAssetWriter{uploads: uploadService},
 		CommerceWorkspaces: creativeRepository, BrandBriefs: creativeRepository, Directions: creativeRepository,
 		AINativeProducts:             creativeProductResolver{resolver: productsource.NewDouyinResolver()},
@@ -146,6 +152,14 @@ func main() {
 		AINativeScripts:              creativeRepository,
 		AINativeScriptProfiles:       creative.NewChannelCreativeProfileRegistry(),
 		AINativeProductMediaImporter: creativeProductMediaImporter{uploads: uploadService},
+	}
+	productionRetryAdapters := []creative.ProductionRetryAdapter{
+		creative.EditingRenderProductionRetryAdapter{Renders: creativeService},
+	}
+	productionCenter.RetryAdapters = productionRetryAdapters
+	productionRetry := &creative.ProductionRetryService{
+		Projects: projectService, Sources: productionCenter.Sources, Adapters: productionRetryAdapters,
+		Ledger: creativeRepository, Audit: productionRetryAuditAdapter{store: projectStore},
 	}
 	if cfg.Creative.DirectionPlanningEnabled {
 		textAdapter, textAdapterErr := buildTextAdapter(cfg, db)
@@ -296,6 +310,11 @@ func main() {
 			log.Fatalf("configure short drama V2 analyzer: %v", shortDramaAnalyzerErr)
 		}
 		creativeService.ShortDramaV2Analyzer = shortDramaAnalyzer
+		commerceAnalyzer, commerceAnalyzerErr := creativeprovider.NewCommercePrerollV2Analyzer(analysisConfig)
+		if commerceAnalyzerErr != nil {
+			log.Fatalf("configure commerce preroll V2 analyzer: %v", commerceAnalyzerErr)
+		}
+		creativeService.CommercePrerollV2Analyzer = commerceAnalyzer
 		log.Printf("Creative viral analysis configured: model_alias=%s prompt_version=%s asr=%s", "cookies.text.standard", "viral.analyze.v1", cfg.Provider.VolcengineASR.ResourceID)
 	}
 	runtimeStore := jobruntime.MySQLStore{DB: db}
@@ -420,7 +439,7 @@ func main() {
 		ProjectAuthorizer: projectStore,
 		Readiness:         database.Readiness{DB: db},
 		Identities:        identityStore, Accounts: identityStore, Projects: projectService, ProjectMembers: projectStore,
-		Uploads: uploadService, Intakes: intakeService, Creative: creativeService,
+		Uploads: uploadService, Intakes: intakeService, Creative: creativeService, ProductionCenter: productionCenter, ProductionAssets: productionCenter, ProductionRetry: productionRetry,
 		Sessions: sessionService, Knowledge: knowledgeService,
 		RemixPlans: remixService, Evals: remixService, AgentRuns: agentService,
 		ProviderConfig: provider.MySQLGatewayConfigStore{DB: db},
@@ -430,8 +449,6 @@ func main() {
 	deliveryService := &delivery.Service{
 		Repository: delivery.MySQLRepository{DB: db},
 		Projects:   projectService,
-		Packages:   creativedelivery.Reader{Service: creativeService},
-		References: projectdelivery.Reader{Service: projectService},
 		// The Connector is not configured in this environment. Normalize the
 		// deterministic OutcomeSimulation records through the Delivery consumer
 		// port until its future adapter publishes a stable contract.
@@ -575,6 +592,7 @@ func main() {
 			Sources: creativeMediaSource{repository: assetRepository, blobs: blobs}, Probe: probe,
 		}
 		creativeService.ShortDramaV2OutputNormalizer = composer
+		creativeService.CommercePrerollV2OutputNormalizer = composer
 		creativeService.Composer = composer
 		creativeService.BrandFilmComposer = composer
 		creativeService.RenderedAssets = creativeRenderedAssetWriter{uploads: uploadService}
@@ -585,8 +603,9 @@ func main() {
 		}
 		creativeService.AINativeTimelineRenderer = media.FFmpegTimelineRenderer{
 			FFmpegPath: ffmpegPath, WorkRoot: cfg.Media.VideoWorkRoot,
-			Videos: creativeMediaSource{repository: assetRepository, blobs: blobs},
-			Audio:  creativeMediaSource{repository: assetRepository, blobs: blobs}, Probe: probe,
+			Videos:  creativeMediaSource{repository: assetRepository, blobs: blobs},
+			Visuals: creativeMediaSource{repository: assetRepository, blobs: blobs},
+			Audio:   creativeMediaSource{repository: assetRepository, blobs: blobs}, Probe: probe,
 		}
 		runtimeHandlers[creative.AudioMixRenderJobKind] = creative.AudioMixRenderRuntimeHandler(*creativeService)
 		for kind, handler := range creative.NewRenderRuntimeWorker(runtimeStore, *creativeService).Handlers {
@@ -672,8 +691,10 @@ func main() {
 		if err != nil {
 			log.Fatalf("configure Provider video adapter: %v", err)
 		}
+		providerStore := provider.MySQLStore{DB: db, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP}
 		providerService := provider.Service{
-			Store:         provider.MySQLStore{DB: db, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP},
+			Store:         providerStore,
+			JobQueryStore: providerStore,
 			Scheduler:     provider.JobRuntimeScheduler{Store: runtimeStore, NewID: func() (string, error) { return ids.New("providerexec") }},
 			ImageAdapter:  adapter,
 			VideoAdapter:  videoAdapter,
@@ -704,7 +725,14 @@ func main() {
 			}
 		}
 		dependencies.ProviderJobs = providerService
+		productionCenter.Sources = append(productionCenter.Sources, creative.ProviderRunAdapter{Jobs: &providerService})
+		imageRetryAdapter := creativeprovider.ImageSlotProductionRetryAdapter{Creative: creativeService, Attempts: creativeRepository, Provider: &providerService, Projects: projectService}
+		productionRetryAdapters = append(productionRetryAdapters, imageRetryAdapter)
+		productionCenter.RetryAdapters = productionRetryAdapters
+		productionRetry.Adapters = productionRetryAdapters
+		productionRetry.Sources = productionCenter.Sources
 		creativeService.ShortDramaV2Images = creativeShortDramaV2ImageJobs{provider: &providerService}
+		creativeService.CommercePrerollV2Images = creativeCommercePrerollV2ImageJobs{provider: &providerService}
 		creativeService.AINativeStoryboards = creativeRepository
 		creativeService.AINativeStoryboardAssetPreparer = creativeAINativeStoryboardAssetPreparer{provider: &providerService}
 		creativeService.AINativeStoryboardScheduler = creative.JobRuntimeAINativeStoryboardScheduler{Store: runtimeStore}
@@ -1085,6 +1113,30 @@ func (s creativeMediaSource) OpenVideo(ctx context.Context, organizationID contr
 	}
 	if value.Asset.Status != assets.AssetReady || value.Version.Status != assets.AssetReady || value.Asset.Kind != contract.AssetVideo || value.Version.MIMEType != "video/mp4" {
 		return assets.AssetVersion{}, nil, fmt.Errorf("creative media source is not a ready MP4")
+	}
+	reader, info, err := s.blobs.Open(ctx, value.Version.Blob)
+	if err != nil {
+		return assets.AssetVersion{}, nil, err
+	}
+	if info.SizeBytes != value.Version.SizeBytes {
+		reader.Close()
+		return assets.AssetVersion{}, nil, assets.ErrOutputMetadataMismatch
+	}
+	return value.Version, reader, nil
+}
+
+func (s creativeMediaSource) OpenVisual(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, ref contract.AssetVersionRef) (assets.AssetVersion, io.ReadCloser, error) {
+	if s.repository == nil || s.blobs == nil {
+		return assets.AssetVersion{}, nil, fmt.Errorf("creative visual source is unavailable")
+	}
+	value, err := s.repository.GetProjectAsset(ctx, organizationID, projectID, ref)
+	if err != nil {
+		return assets.AssetVersion{}, nil, err
+	}
+	readyVideo := value.Asset.Kind == contract.AssetVideo && value.Version.MIMEType == "video/mp4"
+	readyImage := value.Asset.Kind == contract.AssetImage && (value.Version.MIMEType == "image/jpeg" || value.Version.MIMEType == "image/png" || value.Version.MIMEType == "image/webp")
+	if value.Asset.Status != assets.AssetReady || value.Version.Status != assets.AssetReady || !readyVideo && !readyImage {
+		return assets.AssetVersion{}, nil, fmt.Errorf("creative visual source is not a ready supported video or image")
 	}
 	reader, info, err := s.blobs.Open(ctx, value.Version.Blob)
 	if err != nil {

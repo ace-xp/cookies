@@ -270,7 +270,7 @@ export type ApiAssetVersionPointer = {
   organizationId: string
   projectId: string
   assetId: string
-  mediaKind?: 'image' | 'video'
+  mediaKind?: 'image' | 'video' | 'audio'
   contentUrl?: string
   sourceJobId?: string
   workingVersion: number
@@ -319,7 +319,7 @@ export type ApiProjectMediaAsset = {
   id: string
   projectId: string
   version: number
-  kind: 'video' | 'image' | 'document'
+  kind: 'video' | 'image' | 'audio' | 'document'
   sourceType?: 'upload' | 'provider_generated' | 'imported' | 'captured' | 'rendered'
   mimeType: string
   sizeBytes: number
@@ -328,6 +328,9 @@ export type ApiProjectMediaAsset = {
   height?: number
   createdAt: string
   contentUrl: string
+  rightsStatus?: 'unverified' | 'active' | 'revoked'
+  useAllowed?: boolean
+  useDenialCode?: string
 }
 
 export type ApiAssetFeature = {
@@ -639,6 +642,7 @@ export type ApiCreativeIntakeBootstrap = {
   id: string
   source: string
   status: string
+  input_identity_hash?: string
   selected_route_id?: string
   request?: {
     objective?: string
@@ -690,6 +694,7 @@ export type ApiCreativeVersionSummary = {
 
 export type ApiCreativeTaskSummary = {
   id: string
+  display_name: string
   organization_id: string
   project_id: string
   intake_id: string
@@ -713,6 +718,19 @@ export type ApiCreativeTaskSummary = {
   version: number
   created_at: string
   updated_at: string
+}
+
+export type ApiStrategyBrandWorkflow = {
+  contract_version: 'creative-strategy-brand-workflow/v1'
+  mode: 'brief_review_required' | 'direction_ready' | 'direction_selection_required' | 'task_ready' | 'legacy_task_upgrade_required'
+  intake_id: string
+  input_identity_hash: string
+  brand_brief?: ApiBrandBriefReview
+  latest_direction_batch?: ApiCreativeDirectionBatch
+  confirmed_direction?: ApiCreativeDirection
+  task?: ApiCreativeTaskSummary
+  issues: Array<{ code: string; stage: string; path?: string; message: string; source: string }>
+  next_action: 'prepare_brief' | 'review_brief' | 'generate_directions' | 'wait_for_directions' | 'retry_directions' | 'select_direction' | 'create_task' | 'open_task' | 'review_legacy_task'
 }
 
 export type ApiCreateManualImageTextInput = {
@@ -1173,8 +1191,10 @@ export type ApiBrandFilmQualityRun = {
 export type ApiBrandFilmWorkspace = {
   task: {
     id: string
+    display_name: string
     status: string
     performance_mode: 'brand_video'
+    version: number
     updated_at: string
   }
   intake: {
@@ -1547,12 +1567,21 @@ export type ApiShortDramaV2Workspace = {
     last_frame_asset_id: string
   }
   latest_video_attempt_id?: string
+  video_error?: { code: string; message: string; retryable: boolean }
   raw_output_asset?: ApiShortDramaV2ProjectAssetRef
   output_asset?: ApiShortDramaV2ProjectAssetRef
 }
 
 export type ApiShortDramaV2TaskDetail = {
-  task: { id: string; performance_mode: 'short_drama_preroll'; status: string }
+  task: {
+    id: string
+    display_name: string
+    performance_mode: 'short_drama_preroll'
+    status: string
+    version: number
+    created_at: string
+    updated_at: string
+  }
   video_draft: { revision: number; short_drama_preroll_v2: ApiShortDramaV2Workspace }
 }
 
@@ -3982,6 +4011,28 @@ function prepareBrandBriefReview(projectId: string, intakeId: string) {
   )
 }
 
+function getStrategyBrandWorkflow(projectId: string, intakeId: string) {
+  return creativeRequest<ApiStrategyBrandWorkflow>(
+    `/projects/${encodeURIComponent(projectId)}/creative-intakes/${encodeURIComponent(intakeId)}/brand-workflow`,
+  )
+}
+
+function prepareStrategyBrandWorkflow(projectId: string, intake: ApiCreativeIntakeBootstrap) {
+  const selectedRouteId = intake.selected_route_id || intake.request?.selected_route_id || ''
+  const inputIdentityHash = intake.input_identity_hash || ''
+  if (!selectedRouteId || !inputIdentityHash) throw new Error('品牌策略交接缺少冻结 Route 或输入身份。')
+  return creativeRequest<ApiStrategyBrandWorkflow>(
+    `/projects/${encodeURIComponent(projectId)}/creative-intakes/${encodeURIComponent(intake.id)}/brand-workflow:prepare`,
+    'POST',
+    {
+      expected_input_identity_hash: inputIdentityHash,
+      selected_route_id: selectedRouteId,
+      accept_strategy_projection: true,
+    },
+    { 'Idempotency-Key': `strategy-brand-prepare-${inputIdentityHash}` },
+  )
+}
+
 function updateBrandBriefReview(projectId: string, intakeId: string, review: ApiBrandBriefReview) {
   return creativeRequest<ApiBrandBriefReview>(
     `/projects/${encodeURIComponent(projectId)}/creative-intakes/${encodeURIComponent(intakeId)}/brand-brief`,
@@ -4001,6 +4052,26 @@ function confirmBrandBriefReview(projectId: string, intakeId: string, expectedRe
 function listCreativeTasks(projectId: string, limit = 100) {
   return creativeRequest<{ items: ApiCreativeTaskSummary[] }>(
     `/projects/${encodeURIComponent(projectId)}/creative-tasks?limit=${limit}`,
+  )
+}
+
+export type ApiExtractedDocumentMedia = {
+  filename: string
+  mime_type: 'image/png' | 'image/jpeg'
+  page_number: number
+  page_text?: string
+  width: number
+  height: number
+  size_bytes: number
+  sha256: string
+  content: string
+}
+
+function renameCreativeTask(projectId: string, taskId: string, expectedVersion: number, displayName: string) {
+  return creativeRequest<ApiCreativeTaskSummary>(
+    `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(taskId)}/metadata`,
+    'PATCH',
+    { expected_version: expectedVersion, display_name: displayName },
   )
 }
 
@@ -4045,7 +4116,14 @@ function getKnowledgeDocument(projectId: string, documentId: string) {
   )
 }
 
-function createManualBrandFilmIntake(projectId: string, document: ApiKnowledgeDocument, durationSeconds = 15) {
+function extractKnowledgeDocumentMedia(projectId: string, documentId: string) {
+  return platformRequest<{ items: ApiExtractedDocumentMedia[] }>(
+    `/projects/${encodeURIComponent(projectId)}/knowledge/documents/${encodeURIComponent(documentId)}/media:extract`,
+    'POST',
+  )
+}
+
+function createManualBrandFilmIntake(projectId: string, document: ApiKnowledgeDocument, durationSeconds = 15, assetCandidates: ApiBrandBriefAssetCandidate[] = []) {
   const filename = document.filename || document.title || '品牌 Brief.pdf'
   const productName = filename.replace(/\.(pdf|docx|md)$/i, '').trim() || '未命名品牌项目'
   const briefText = document.extracted_text?.trim() || ''
@@ -4076,7 +4154,7 @@ function createManualBrandFilmIntake(projectId: string, document: ApiKnowledgeDo
         reason: '用户上传 PDF Brief 后创建的品牌广告制作路线',
         target_duration_seconds: durationSeconds,
         aspect_ratio: '9:16',
-        source_asset_refs: [],
+        source_asset_refs: assetCandidates.flatMap(candidate => candidate.asset_ref ? [candidate.asset_ref] : []),
         evidence_refs: [`knowledge://documents/${document.id}`],
         requires_human_confirmation: true,
       }],
@@ -4088,6 +4166,7 @@ function createManualBrandFilmIntake(projectId: string, document: ApiKnowledgeDo
         brief_name: filename,
         brief_text: briefText,
         product_name: productName,
+        asset_candidates: assetCandidates,
       },
     },
     { 'Idempotency-Key': `manual-brand-film-${document.id}-${durationSeconds}` },
@@ -4384,7 +4463,7 @@ async function createManualShortDramaPrerollV2Workspace(
         video_purpose: 'performance',
         channels: ['douyin'],
         reason: '用户在短剧前贴工作区选择项目视频并确认生成',
-        target_duration_seconds: 6,
+        target_duration_seconds: 10,
         aspect_ratio: '9:16',
         resolution: '720p',
         source_asset_refs: [sourceVideo],
@@ -5903,6 +5982,7 @@ export const api = {
   getTaskStrategyCreativeIntake,
   getCreativeTaskHandoffDetail,
   listCreativeTasks,
+  renameCreativeTask,
   listCreativeVersions,
   getBrandFilmWorkspace,
   initializeStrategyBrandFilmWorkspace,
@@ -5910,6 +5990,7 @@ export const api = {
   listCreativeIntakes,
   uploadKnowledgeDocument,
   getKnowledgeDocument,
+  extractKnowledgeDocumentMedia,
   createManualBrandFilmIntake,
   ensureBrandFilmFixtureWorkspace,
   analyzeBrandFilmBrief,
@@ -5942,6 +6023,8 @@ export const api = {
   getImageTextWorkspace,
   getCreativeIntake,
   prepareBrandBriefReview,
+  getStrategyBrandWorkflow,
+  prepareStrategyBrandWorkflow,
   updateBrandBriefReview,
   confirmBrandBriefReview,
   createManualImageTextIntake,

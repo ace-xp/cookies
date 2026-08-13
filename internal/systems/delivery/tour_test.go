@@ -175,7 +175,7 @@ func (r *tourMemoryRepository) ResetTourRun(_ context.Context, organizationID co
 func TestDeliveryTourPrepareReplayOwnershipAndIsolatedReset(t *testing.T) {
 	ctx := context.Background()
 	service, actor, repository := newTourTestService()
-	sentinel, err := service.CreatePlan(ctx, actor, "project_a", CreatePlanRequest{PlanDraft: goldenDraft()})
+	sentinel, err := service.CreatePlan(ctx, actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestDeliveryTourPrepareReplayOwnershipAndIsolatedReset(t *testing.T) {
 	if replay || run.Status != TourRunPrepared || run.OwnerID != actor.Principal.ID || run.Source != SourceMock {
 		t.Fatalf("unexpected prepared run: replay=%t run=%#v", replay, run)
 	}
-	if len(run.Cases) != 7 || len(run.Steps) != 9 || run.CurrentStep != "first_approval" {
+	if len(run.Cases) != 7 || len(run.Steps) != 8 || run.CurrentStep != "first_approval" {
 		t.Fatalf("tour contract is incomplete: cases=%d steps=%d current=%q", len(run.Cases), len(run.Steps), run.CurrentStep)
 	}
 	if !run.Steps[0].Complete || !strings.Contains(run.Steps[0].Explanation, "准备后此步默认完成") || !strings.Contains(strings.Join(run.Steps[0].Evidence, " "), "run="+run.ID) {

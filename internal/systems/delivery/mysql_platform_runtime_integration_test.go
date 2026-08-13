@@ -1,11 +1,13 @@
 package delivery
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,11 +154,24 @@ func TestMySQLPlatformRuntimeRoundTripAndLegacyUpgradeCompatibility(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	var legacyBytesBefore []byte
+	var legacyHashBefore string
+	if err = db.QueryRowContext(ctx, `SELECT config_json,canonical_hash FROM delivery_plan_versions WHERE organization_id=? AND project_id=? AND plan_id=? AND version_number=1`, organizationID, projectID, legacyPlanID).Scan(&legacyBytesBefore, &legacyHashBefore); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = BackfillPlanCanonicalHashes(ctx, db); err != nil {
 		t.Fatalf("first standard backfill: %v", err)
 	}
 	if updated, err := BackfillPlanCanonicalHashes(ctx, db); err != nil || updated != 0 {
 		t.Fatalf("second standard backfill updated=%d err=%v", updated, err)
+	}
+	var legacyBytesAfter []byte
+	var legacyHashAfter string
+	if err = db.QueryRowContext(ctx, `SELECT config_json,canonical_hash FROM delivery_plan_versions WHERE organization_id=? AND project_id=? AND plan_id=? AND version_number=1`, organizationID, projectID, legacyPlanID).Scan(&legacyBytesAfter, &legacyHashAfter); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(legacyBytesBefore, legacyBytesAfter) || legacyHashBefore != legacyHashAfter {
+		t.Fatal("legacy config_json bytes or canonical hash changed during idempotent backfill")
 	}
 	legacyLoaded, err := repository.GetPlan(ctx, organizationID, projectID, legacyPlanID)
 	if err != nil {
@@ -170,7 +185,7 @@ func TestMySQLPlatformRuntimeRoundTripAndLegacyUpgradeCompatibility(t *testing.T
 	reusedIntentVersion.CreatedAt = service.now().Add(time.Minute)
 	configurationV2 := cloneJSONPointer(loaded.CurrentVersion.PlatformConfiguration)
 	configurationV2.VersionNumber = 2
-	configurationV2.Payload.OceanEngine.Project.BudgetAndBidding.DailyBudgetMinor--
+	configurationV2.Payload.OceanEngine.Project.BudgetAndBidding.DailyBudgetMinor++
 	configurationV2.CanonicalHash = ""
 	configurationV2Value, err := FinalizePlatformConfiguration(*configurationV2)
 	if err != nil {
@@ -181,6 +196,97 @@ func TestMySQLPlatformRuntimeRoundTripAndLegacyUpgradeCompatibility(t *testing.T
 	if _, err = repository.UpdatePlan(ctx, organizationID, projectID, plan.ID, 1, reusedIntentVersion); err != nil {
 		t.Fatalf("reuse immutable intent in a later platform configuration version: %v", err)
 	}
+	decisionPlan, err := repository.GetPlan(ctx, organizationID, projectID, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := BuildDeliveryDecision(DecisionEngineInput{
+		DecisionID: "decision-" + suffix, OrganizationID: organizationID, ProjectID: projectID, Plan: decisionPlan,
+		Simulation: OutcomeSimulationRun{ID: "simulation-" + suffix, PlanID: plan.ID, PlanVersion: decisionPlan.CurrentVersionNumber, InputHash: strings.Repeat("a", 64)},
+		Baseline:   DeliveryMetricSnapshot{ID: "baseline-" + suffix, RawMetrics: RawMetrics{SpendCents: 10000, Conversions: 10}},
+		Current:    DeliveryMetricSnapshot{ID: "current-" + suffix, RawMetrics: RawMetrics{SpendCents: 15000, Conversions: 10}},
+		Evidence:   []string{"simulation://metric/current-" + suffix}, CreatedBy: actor.Principal.ID, CreatedAt: service.now(),
+	})
+	if err != nil {
+		t.Fatalf("build decision: %v plan_version=%d configuration=%#v intent=%#v", err, decisionPlan.CurrentVersionNumber, decisionPlan.CurrentVersion.PlatformConfiguration, decisionPlan.CurrentVersion.DeliveryIntent)
+	}
+	decision, err = repository.CreateDecision(ctx, decision)
+	if err != nil {
+		t.Fatalf("persist decision: %v", err)
+	}
+	candidate := decision.Candidates[1]
+	workflow, err := CompileDeliveryWorkflow("workflow-"+suffix, decision, candidate, actor.Principal.ID, service.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := DecisionSelection{
+		ID: "selection-" + suffix, OrganizationID: organizationID, ProjectID: projectID, DecisionID: decision.ID, DecisionCanonicalHash: decision.CanonicalHash,
+		CandidateID: candidate.ID, Configuration: candidate.TargetConfiguration, Workflow: workflow,
+		FinalApprovalBinding: FinalApprovalBinding{Status: "ready_for_final_approval", Action: "remote_write", PlanCanonicalHash: decision.Inputs.PlanCanonicalHash, IntentCanonicalHash: decision.Inputs.IntentCanonicalHash, DecisionCanonicalHash: decision.CanonicalHash, ConfigurationCanonicalHash: candidate.TargetConfiguration.CanonicalHash, WorkflowCanonicalHash: workflow.CanonicalHash},
+		CreatedBy:            actor.Principal.ID, CreatedAt: service.now(),
+	}
+	selection, replay, err := repository.CreateDecisionSelection(ctx, selection, "selection-key-"+suffix, strings.Repeat("b", 64))
+	if err != nil || replay || selection.Workflow.RemoteWriteEnabled || selection.Workflow.Status != "ready_for_final_approval" {
+		t.Fatalf("persist selection replay=%t err=%v value=%#v", replay, err, selection)
+	}
+	_, replay, err = repository.CreateDecisionSelection(ctx, selection, "selection-key-"+suffix, strings.Repeat("b", 64))
+	if err != nil || !replay {
+		t.Fatalf("replay selection replay=%t err=%v", replay, err)
+	}
+	observatoryRequest := validObservatoryRequest(selection, ObservatoryModeObserveExisting)
+	observatoryRequest.Fixture.FixtureID = "mysql-fixture-" + suffix
+	observatoryRun, err := BuildObservatoryRun(selection, observatoryRequest, actor.Principal.ID, service.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observatoryRun, replay, err = repository.CreateObservatoryRun(ctx, observatoryRun)
+	if err != nil || replay || observatoryRun.RemoteWriteEnabled {
+		t.Fatalf("persist observatory replay=%t err=%v value=%#v", replay, err, observatoryRun)
+	}
+	_, replay, err = repository.CreateObservatoryRun(ctx, observatoryRun)
+	if err != nil || !replay {
+		t.Fatalf("replay observatory replay=%t err=%v", replay, err)
+	}
+	insertProbe := func(runID, inputHash string, remoteWriteEnabled bool, payload []byte) error {
+		_, insertErr := db.ExecContext(ctx, `INSERT INTO delivery_observatory_runs (
+			organization_id,project_id,run_id,selection_id,decision_id,decision_canonical_hash,configuration_canonical_hash,workflow_id,workflow_canonical_hash,schema_version,runner_version,source,mode,data_state,status,outcome,remote_write_enabled,input_hash,canonical_hash,run_json,created_by,created_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, organizationID, projectID, runID, selection.ID, decision.ID, decision.CanonicalHash, selection.Configuration.CanonicalHash, selection.Workflow.ID, selection.Workflow.CanonicalHash, ObservatoryRunSchemaV1, ObservatoryRunnerV1, ObservatorySourceReplay, ObservatoryModeObserveExisting, ObservatoryDataReady, "completed", "in_sync", remoteWriteEnabled, inputHash, strings.Repeat("d", 64), payload, actor.Principal.ID, service.now())
+		return insertErr
+	}
+	observatoryJSON, err := json.Marshal(observatoryRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = insertProbe("observatory-enabled-"+suffix, strings.Repeat("e", 64), true, observatoryJSON); err == nil {
+		t.Fatal("database accepted remote_write_enabled=true")
+	}
+	remoteActionRun := observatoryRun
+	remoteActionRun.ID = "observatory-action-" + suffix
+	remoteActionRun.Steps = append([]ObservatoryStepObservation(nil), observatoryRun.Steps...)
+	remoteActionRun.Steps[0].ExecutedAction = WorkflowRiskRemoteWrite
+	remoteActionJSON, err := json.Marshal(remoteActionRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = insertProbe(remoteActionRun.ID, strings.Repeat("f", 64), false, remoteActionJSON); err == nil {
+		t.Fatal("database accepted an executable remote_write step in run_json")
+	}
+	feedback := DeliveryObservatoryFeedback{SchemaVersion: ObservatoryFeedbackSchemaV1, ID: "feedback-" + suffix, OrganizationID: organizationID, ProjectID: projectID, RunID: observatoryRun.ID, RunCanonicalHash: observatoryRun.CanonicalHash, RunOutcome: observatoryRun.Outcome, Disposition: ObservatoryFeedbackAccepted, Reason: "integration evidence reviewed", DiffKeys: []string{}, CreatedBy: actor.Principal.ID, CreatedAt: service.now()}
+	feedback.CanonicalHash, err = feedback.ComputeCanonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	feedback, replay, err = repository.CreateObservatoryFeedback(ctx, feedback, "feedback-key-"+suffix, strings.Repeat("c", 64))
+	if err != nil || replay || feedback.RunCanonicalHash != observatoryRun.CanonicalHash {
+		t.Fatalf("persist feedback replay=%t err=%v value=%#v", replay, err, feedback)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM delivery_observatory_feedback WHERE organization_id=? AND project_id=? AND run_id=?`, organizationID, projectID, observatoryRun.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM delivery_observatory_runs WHERE organization_id=? AND project_id=? AND run_id=?`, organizationID, projectID, observatoryRun.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM delivery_decision_selections WHERE organization_id=? AND project_id=? AND decision_id=?`, organizationID, projectID, decision.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM delivery_compiled_workflows WHERE organization_id=? AND project_id=? AND decision_id=?`, organizationID, projectID, decision.ID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM delivery_decisions WHERE organization_id=? AND project_id=? AND decision_id=?`, organizationID, projectID, decision.ID)
+	})
 }
 
 func jsonMarshal(value any) ([]byte, error) { return json.Marshal(value) }

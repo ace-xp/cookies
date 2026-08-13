@@ -228,7 +228,6 @@ func (r MySQLRepository) ResetTourRun(ctx context.Context, organizationID contra
 		column string
 		ids    []string
 	}{
-		{"delivery_manual_action_packages", "change_set_id", changeSets},
 		{"delivery_recommendations", "plan_id", plans},
 		{"delivery_alerts", "plan_id", plans},
 		{"delivery_metric_snapshots", "plan_id", plans},

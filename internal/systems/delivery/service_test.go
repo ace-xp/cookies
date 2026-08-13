@@ -11,81 +11,9 @@ import (
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
-func TestPlanLifecyclePersistsVersionsAndRejectsStaleUpdate(t *testing.T) {
+func TestPlanIsolation(t *testing.T) {
 	service, actor := newTestService()
-	draft := goldenDraft()
-
-	created, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: draft})
-	if err != nil {
-		t.Fatalf("create plan: %v", err)
-	}
-	if created.Source != SourceMock || created.Scenario != ScenarioGoldenPath || created.Version != 1 {
-		t.Fatalf("unexpected created plan: %#v", created)
-	}
-
-	draft.Budget.TotalMinor = 880_000
-	updated, err := service.UpdatePlan(context.Background(), actor, "project_a", created.ID, UpdatePlanRequest{
-		ExpectedVersion: 1, PlanDraft: draft,
-	})
-	if err != nil {
-		t.Fatalf("update plan: %v", err)
-	}
-	if updated.Version != 2 || len(updated.Versions) != 2 || updated.Versions[0].Budget.TotalMinor == updated.Versions[1].Budget.TotalMinor {
-		t.Fatalf("immutable version history was not retained: %#v", updated)
-	}
-	_, err = service.UpdatePlan(context.Background(), actor, "project_a", created.ID, UpdatePlanRequest{
-		ExpectedVersion: 1, PlanDraft: draft,
-	})
-	if !errors.Is(err, ErrPlanVersionConflict) {
-		t.Fatalf("expected plan version conflict, got %v", err)
-	}
-}
-
-func TestPlanIsolationAndAuthoritativePreflightScenarios(t *testing.T) {
-	service, actor := newTestService()
-	cases := []struct {
-		name           string
-		mutate         func(*PlanDraft)
-		scenario       Scenario
-		blocked        bool
-		failedCode     string
-		failedSeverity CheckSeverity
-	}{
-		{name: "golden", mutate: func(*PlanDraft) {}, scenario: ScenarioGoldenPath},
-		{name: "budget zero", mutate: func(value *PlanDraft) { value.Budget.TotalMinor = 0 }, scenario: ScenarioBudgetZero, blocked: true, failedCode: "budget_positive", failedSeverity: CheckSeverityError},
-		{name: "creative warning", mutate: func(value *PlanDraft) { value.CreativeReferences[0].Confirmed = false }, scenario: ScenarioCreativeUnconfirmed, failedCode: "creative_confirmed", failedSeverity: CheckSeverityWarning},
-		{name: "tracking missing", mutate: func(value *PlanDraft) { value.Tracking.PixelID = "" }, scenario: ScenarioTrackingMissing, blocked: true, failedCode: "tracking_complete", failedSeverity: CheckSeverityError},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			draft := goldenDraft()
-			testCase.mutate(&draft)
-			plan, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: draft})
-			if err != nil {
-				t.Fatalf("create plan: %v", err)
-			}
-			result, err := service.RunPlanPreflight(context.Background(), actor, "project_a", plan.ID)
-			if err != nil {
-				t.Fatalf("run preflight: %v", err)
-			}
-			if result.Source != SourceMock || result.Scenario != testCase.scenario || result.Blocked != testCase.blocked {
-				t.Fatalf("unexpected result: %#v", result)
-			}
-			if testCase.failedCode != "" {
-				found := false
-				for _, check := range result.Checks {
-					if check.Code == testCase.failedCode && !check.Passed && check.Severity == testCase.failedSeverity && check.Repair != nil {
-						found = true
-					}
-				}
-				if !found {
-					t.Fatalf("missing failed check %s: %#v", testCase.failedCode, result.Checks)
-				}
-			}
-		})
-	}
-
-	plan, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: goldenDraft()})
+	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +24,7 @@ func TestPlanIsolationAndAuthoritativePreflightScenarios(t *testing.T) {
 
 func TestChangeSetFreezesVersionAndRejectsStalePlan(t *testing.T) {
 	service, actor := newTestService()
-	plan, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: goldenDraft()})
+	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,17 +32,15 @@ func TestChangeSetFreezesVersionAndRejectsStalePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	draft := goldenDraft()
-	draft.Budget.TotalMinor++
-	if _, err := service.UpdatePlan(context.Background(), actor, "project_a", plan.ID, UpdatePlanRequest{ExpectedVersion: 1, PlanDraft: draft}); err != nil {
+	if _, err := service.UpdatePlan(context.Background(), actor, "project_a", plan.ID, testPlatformUpdateRequest(plan, 1, 200001)); err != nil {
 		t.Fatal(err)
 	}
 	frozen, err := service.GetChangeSet(context.Background(), actor, "project_a", changeSet.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frozen.PlanName != plan.CurrentVersion.Name {
-		t.Fatalf("ChangeSet plan name = %q, want immutable V1 name %q", frozen.PlanName, plan.CurrentVersion.Name)
+	if frozen.PlanName != versionName(plan.CurrentVersion) {
+		t.Fatalf("ChangeSet plan name = %q, want immutable V1 name %q", frozen.PlanName, versionName(plan.CurrentVersion))
 	}
 	if _, err := service.Preflight(context.Background(), actor, "project_a", changeSet.ID, changeSet.Version); !errors.Is(err, ErrStalePlanVersion) {
 		t.Fatalf("expected stale frozen version rejection, got %v", err)
@@ -123,7 +49,7 @@ func TestChangeSetFreezesVersionAndRejectsStalePlan(t *testing.T) {
 
 func TestChangeSetGoldenFlowAndMetricProvenance(t *testing.T) {
 	service, actor := newTestService()
-	plan, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: goldenDraft()})
+	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +57,8 @@ func TestChangeSetGoldenFlowAndMetricProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changeSet.PlanName != plan.CurrentVersion.Name {
-		t.Fatalf("ChangeSet plan name = %q, want %q", changeSet.PlanName, plan.CurrentVersion.Name)
+	if changeSet.PlanName != versionName(plan.CurrentVersion) {
+		t.Fatalf("ChangeSet plan name = %q, want %q", changeSet.PlanName, versionName(plan.CurrentVersion))
 	}
 	changeSet, err = service.Preflight(context.Background(), actor, "project_a", changeSet.ID, changeSet.Version)
 	if err != nil || changeSet.Status != ChangeSetPreflightPassed {
@@ -158,9 +84,41 @@ func TestChangeSetGoldenFlowAndMetricProvenance(t *testing.T) {
 	}
 }
 
+func TestDecisionWorkflowServiceDiagnosesThenCompilesWithoutAuthority(t *testing.T) {
+	service, actor := newTestService()
+	ctx := context.Background()
+	plan, err := service.CreatePlan(ctx, actor, "project_a", testPlatformCreateRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := service.GenerateDecision(ctx, actor, "project_a", plan.ID, plan.CurrentVersionNumber)
+	if err != nil || blocked.Diagnostic.Code != "insufficient_data" || len(blocked.Candidates) != 0 {
+		t.Fatalf("blocked decision=%#v err=%v", blocked, err)
+	}
+	repository := service.Repository.(*memoryRepository)
+	repository.executions = append(repository.executions, ExecutionResult{ChangeSet: ChangeSet{PlanID: plan.ID}, Execution: Execution{ID: "execution-decision", OrganizationID: actor.OrganizationID, ProjectID: "project_a", Status: ExecutionSucceeded}})
+	repository.simulations = append(repository.simulations, OutcomeSimulationRun{ID: "simulation-decision", OrganizationID: actor.OrganizationID, ProjectID: "project_a", ExecutionID: "execution-decision", PlanID: plan.ID, PlanVersion: plan.CurrentVersionNumber, InputHash: strings.Repeat("a", 64)})
+	repository.metrics = append(repository.metrics,
+		DeliveryMetricSnapshot{ID: "decision-baseline", OrganizationID: actor.OrganizationID, ProjectID: "project_a", ExecutionID: "execution-decision", SimulationRunID: "simulation-decision", WindowSequence: 1, RawMetrics: RawMetrics{SpendCents: 10000, Conversions: 10}},
+		DeliveryMetricSnapshot{ID: "decision-current", OrganizationID: actor.OrganizationID, ProjectID: "project_a", ExecutionID: "execution-decision", SimulationRunID: "simulation-decision", WindowSequence: 2, RawMetrics: RawMetrics{SpendCents: 15000, Conversions: 10}},
+	)
+	decision, err := service.GenerateDecision(ctx, actor, "project_a", plan.ID, plan.CurrentVersionNumber)
+	if err != nil || decision.Diagnostic.Code != "ready" || len(decision.Candidates) != 3 {
+		t.Fatalf("ready decision=%#v err=%v", decision, err)
+	}
+	selection, replay, err := service.SelectDecision(ctx, actor, "project_a", decision.ID, "selection-key", SelectDecisionRequest{CandidateID: decision.RecommendedCandidateID, ExpectedVersion: plan.CurrentVersionNumber})
+	if err != nil || replay || selection.Workflow.RemoteWriteEnabled || selection.Workflow.Status != "ready_for_final_approval" {
+		t.Fatalf("selection=%#v replay=%t err=%v", selection, replay, err)
+	}
+	replayed, replay, err := service.SelectDecision(ctx, actor, "project_a", decision.ID, "selection-key", SelectDecisionRequest{CandidateID: decision.RecommendedCandidateID, ExpectedVersion: plan.CurrentVersionNumber})
+	if err != nil || !replay || replayed.ID != selection.ID {
+		t.Fatalf("selection replay=%#v replay=%t err=%v", replayed, replay, err)
+	}
+}
+
 func TestAlertsAreDeterministicAndUseCAS(t *testing.T) {
 	service, actor := newTestService()
-	plan, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: goldenDraft()})
+	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,16 +288,11 @@ func TestPlanVersionChangePermanentlyInvalidatesApprovalEvenAfterContentReverts(
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := goldenDraft()
-	changed.Budget.TotalMinor++
-	if _, err := service.UpdatePlan(context.Background(), actor, "project_a", plan.ID, UpdatePlanRequest{
-		ExpectedVersion: 1, PlanDraft: changed,
-	}); err != nil {
+	updated, err := service.UpdatePlan(context.Background(), actor, "project_a", plan.ID, testPlatformUpdateRequest(plan, 1, 200001))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.UpdatePlan(context.Background(), actor, "project_a", plan.ID, UpdatePlanRequest{
-		ExpectedVersion: 2, PlanDraft: goldenDraft(),
-	}); err != nil {
+	if _, err := service.UpdatePlan(context.Background(), actor, "project_a", plan.ID, testPlatformUpdateRequest(updated, 2, 200000)); err != nil {
 		t.Fatal(err)
 	}
 	stale, err := service.GetChangeSet(context.Background(), actor, "project_a", changeSet.ID)
@@ -415,7 +368,7 @@ func TestExecuteRejectsApprovalScopeAndBudgetExceeded(t *testing.T) {
 
 func TestApprovalRequiresTrustedScopeAndProjectAndCannotBeOverwritten(t *testing.T) {
 	service, actor, _ := newTestServiceClock()
-	plan, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: goldenDraft()})
+	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +409,7 @@ func TestApprovalRequiresTrustedScopeAndProjectAndCannotBeOverwritten(t *testing
 	}
 	if approved.Approval == nil ||
 		approved.Approval.Source != SourceMock ||
-		approved.Approval.Scenario != ScenarioGoldenPath ||
+		approved.Approval.Scenario != ScenarioPlatformConfiguration ||
 		approved.Approval.ApprovedBy != actor.Principal.ID ||
 		approved.Approval.Scope != ApprovalScopeExecuteMock {
 		t.Fatalf("unexpected approval projection: %#v", approved.Approval)
@@ -472,7 +425,7 @@ func TestApprovalRequiresTrustedScopeAndProjectAndCannotBeOverwritten(t *testing
 
 func TestRejectChangeSetPersistsReasonAndPreventsApproval(t *testing.T) {
 	service, actor, _ := newTestServiceClock()
-	plan, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: goldenDraft()})
+	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +468,7 @@ func TestRejectChangeSetPersistsReasonAndPreventsApproval(t *testing.T) {
 
 func TestExecuteRequiresAuthoritativeApprovalRecord(t *testing.T) {
 	service, actor, _ := newTestServiceClock()
-	plan, err := service.CreatePlan(context.Background(), actor, "project_a", CreatePlanRequest{PlanDraft: goldenDraft()})
+	plan, err := service.CreatePlan(context.Background(), actor, "project_a", testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +715,7 @@ func approveGoldenChangeSet(t *testing.T, service *Service, actor contract.Actor
 
 func approveGoldenChangeSetForProject(t *testing.T, service *Service, actor contract.ActorContext, projectID contract.ProjectID) ChangeSet {
 	t.Helper()
-	plan, err := service.CreatePlan(context.Background(), actor, projectID, CreatePlanRequest{PlanDraft: goldenDraft()})
+	plan, err := service.CreatePlan(context.Background(), actor, projectID, testPlatformCreateRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -796,6 +749,24 @@ func goldenDraft() PlanDraft {
 	}
 }
 
+func testPlatformCreateRequest() CreatePlanRequest {
+	return tourPlanRequest("test-runtime", string(TourCaseGoldenPath), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+}
+
+func testPlatformUpdateRequest(plan DeliveryPlan, expectedVersion int, dailyBudgetMinor int64) UpdatePlanRequest {
+	intent := cloneJSONPointer(plan.CurrentVersion.DeliveryIntent)
+	intent.VersionNumber = expectedVersion + 1
+	intent.CanonicalHash = ""
+	finalIntent, _ := FinalizeDeliveryIntent(*intent)
+	configuration := cloneJSONPointer(plan.CurrentVersion.PlatformConfiguration)
+	configuration.VersionNumber = expectedVersion + 1
+	configuration.Intent = IntentBinding{SchemaVersion: finalIntent.SchemaVersion, IntentID: finalIntent.IntentID, VersionNumber: finalIntent.VersionNumber, CanonicalHash: finalIntent.CanonicalHash}
+	configuration.Payload.OceanEngine.Project.BudgetAndBidding.DailyBudgetMinor = dailyBudgetMinor
+	configuration.CanonicalHash = ""
+	finalConfiguration, _ := FinalizePlatformConfiguration(*configuration)
+	return UpdatePlanRequest{ExpectedVersion: expectedVersion, Intent: &finalIntent, PlatformConfiguration: &finalConfiguration}
+}
+
 func newTestService() (Service, contract.ActorContext) {
 	service, actor, _ := newTestServiceClock()
 	return service, actor
@@ -815,7 +786,6 @@ func newTestServiceClock() (Service, contract.ActorContext, func(time.Time)) {
 	service := Service{
 		Repository: repository,
 		Projects:   testProjects{},
-		Packages:   testPackages{},
 		NewID: func(prefix string) (string, error) {
 			counter++
 			return fmt.Sprintf("%s_%d", prefix, counter), nil
@@ -832,12 +802,6 @@ func (testProjects) RequireActiveContext(_ context.Context, actor contract.Actor
 		return contract.ProjectContext{}, ErrNotFound
 	}
 	return contract.ProjectContext{OrganizationID: actor.OrganizationID, ProjectID: projectID}, nil
-}
-
-type testPackages struct{}
-
-func (testPackages) ReadCreativePackage(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, id string) (CreativePackageSnapshot, error) {
-	return CreativePackageSnapshot{ID: id, CreativeVersionID: "creative_v1", ContentHash: "sha256:mock"}, nil
 }
 
 type observingAdapter struct {
@@ -873,20 +837,144 @@ func (a *observingAdapter) ExecuteStep(ctx context.Context, request PlatformStep
 }
 
 type memoryRepository struct {
-	plans       map[string]DeliveryPlan
-	changeSets  map[string]ChangeSet
-	approvals   map[string][]DeliveryApproval
-	executions  []ExecutionResult
-	metrics     []DeliveryMetricSnapshot
-	simulations []OutcomeSimulationRun
-	alerts      map[string]DeliveryAlert
+	plans                       map[string]DeliveryPlan
+	changeSets                  map[string]ChangeSet
+	approvals                   map[string][]DeliveryApproval
+	executions                  []ExecutionResult
+	metrics                     []DeliveryMetricSnapshot
+	simulations                 []OutcomeSimulationRun
+	alerts                      map[string]DeliveryAlert
+	decisions                   map[string]DeliveryDecision
+	selections                  map[string]DecisionSelection
+	selectionRequests           map[string]string
+	observatoryRuns             map[string]DeliveryObservatoryRun
+	observatoryFeedback         map[string]DeliveryObservatoryFeedback
+	observatoryFeedbackRequests map[string]string
 }
 
 func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{
 		plans: map[string]DeliveryPlan{}, changeSets: map[string]ChangeSet{},
 		approvals: map[string][]DeliveryApproval{},
+		decisions: map[string]DeliveryDecision{}, selections: map[string]DecisionSelection{}, selectionRequests: map[string]string{},
+		observatoryRuns: map[string]DeliveryObservatoryRun{}, observatoryFeedback: map[string]DeliveryObservatoryFeedback{}, observatoryFeedbackRequests: map[string]string{},
 	}
+}
+
+func (r *memoryRepository) CreateDecision(_ context.Context, value DeliveryDecision) (DeliveryDecision, error) {
+	for _, existing := range r.decisions {
+		if existing.OrganizationID == value.OrganizationID && existing.ProjectID == value.ProjectID && existing.CanonicalHash == value.CanonicalHash {
+			return existing, nil
+		}
+	}
+	r.decisions[repositoryKey(value.OrganizationID, value.ProjectID, value.ID)] = value
+	return value, nil
+}
+
+func (r *memoryRepository) ListDecisions(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, _ int) ([]DeliveryDecision, error) {
+	values := []DeliveryDecision{}
+	for _, value := range r.decisions {
+		if value.OrganizationID == organizationID && value.ProjectID == projectID {
+			values = append(values, value)
+		}
+	}
+	return values, nil
+}
+
+func (r *memoryRepository) GetDecision(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, id string) (DeliveryDecision, error) {
+	value, ok := r.decisions[repositoryKey(organizationID, projectID, id)]
+	if !ok {
+		return DeliveryDecision{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (r *memoryRepository) CreateDecisionSelection(_ context.Context, value DecisionSelection, key, requestHash string) (DecisionSelection, bool, error) {
+	scope := repositoryKey(value.OrganizationID, value.ProjectID, key)
+	if existingHash, ok := r.selectionRequests[scope]; ok {
+		if existingHash != requestHash {
+			return DecisionSelection{}, false, ErrIdempotencyConflict
+		}
+		for _, existing := range r.selections {
+			if existing.OrganizationID == value.OrganizationID && existing.ProjectID == value.ProjectID && existing.DecisionID == value.DecisionID {
+				return existing, true, nil
+			}
+		}
+	}
+	for _, existing := range r.selections {
+		if existing.OrganizationID == value.OrganizationID && existing.ProjectID == value.ProjectID && existing.DecisionID == value.DecisionID {
+			return DecisionSelection{}, false, ErrIdempotencyConflict
+		}
+	}
+	r.selectionRequests[scope] = requestHash
+	r.selections[repositoryKey(value.OrganizationID, value.ProjectID, value.ID)] = value
+	return value, false, nil
+}
+
+func (r *memoryRepository) GetDecisionSelection(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, id string) (DecisionSelection, error) {
+	value, ok := r.selections[repositoryKey(organizationID, projectID, id)]
+	if !ok {
+		return DecisionSelection{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (r *memoryRepository) CreateObservatoryRun(_ context.Context, value DeliveryObservatoryRun) (DeliveryObservatoryRun, bool, error) {
+	for _, existing := range r.observatoryRuns {
+		if existing.OrganizationID == value.OrganizationID && existing.ProjectID == value.ProjectID && existing.InputHash == value.InputHash {
+			if existing.CanonicalHash != value.CanonicalHash {
+				return DeliveryObservatoryRun{}, false, ErrIdempotencyConflict
+			}
+			return existing, true, nil
+		}
+	}
+	r.observatoryRuns[repositoryKey(value.OrganizationID, value.ProjectID, value.ID)] = value
+	return value, false, nil
+}
+
+func (r *memoryRepository) ListObservatoryRuns(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, _ int) ([]DeliveryObservatoryRun, error) {
+	values := []DeliveryObservatoryRun{}
+	for _, value := range r.observatoryRuns {
+		if value.OrganizationID == organizationID && value.ProjectID == projectID {
+			values = append(values, value)
+		}
+	}
+	return values, nil
+}
+
+func (r *memoryRepository) GetObservatoryRun(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, id string) (DeliveryObservatoryRun, error) {
+	value, ok := r.observatoryRuns[repositoryKey(organizationID, projectID, id)]
+	if !ok {
+		return DeliveryObservatoryRun{}, ErrNotFound
+	}
+	return value, nil
+}
+
+func (r *memoryRepository) CreateObservatoryFeedback(_ context.Context, value DeliveryObservatoryFeedback, key, requestHash string) (DeliveryObservatoryFeedback, bool, error) {
+	scope := repositoryKey(value.OrganizationID, value.ProjectID, key)
+	if existingHash, ok := r.observatoryFeedbackRequests[scope]; ok {
+		if existingHash != requestHash {
+			return DeliveryObservatoryFeedback{}, false, ErrIdempotencyConflict
+		}
+		for _, existing := range r.observatoryFeedback {
+			if existing.OrganizationID == value.OrganizationID && existing.ProjectID == value.ProjectID && existing.ID == value.ID {
+				return existing, true, nil
+			}
+		}
+	}
+	r.observatoryFeedbackRequests[scope] = requestHash
+	r.observatoryFeedback[repositoryKey(value.OrganizationID, value.ProjectID, value.ID)] = value
+	return value, false, nil
+}
+
+func (r *memoryRepository) ListObservatoryFeedback(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, runID string, _ int) ([]DeliveryObservatoryFeedback, error) {
+	values := []DeliveryObservatoryFeedback{}
+	for _, value := range r.observatoryFeedback {
+		if value.OrganizationID == organizationID && value.ProjectID == projectID && value.RunID == runID {
+			values = append(values, value)
+		}
+	}
+	return values, nil
 }
 
 func repositoryKey(organizationID contract.OrganizationID, projectID contract.ProjectID, id string) string {

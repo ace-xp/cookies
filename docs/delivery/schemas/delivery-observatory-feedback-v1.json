@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "delivery-observatory-feedback/v1",
+  "title": "Delivery Observatory Feedback v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "organization_id", "project_id", "run_id", "run_canonical_hash", "run_outcome", "disposition", "reason", "diff_keys", "canonical_hash", "created_by", "created_at"],
+  "properties": {
+    "schema_version": { "const": "delivery-observatory-feedback/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "organization_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "run_canonical_hash": { "$ref": "#/$defs/hash" },
+    "run_outcome": { "enum": ["in_sync", "drift_detected", "local_form_prepared", "insufficient_data", "stale_data", "blocked_by_asset", "platform_pending", "runner_failure"] },
+    "disposition": { "enum": ["accepted", "modified", "rejected"] },
+    "reason": { "type": "string", "minLength": 1 },
+    "diff_keys": { "type": "array", "items": { "type": "string" } },
+    "final_configuration": { "type": "object" },
+    "final_configuration_canonical_hash": { "$ref": "#/$defs/hash" },
+    "canonical_hash": { "$ref": "#/$defs/hash" },
+    "created_by": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    { "if": { "properties": { "disposition": { "const": "modified" } } }, "then": { "properties": { "final_configuration": {}, "final_configuration_canonical_hash": {} }, "required": ["final_configuration", "final_configuration_canonical_hash"] } },
+    { "if": { "properties": { "disposition": { "enum": ["accepted", "rejected"] } } }, "then": { "not": { "anyOf": [{ "properties": { "final_configuration": {} }, "required": ["final_configuration"] }, { "properties": { "final_configuration_canonical_hash": {} }, "required": ["final_configuration_canonical_hash"] }] } } }
+  ],
+  "$defs": { "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+}

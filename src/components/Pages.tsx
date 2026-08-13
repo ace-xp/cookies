@@ -33,7 +33,7 @@ const ImageTextCreationPage = lazy(() => import('./SpecializedPages').then(modul
 const VideoCreationPage = lazy(() => import('./SpecializedPages').then(module => ({ default: module.VideoCreationPage })))
 const DeliveryMonitoringPage = lazy(() => import('./DeliveryMonitoringPage').then(module => ({ default: module.DeliveryMonitoringPage })))
 const DeliveryOptimizationPage = lazy(() => import('./DeliveryOptimizationPage').then(module => ({ default: module.DeliveryOptimizationPage })))
-const DeliveryThreeTierPage = lazy(() => import('./DeliveryThreeTierPage').then(module => ({ default: module.DeliveryThreeTierPage })))
+const DeliveryConfigurationPage = lazy(() => import('./DeliveryConfigurationPage').then(module => ({ default: module.DeliveryConfigurationPage })))
 const DeliveryMockEnvironmentBanner = lazy(() => import('./DeliveryTourPage').then(module => ({ default: module.DeliveryMockEnvironmentBanner })))
 const DeliveryTourContextBanner = lazy(() => import('./DeliveryTourPage').then(module => ({ default: module.DeliveryTourContextBanner })))
 const DeliveryTourPage = lazy(() => import('./DeliveryTourPage').then(module => ({ default: module.DeliveryTourPage })))
@@ -52,6 +52,9 @@ const TaskCreateDialog = lazy(() => import('./BusinessTaskPages').then(module =>
 
 const StrategyWorkspaceRoute = lazy(() => import('../features/strategy/workspace/StrategyWorkspaceRoute').then(module => ({
   default: module.StrategyWorkspaceRoute,
+})))
+const ProductionCenterPage = lazy(() => import('../features/production-center/ProductionCenterPage').then(module => ({
+  default: module.ProductionCenterPage,
 })))
 
 type OpenProject = (id: string, system?: SystemKey, navId?: string, objectId?: string, view?: string, contextId?: string, tourRunId?: string, tourCase?: string) => void
@@ -1582,7 +1585,20 @@ export function ModulePage({
         onTaskCreated={id => onOpenProject(currentProject.id, 'creative', 'image-text', undefined, activeView, id)}
         onBack={() => onOpenProject(currentProject.id, 'creative', 'image-text', undefined, activeView)}
       />
-    : system.key === 'creative' && item.id === 'video' ? <VideoCreationPage state={dataState} activeView={activeView} activeTaskId={contextId ?? objectId} onOpenTask={id => onOpenProject(currentProject.id, 'creative', 'tasks', id)} onOpenBrandTask={id => onOpenProject(currentProject.id, 'creative', 'video', undefined, '品牌广告', id)} onOpenEditTask={id => onOpenProject(currentProject.id, 'creative', 'video', undefined, '素材剪辑', id)}/>
+    : system.key === 'creative' && item.id === 'video' ? <VideoCreationPage state={dataState} activeView={activeView} activeTaskId={contextId ?? objectId} onOpenTask={id => onOpenProject(currentProject.id, 'creative', 'tasks', id)} onOpenBrandIntake={id => onOpenProject(currentProject.id, 'creative', 'video', undefined, '品牌广告', `intake:${id}`)} onOpenBrandTask={id => onOpenProject(currentProject.id, 'creative', 'video', undefined, '品牌广告', `task:${id}`)} onOpenEditTask={id => onOpenProject(currentProject.id, 'creative', 'video', undefined, '素材剪辑', id)}/>
+    : system.key === 'creative' && item.id === 'production' ? <Suspense fallback={<div className="pc-state" role="status">正在加载制作中心…</div>}>
+      <ProductionCenterPage
+        activeView={activeView}
+        objectId={objectId}
+        onOpenRun={ref => onOpenProject(currentProject.id, 'creative', 'production', `${ref.source}~${ref.id}`, activeView)}
+        onCloseRun={() => onOpenProject(currentProject.id, 'creative', 'production', undefined, activeView)}
+        onOpenSource={run => {
+          if (!run.source_task) return
+          if (run.source_task.object_type === 'edit_task') onOpenProject(currentProject.id, 'creative', 'video', undefined, '素材剪辑', run.source_task.object_id)
+          else onOpenProject(currentProject.id, 'creative', 'tasks', run.source_task.object_id)
+        }}
+      />
+    </Suspense>
     : system.key === 'creative' && item.id === 'reviews' ? <MaterialCheckWorkspace state={dataState} activeView={activeView} objectId={objectId} onOpenProject={onOpenProject}/>
     : system.key === 'insight' && item.id === 'prelaunch' ? <PreLaunchPage state={dataState} view={preLaunchViews[activeView] ?? 'conclusions'}/>
     : system.key === 'insight' && item.id === 'analysis' ? <AnalysisPage state={dataState} view={analysisViews[activeView] ?? 'overview'} onOpenExperiments={() => onOpenProject(currentProject.id, 'insight', 'experiments')}/>
@@ -1599,7 +1615,7 @@ export function ModulePage({
     : system.key === 'insight' && item.id === 'settings' ? <SettingsPage state={dataState} view={settingsViews[activeView] ?? 'thresholds'}/>
     : system.key === 'delivery' && item.id === 'tour' ? <DeliveryTourPage projectId={currentProject.id} routeRunId={tourRunId}/>
     : system.key === 'delivery' && item.id === 'plans' ? <DeliveryPlanPage state={dataState}/>
-    : system.key === 'delivery' && (item.id === 'configuration' || item.id === 'three-tier') ? <DeliveryThreeTierPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>
+    : system.key === 'delivery' && item.id === 'configuration' ? <DeliveryConfigurationPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>
     : system.key === 'delivery' && item.id === 'approvals' ? <ApprovalCenterPage state={dataState} tourCase={tourCase} tourRunId={tourRunId} selectedChangeSetId={objectId}/>
     : system.key === 'delivery' && item.id === 'monitoring' ? <DeliveryMonitoringPage tourCase={tourCase}/>
     : system.key === 'delivery' && item.id === 'optimization' ? <DeliveryOptimizationPage state={dataState} activeView={activeView} tourRunId={tourRunId} tourCase={tourCase}/>
@@ -1638,7 +1654,7 @@ export function ModulePage({
   }
 
   const projectProgress = calculateProjectProgress(currentProject)
-  const showObjectDetail = Boolean(objectId && !taskCenter && !(system.key === 'creative' && item.id === 'reviews') && !(system.key === 'strategy' && item.id === 'workspaces') && !(system.key === 'delivery' && item.id === 'approvals'))
+  const showObjectDetail = Boolean(objectId && !taskCenter && !(system.key === 'creative' && (item.id === 'reviews' || item.id === 'production')) && !(system.key === 'strategy' && item.id === 'workspaces') && !(system.key === 'delivery' && item.id === 'approvals'))
   const isStrategyWorkspace = system.key === 'strategy' && item.id === 'workspaces'
   const hasImplementedHeaderViews = !(system.key === 'delivery' && (item.id === 'tour' || item.id === 'plans' || item.id === 'approvals' || item.id === 'monitoring'))
   const changeView = (view: string) => {

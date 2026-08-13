@@ -200,6 +200,49 @@ func TestDeliveryTourHTTPMapsOwnerMismatch(t *testing.T) {
 	}
 }
 
+func TestDecisionWorkflowHTTPStopsAtReadyForFinalApproval(t *testing.T) {
+	app := &applicationStub{
+		decision:  delivery.DeliveryDecision{ID: "decision_1", SchemaVersion: delivery.DeliveryDecisionSchemaV1},
+		selection: delivery.DecisionSelection{ID: "selection_1", Workflow: delivery.CompiledDeliveryWorkflow{Status: "ready_for_final_approval", RemoteWriteEnabled: false}},
+	}
+	server := New(app)
+
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/plans/plan_1/decisions:generate", `{"expected_version":1}`))
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"schema_version":"delivery-decision/v1"`) {
+		t.Fatalf("generate status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request := authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/decisions/decision_1:select", `{"candidate_id":"decision_1-balanced","expected_plan_version":1}`)
+	request.Header.Set("Idempotency-Key", "decision-selection-1")
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"status":"ready_for_final_approval"`) || !strings.Contains(response.Body.String(), `"remote_write_enabled":false`) {
+		t.Fatalf("select status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestObservatoryHTTPExposesReplayAndAuditableFeedback(t *testing.T) {
+	app := &applicationStub{
+		observatoryRun:      delivery.DeliveryObservatoryRun{ID: "observatory_1", SchemaVersion: delivery.ObservatoryRunSchemaV1, Source: delivery.ObservatorySourceReplay, Status: "completed", Outcome: "drift_detected", RemoteWriteEnabled: false},
+		observatoryFeedback: delivery.DeliveryObservatoryFeedback{ID: "feedback_1", SchemaVersion: delivery.ObservatoryFeedbackSchemaV1, Disposition: delivery.ObservatoryFeedbackAccepted},
+	}
+	server := New(app)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/decision-selections/selection_1/observatory-runs", `{"source":"replay","mode":"observe_existing","fixture":{"fixture_id":"fixture_1","data_state":"ready","observed_at":"2026-08-12T08:00:00Z","data_through":"2026-08-12T07:55:00Z","observed_values":{},"selector_matches":{},"evidence_refs":["replay://fixture/1"],"page_refs":[]}}`))
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"outcome":"drift_detected"`) || !strings.Contains(response.Body.String(), `"remote_write_enabled":false`) {
+		t.Fatalf("run status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request := authenticatedRequest(http.MethodPost, "/api/delivery/v1/projects/project_1/observatory-runs/observatory_1/feedback", `{"disposition":"accepted","reason":"reviewed evidence","diff_keys":[]}`)
+	request.Header.Set("Idempotency-Key", "feedback-1")
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"disposition":"accepted"`) {
+		t.Fatalf("feedback status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func authenticatedRequest(method, target, body string) *http.Request {
 	request := httptest.NewRequest(method, target, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -214,12 +257,47 @@ func authenticatedRequest(method, target, body string) *http.Request {
 }
 
 type applicationStub struct {
-	plan          delivery.DeliveryPlan
-	changeSet     delivery.ChangeSet
-	createdPlanID string
-	tourRun       delivery.DeliveryTourRun
-	tourRunID     string
-	tourReplay    bool
+	plan                delivery.DeliveryPlan
+	changeSet           delivery.ChangeSet
+	createdPlanID       string
+	tourRun             delivery.DeliveryTourRun
+	tourRunID           string
+	tourReplay          bool
+	decision            delivery.DeliveryDecision
+	selection           delivery.DecisionSelection
+	observatoryRun      delivery.DeliveryObservatoryRun
+	observatoryFeedback delivery.DeliveryObservatoryFeedback
+}
+
+func (s *applicationStub) GenerateDecision(context.Context, contract.ActorContext, contract.ProjectID, string, int) (delivery.DeliveryDecision, error) {
+	return s.decision, nil
+}
+func (s *applicationStub) ListDecisions(context.Context, contract.ActorContext, contract.ProjectID, int) ([]delivery.DeliveryDecision, error) {
+	return []delivery.DeliveryDecision{s.decision}, nil
+}
+func (s *applicationStub) GetDecision(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryDecision, error) {
+	return s.decision, nil
+}
+func (s *applicationStub) SelectDecision(context.Context, contract.ActorContext, contract.ProjectID, string, string, delivery.SelectDecisionRequest) (delivery.DecisionSelection, bool, error) {
+	return s.selection, false, nil
+}
+func (s *applicationStub) GetDecisionSelection(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DecisionSelection, error) {
+	return s.selection, nil
+}
+func (s *applicationStub) RunObservatory(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.RunObservatoryRequest) (delivery.DeliveryObservatoryRun, bool, error) {
+	return s.observatoryRun, false, nil
+}
+func (s *applicationStub) ListObservatoryRuns(context.Context, contract.ActorContext, contract.ProjectID, int) ([]delivery.DeliveryObservatoryRun, error) {
+	return []delivery.DeliveryObservatoryRun{s.observatoryRun}, nil
+}
+func (s *applicationStub) GetObservatoryRun(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.DeliveryObservatoryRun, error) {
+	return s.observatoryRun, nil
+}
+func (s *applicationStub) SubmitObservatoryFeedback(context.Context, contract.ActorContext, contract.ProjectID, string, string, delivery.SubmitObservatoryFeedbackRequest) (delivery.DeliveryObservatoryFeedback, bool, error) {
+	return s.observatoryFeedback, false, nil
+}
+func (s *applicationStub) ListObservatoryFeedback(context.Context, contract.ActorContext, contract.ProjectID, string, int) ([]delivery.DeliveryObservatoryFeedback, error) {
+	return []delivery.DeliveryObservatoryFeedback{s.observatoryFeedback}, nil
 }
 
 func (s *applicationStub) CreatePlan(context.Context, contract.ActorContext, contract.ProjectID, delivery.CreatePlanRequest) (delivery.DeliveryPlan, error) {
@@ -274,12 +352,6 @@ func (s *applicationStub) Rollback(context.Context, contract.ActorContext, contr
 	return s.changeSet, nil
 }
 
-func (s *applicationStub) CompileThreeTierConfiguration(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.CompileThreeTierRequest) (delivery.DeliveryPlan, error) {
-	return delivery.DeliveryPlan{}, nil
-}
-func (s *applicationStub) OverrideThreeTierField(context.Context, contract.ActorContext, contract.ProjectID, string, delivery.ThreeTierOverrideRequest) (delivery.DeliveryPlan, error) {
-	return delivery.DeliveryPlan{}, nil
-}
 func (s *applicationStub) GenerateRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string, int) (delivery.DeliveryRecommendation, error) {
 	return delivery.DeliveryRecommendation{}, nil
 }
@@ -294,9 +366,6 @@ func (s *applicationStub) AcceptRecommendation(context.Context, contract.ActorCo
 }
 func (s *applicationStub) RejectRecommendation(context.Context, contract.ActorContext, contract.ProjectID, string, int64) (delivery.DeliveryRecommendation, error) {
 	return delivery.DeliveryRecommendation{}, nil
-}
-func (s *applicationStub) CompileManualActionPackage(context.Context, contract.ActorContext, contract.ProjectID, string, int64) (delivery.ManualActionPackage, bool, error) {
-	return delivery.ManualActionPackage{}, false, nil
 }
 func (s *applicationStub) GetManualActionPackage(context.Context, contract.ActorContext, contract.ProjectID, string) (delivery.ManualActionPackage, error) {
 	return delivery.ManualActionPackage{}, nil

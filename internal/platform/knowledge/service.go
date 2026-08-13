@@ -419,6 +419,11 @@ func (s Service) CreateDocument(ctx context.Context, actor contract.ActorContext
 	if asyncParse && (s.DocumentParser == nil || s.DocumentScheduler == nil) {
 		return Document{}, fmt.Errorf("document parser and scheduler are required for %s files", extension)
 	}
+	if extension == ".docx" && asyncParse {
+		if _, _, err := extractDocument(extension, content); err != nil {
+			return Document{}, err
+		}
+	}
 	contentSum := sha256.Sum256(content)
 	contentHash := hex.EncodeToString(contentSum[:])
 	if asyncParse {
@@ -487,8 +492,9 @@ func (s Service) CreateDocument(ctx context.Context, actor contract.ActorContext
 		 object_version_id, object_etag, status, parse_strategy, parse_phase, parse_progress,
 		 progress_kind, processed_pages, total_pages, quality_score, quality_tier,
 		 fallback_reason, preview_status, page_quality_summary, heartbeat_at,
+		 parser_code, parser_version, parse_error_code, parse_error_message,
 		 created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		document.ID, document.OrganizationID, document.ProjectID, document.Title, nil,
 		document.SourceType, document.ChunkCount, document.Filename, document.MIMEType,
 		document.SizeBytes, document.ContentSHA256, document.TextSHA256, document.ExtractedText,
@@ -496,6 +502,8 @@ func (s Service) CreateDocument(ctx context.Context, actor contract.ActorContext
 		document.ParseStrategy, document.ParsePhase, document.ParseProgress, document.ProgressKind,
 		document.ProcessedPages, document.TotalPages, document.QualityScore, document.QualityTier,
 		document.FallbackReason, document.PreviewStatus, nullableJSON(document.PageQualitySummary), document.HeartbeatAt,
+		nullable(document.ParserCode), nullable(document.ParserVersion),
+		nullable(document.ParseErrorCode), nullable(document.ParseErrorMessage),
 		document.CreatedBy, document.CreatedAt, document.UpdatedAt)
 	if err != nil {
 		_ = s.Blobs.Delete(ctx, object.ObjectLocation)
@@ -642,6 +650,28 @@ func (s Service) GetDocument(ctx context.Context, actor contract.ActorContext, p
 // belongs to the caller's project. The returned stream is owned by the caller.
 // Object identity, metadata, byte length, and SHA-256 are checked before it is
 // handed off so a stale or substituted blob cannot be consumed as the original.
+func (s Service) ExtractDocumentMedia(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, id string) ([]ExtractedDocumentMedia, error) {
+	document, err := s.GetDocument(ctx, actor, projectID, id)
+	if err != nil {
+		return nil, err
+	}
+	if document.MIMEType != "application/pdf" || s.Blobs == nil {
+		return nil, ErrInvalidDocument
+	}
+	extractor, ok := s.DocumentParser.(DocumentMediaExtractor)
+	if !ok {
+		return nil, fmt.Errorf("document media extractor is unavailable")
+	}
+	stream, info, err := s.Blobs.Open(ctx, document.Blob)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	return extractor.ExtractMedia(ctx, DocumentParseRequest{
+		Filename: document.Filename, MIMEType: document.MIMEType, Size: info.SizeBytes, Source: stream,
+	})
+}
+
 func (s Service) OpenDocumentOriginal(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, id string) (io.ReadCloser, Document, error) {
 	if s.Blobs == nil {
 		return nil, Document{}, fmt.Errorf("knowledge blob store is unavailable")

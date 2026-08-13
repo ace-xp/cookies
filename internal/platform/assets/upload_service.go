@@ -40,6 +40,7 @@ type UploadService struct {
 	NewID            ids.Generator
 	VideoProbe       VideoMetadataProbe
 	AudioProbe       AudioMetadataProbe
+	UsePolicy        AssetUseAuthorizer
 }
 
 func (s UploadService) Create(ctx context.Context, requestContext contract.RequestContext, projectID contract.ProjectID, key contract.IdempotencyKey, request CreateUploadRequest) (CreateUploadResponse, error) {
@@ -213,7 +214,15 @@ func (s UploadService) List(ctx context.Context, actor contract.ActorContext, pr
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	return s.Repository.ListProjectAssets(ctx, actor.OrganizationID, projectID, limit)
+	items, err := s.Repository.ListProjectAssets(ctx, actor.OrganizationID, projectID, limit)
+	if err != nil || s.UsePolicy == nil {
+		return items, err
+	}
+	for index := range items {
+		decision, _ := s.UsePolicy.Authorize(ctx, AssetUseRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AssetRef: items[index].Version.Ref(), Purpose: AssetUsePreview})
+		items[index].UseDecision = &decision
+	}
+	return items, nil
 }
 
 func (s UploadService) Get(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, ref contract.AssetVersionRef) (ProjectAsset, error) {
@@ -240,6 +249,9 @@ func (s UploadService) Preview(ctx context.Context, actor contract.ActorContext,
 	if asset.Version.Status != AssetReady {
 		return SignedRequest{}, ErrAssetNotReady
 	}
+	if err := s.authorizeAssetUse(ctx, actor, projectID, ref, AssetUsePreview); err != nil {
+		return SignedRequest{}, err
+	}
 	return s.Blobs.SignGet(ctx, asset.Version.Blob, s.previewTTL())
 }
 
@@ -260,6 +272,9 @@ func (s UploadService) OpenPreview(ctx context.Context, actor contract.ActorCont
 	if asset.Version.Status != AssetReady {
 		return nil, ObjectInfo{}, ErrAssetNotReady
 	}
+	if err := s.authorizeAssetUse(ctx, actor, projectID, ref, AssetUsePreview); err != nil {
+		return nil, ObjectInfo{}, err
+	}
 	reader, info, err := s.Blobs.Open(ctx, asset.Version.Blob)
 	if err != nil {
 		return nil, ObjectInfo{}, err
@@ -270,6 +285,14 @@ func (s UploadService) OpenPreview(ctx context.Context, actor contract.ActorCont
 	}
 	info.MIMEType = asset.Version.MIMEType
 	return reader, info, nil
+}
+
+func (s UploadService) authorizeAssetUse(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, ref contract.AssetVersionRef, purpose AssetUsePurpose) error {
+	if s.UsePolicy == nil {
+		return nil
+	}
+	_, err := s.UsePolicy.Authorize(ctx, AssetUseRequest{OrganizationID: actor.OrganizationID, ProjectID: projectID, AssetRef: ref, Purpose: purpose})
+	return err
 }
 
 func (s UploadService) Remove(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, ref contract.AssetVersionRef) error {
@@ -286,17 +309,19 @@ func (s UploadService) Remove(ctx context.Context, actor contract.ActorContext, 
 // The render job remains Creative-owned; Assets validates and persists a new
 // immutable video version and makes retries idempotent by render_job_id.
 func (s UploadService) IngestRenderedVideo(ctx context.Context, requestContext contract.RequestContext, projectID contract.ProjectID, renderJobID string, content io.Reader, sizeBytes int64) (contract.ProjectAssetRef, error) {
-	if err := s.validateDependencies(); err != nil {
+	return s.ingestRenderedVideo(ctx, requestContext, projectID, renderJobID, nil, content, sizeBytes)
+}
+
+// IngestRenderedVideoWithSources records immutable input resources alongside
+// the rendered AssetVersion. It is used by timeline renderers whose outputs
+// must remain traceable to exact source assets and a frozen timeline version.
+func (s UploadService) IngestRenderedVideoWithSources(ctx context.Context, requestContext contract.RequestContext, projectID contract.ProjectID, renderJobID string, sources []contract.ResourceRef, content io.Reader, sizeBytes int64) (contract.ProjectAssetRef, error) {
+	return s.ingestRenderedVideo(ctx, requestContext, projectID, renderJobID, sources, content, sizeBytes)
+}
+
+func (s UploadService) ingestRenderedVideo(ctx context.Context, requestContext contract.RequestContext, projectID contract.ProjectID, renderJobID string, sources []contract.ResourceRef, content io.Reader, sizeBytes int64) (contract.ProjectAssetRef, error) {
+	if err := s.validateRenderedVideoIngest(requestContext, renderJobID, content, sizeBytes); err != nil {
 		return contract.ProjectAssetRef{}, err
-	}
-	if err := requestContext.Validate(); err != nil {
-		return contract.ProjectAssetRef{}, err
-	}
-	if !requestContext.Actor.HasScope("assets.write") {
-		return contract.ProjectAssetRef{}, fmt.Errorf("assets.write scope is required")
-	}
-	if strings.TrimSpace(renderJobID) == "" || len(renderJobID) > 96 || content == nil || sizeBytes < 1 || sizeBytes > MaxVideoBytes {
-		return contract.ProjectAssetRef{}, fmt.Errorf("render_job_id and supported video content are required")
 	}
 	project, err := s.Projects.RequireActiveContext(ctx, requestContext.Actor, projectID)
 	if err != nil {
@@ -325,6 +350,18 @@ func (s UploadService) IngestRenderedVideo(ctx context.Context, requestContext c
 	if err != nil {
 		return contract.ProjectAssetRef{}, err
 	}
+	for _, source := range sources {
+		if err := source.Validate(); err != nil {
+			return contract.ProjectAssetRef{}, fmt.Errorf("rendered video source: %w", err)
+		}
+		commit.Relations = append(commit.Relations, AssetRelation{
+			OrganizationID: requestContext.Actor.OrganizationID,
+			ProjectID:      projectID,
+			OutputAsset:    contract.AssetVersionRef{AssetID: commit.AssetID, Version: commit.Version},
+			RelationType:   AssetRelationDerivedFrom,
+			Source:         source,
+		})
+	}
 	ref, err := s.Repository.CompleteRender(ctx, renderJobID, commit, s.now())
 	if err != nil {
 		_ = s.Blobs.Delete(ctx, commit.Location)
@@ -334,6 +371,22 @@ func (s UploadService) IngestRenderedVideo(ctx context.Context, requestContext c
 		_ = s.Blobs.Delete(ctx, commit.Location)
 	}
 	return ref, nil
+}
+
+func (s UploadService) validateRenderedVideoIngest(requestContext contract.RequestContext, renderJobID string, content io.Reader, sizeBytes int64) error {
+	if err := s.validateDependencies(); err != nil {
+		return err
+	}
+	if err := requestContext.Validate(); err != nil {
+		return err
+	}
+	if !requestContext.Actor.HasScope("assets.write") {
+		return fmt.Errorf("assets.write scope is required")
+	}
+	if strings.TrimSpace(renderJobID) == "" || len(renderJobID) > 96 || content == nil || sizeBytes < 1 || sizeBytes > MaxVideoBytes {
+		return fmt.Errorf("render_job_id and supported video content are required")
+	}
+	return nil
 }
 
 // IngestDerivedImage persists a processor-produced image as an immutable Asset
