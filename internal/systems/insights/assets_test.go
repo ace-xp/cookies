@@ -1134,7 +1134,9 @@ func TestReadAssetPosterWithoutPortSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("登记失败：%v", err)
 	}
-	if _, err := service.ReadAssetPoster(ctx, actor, "project_1", asset.ID); err == nil {
-		t.Fatal("没接封面端口时应当报错，而不是假装有封面")
+	// 没接端口和没有封面，对着这一屏的人来说是同一件事：这条没图。
+	// 所以是 404 而不是 500——不然没配 ffmpeg 的环境会满屏服务器错误。
+	if _, err := service.ReadAssetPoster(ctx, actor, "project_1", asset.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("没接封面端口时应当报没有，得到 %v", err)
 	}
 }

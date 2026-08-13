@@ -820,7 +820,10 @@ func (s Service) ReadAssetPoster(ctx context.Context, actor contract.ActorContex
 		return "", fmt.Errorf("%w: 这条素材没有对应的平台文件，没有封面可取", ErrNotFound)
 	}
 	if s.Posters == nil {
-		return "", fmt.Errorf("封面服务没有接通")
+		// 也报「没有」而不是报故障：这个环境没配 ffmpeg，抽帧链路整条是关的，
+		// 那就是真的没有封面。报 500 的话，一屏几十张缩略图会在日志和监控里
+		// 刷出几十条服务器错误，看起来像出事了，其实只是没开这个功能。
+		return "", fmt.Errorf("%w: 这个环境没有接封面服务（多半是没配 ffmpeg）", ErrNotFound)
 	}
 	return s.Posters.ReadPoster(ctx, actor, projectID, asset.PlatformAssetID, asset.PlatformAssetVersion)
 }
