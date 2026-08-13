@@ -95,6 +95,9 @@ func (s Service) AnalyzeAsset(ctx context.Context, actor contract.ActorContext, 
 	if err != nil {
 		return AnalyzeAssetResult{}, err
 	}
+	if err := s.requireAnalysisRole(asset); err != nil {
+		return AnalyzeAssetResult{}, err
+	}
 	if !asset.TypeIdentified() {
 		return AnalyzeAssetResult{}, fmt.Errorf("%w: 素材类型待识别，无法确定要提取哪套特征", ErrInvalidState)
 	}

@@ -925,6 +925,9 @@ func (s Service) ExtractFeatures(ctx context.Context, actor contract.ActorContex
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requireAnalysisRole(asset); err != nil {
+		return nil, err
+	}
 	if !asset.TypeIdentified() {
 		return nil, fmt.Errorf("%w: 素材类型待识别，无法确定要提取哪套特征", ErrInvalidState)
 	}
@@ -979,6 +982,9 @@ func (s Service) PatchFeatures(ctx context.Context, actor contract.ActorContext,
 	}
 	asset, err := s.Assets.GetAsset(ctx, actor.OrganizationID, projectID, assetID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireAnalysisRole(asset); err != nil {
 		return nil, err
 	}
 	if !asset.TypeIdentified() {
@@ -1270,6 +1276,18 @@ func (s Service) assetsReady(actor contract.ActorContext, projectID contract.Pro
 	}
 	if actor.OrganizationID == "" || projectID == "" || !actor.HasScope(scope) {
 		return fmt.Errorf("%s scope is required", scope)
+	}
+	return nil
+}
+
+// requireAnalysisRole 挡住往台账素材上写特征的一切路径。
+//
+// 台账是账本：登记在册就够了，它不进队列、不跑归因、不该有任何特征。
+// 四条写路径（人工修改、AI 提取、量客观变量、单条分析）各自都要过这道门——
+// 少一条，那条路径就成了绕过身份的后门。
+func (s Service) requireAnalysisRole(asset Asset) error {
+	if asset.Role == AssetRoleLedger {
+		return fmt.Errorf("%w: 这条素材在台账里，先「拉进分析」才能提特征", ErrInvalidState)
 	}
 	return nil
 }

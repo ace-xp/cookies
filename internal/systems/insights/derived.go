@@ -106,6 +106,9 @@ func (s Service) DeriveFeatures(ctx context.Context, actor contract.ActorContext
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requireAnalysisRole(asset); err != nil {
+		return nil, err
+	}
 	if !asset.TypeIdentified() {
 		return nil, fmt.Errorf("%w: 素材类型待识别，无法确定要写哪套特征", ErrInvalidState)
 	}

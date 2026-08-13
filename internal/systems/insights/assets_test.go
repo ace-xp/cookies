@@ -966,3 +966,28 @@ func TestReturnAssetToLedgerAllowsUnmatchedAsset(t *testing.T) {
 		t.Fatalf("退回后身份应是台账，得到 %q", returned.Role)
 	}
 }
+
+func TestLedgerAssetRefusesFeatureWrite(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	ctx := context.Background()
+	asset, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+		Title: "台账里的一张图", SourceKind: AssetSourceUpload, Role: AssetRoleLedger,
+		AssetType: AssetTypeBrandAd, AssetTypeSource: SourceHuman,
+	})
+	if err != nil {
+		t.Fatalf("登记台账素材失败：%v", err)
+	}
+	// 台账是账本，不是分析对象。往台账素材上写特征等于让它悄悄变成分析对象，
+	// 而队列、红点、归因全按 role 过滤——那些特征谁也看不到，白花模型的钱。
+	_, err = service.PatchFeatures(ctx, actor, "project_1", asset.ID, PatchFeaturesRequest{
+		ExpectedVersion: asset.Version,
+		Features:        []FeatureInput{{Key: "slogan", Value: FeatureValue{Kind: FeatureKindText, Text: "立即购买"}}},
+	})
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("台账素材不该能写特征，得到 %v", err)
+	}
+	if !strings.Contains(err.Error(), "拉进分析") {
+		t.Fatalf("错误得告诉人下一步怎么办，得到 %v", err)
+	}
+}
