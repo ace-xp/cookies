@@ -4,6 +4,7 @@ import { useProject } from '../../../context/ProjectContext'
 import {
   api,
   type ApiAnalysisRun,
+  type ApiAnalysisStatus,
   type ApiCreativeVersionSummary,
   type ApiExternalAsset,
   type ApiInsightAsset,
@@ -21,9 +22,96 @@ import { formatDate } from '../analysis/format'
  * 右栏有「原片到期」这一行——到期提示必须放在这里，为的是让人在原片被清掉之前
  * 还有机会做完想做的分析。
  *
- * 下面四个队列是「还差什么才能进复盘」。**对不上号的红色置顶**：它是唯一一个
- * 「不处理后面全错」的问题（花费算不到任何素材头上），其余三个只是少几条样本。
+ * **这一屏默认是安静的。**要处理的事以前是四张常驻卡片，一年里有 360 天四个数
+ * 全是 0，占掉下半屏——人扫惯了四个 0，真跳出一个 2 也照样滑过去。现在没事的时候
+ * 一个字都不出现，有事才在顶上多一行，一件事一行。
  */
+
+/** 清单上每条素材右边挂的那个词。 */
+export type AssetTone = 'ready' | 'waiting' | 'bad'
+
+const statusLabels: Record<ApiAnalysisStatus, { text: string; tone: AssetTone }> = {
+  confirmed: { text: '已可解释', tone: 'ready' },
+  pending_confirmation: { text: '已可解释', tone: 'ready' },
+  awaiting_data: { text: '等投放数据', tone: 'waiting' },
+  awaiting_match: { text: '等对上号', tone: 'waiting' },
+  analysable: { text: '等提变量', tone: 'waiting' },
+  analysing: { text: '正在提变量', tone: 'waiting' },
+  needs_review: { text: '等人复审', tone: 'waiting' },
+  retired: { text: '已停用', tone: 'waiting' },
+}
+
+/**
+ * 每条素材右边那个词。
+ *
+ * 这个位置以前挂的是 8 位编号加版本号。那两样东西没人拿来做判断，却占掉了整整
+ * 一行，于是六条素材撑满一屏，而真正要看的「这条到底能不能用」一个字都没有。
+ *
+ * 失败不在状态机里（跑挂了的素材原地停在「可分析」），所以要外面算好了传进来。
+ */
+export function assetStatusLabel(status: ApiAnalysisStatus, failed: boolean): { text: string; tone: AssetTone } {
+  if (failed) return { text: '提取失败', tone: 'bad' }
+  // 后端加了新状态而前端还没跟上时，宁可显示「状态未知」也不要空着一格——
+  // 空着的话，看的人以为这条素材没事。
+  return statusLabels[status] ?? { text: '状态未知', tone: 'waiting' }
+}
+
+/** 顶上那一行要说的一件事。target 是点下去落到哪一屏。 */
+export type OverviewAlert = {
+  key: string
+  tone: 'urgent' | 'warn'
+  text: string
+  action: string
+  target: '数据接入' | '变量' | 'import'
+}
+
+/**
+ * 「有事才出声」：把四件要人动手的事按非零筛一遍，一件也没有就返回空数组，
+ * 那一整块连边框带标题都不渲染。
+ *
+ * 顺序就是优先级，对不上号永远第一——它是唯一一个「不处理后面全错」的问题
+ * （花费算不到任何素材头上），其余三条只是少几条样本。
+ */
+export function buildOverviewAlerts(counts: {
+  unmatched: number
+  failures: number
+  needsReview: number
+  notImported: number
+}): OverviewAlert[] {
+  return ([
+    {
+      key: 'unmatched', count: counts.unmatched, tone: 'urgent' as const,
+      text: `${counts.unmatched} 条回流数据对不上号，它们的花费算不到任何素材头上`,
+      action: '去认领', target: '数据接入' as const,
+    },
+    {
+      key: 'failed', count: counts.failures, tone: 'warn' as const,
+      text: `${counts.failures} 条提取失败，现在一个变量都没有，它不会自己重试`,
+      action: '去重跑', target: '变量' as const,
+    },
+    {
+      key: 'review', count: counts.needsReview, tone: 'warn' as const,
+      text: `${counts.needsReview} 条等人复审，放着不管会带着一份没人认可的变量进分析`,
+      action: '去看看', target: '变量' as const,
+    },
+    {
+      key: 'not-imported', count: counts.notImported, tone: 'warn' as const,
+      text: `创意里还有 ${counts.notImported} 条批准了没进来，它们的投放数据回流时认不到人头上`,
+      action: '去导入', target: 'import' as const,
+    },
+  ]).flatMap(({ count, ...alert }) => count ? [alert] : [])
+}
+
+/**
+ * 横幅那一行。
+ *
+ * 以前是一句话套一个括号套一串小字，三个数字散在里面。改成一串顿开的短句：
+ * 第一个数是总数，后面每一项都是它的一部分，加起来正好回到总数——不守恒的话，
+ * 人会拿它和左栏那个数去对，对不上就以为哪里算错了。
+ */
+export function overviewTally(total: number, explainable: number, rest: string[]): string {
+  return [`${total} 条素材`, `${explainable} 条已能解释`, ...rest].join(' · ')
+}
 export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, onOpenAnalysis, onIndex, onImport, reloadKey }: {
   selectedId: string
   onSelect: (assetId: string) => void
@@ -132,6 +220,15 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
     return failedRuns.filter(run => ids.has(run.asset_id))
   }, [failedRuns, failedExtraction])
   const staleFailures = failedRuns.length - blockingFailures.length
+  /**
+   * 清单上标红的只能是**还挡着路**的那些。
+   *
+   * 照 failedRuns 标的话，一条跑挂之后被人手工补上变量的素材会同时是
+   * 「已可解释」和「提取失败」——横幅把它算进能解释的 5 条，清单上却给它标红，
+   * 同一屏两句话互相打脸，人只能挨个点开去对。
+   */
+  const blockingIds = useMemo(() =>
+    new Set(blockingFailures.map(run => run.asset_id)), [blockingFailures])
 
   /**
    * 「没进这个数的都在哪儿」——按状态逐类点名。
@@ -143,12 +240,12 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
    * 「能解释的 + 这一串」都等于左栏那个总数。
    */
   const unaccounted = useMemo(() => ([
-    { count: awaitingExtraction.length, note: '只登记了还没提变量' },
-    { count: failedExtraction.length, note: '提变量跑挂了' },
-    { count: live.filter(asset => asset.analysis_status === 'awaiting_data').length, note: '在等投放数据回流' },
-    { count: live.filter(asset => asset.analysis_status === 'awaiting_match').length, note: '还没和平台上的对象对上号' },
+    { count: awaitingExtraction.length, note: '等提变量' },
+    { count: failedExtraction.length, note: '提取失败' },
+    { count: live.filter(asset => asset.analysis_status === 'awaiting_data').length, note: '等投放数据' },
+    { count: live.filter(asset => asset.analysis_status === 'awaiting_match').length, note: '等对上号' },
     { count: live.filter(asset => asset.analysis_status === 'analysing').length, note: '正在提变量' },
-    { count: needsReview.length, note: '提完了在等人复审' },
+    { count: needsReview.length, note: '等人复审' },
   ]).flatMap(bucket => bucket.count ? [`${bucket.count} 条${bucket.note}`] : []),
   [live, awaitingExtraction, failedExtraction, needsReview])
 
@@ -167,10 +264,8 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
     soon.setDate(soon.getDate() + 14)
     return withFile.filter(item => !item.original_purged && new Date(item.retention_until) <= soon)
   }, [withFile])
-  const purged = withFile.filter(item => item.original_purged)
-  // 一条变量都没标、又没有文件的登记：它对本轮结论起不了任何作用。
-  const emptyEvidence = useMemo(() =>
-    external.filter(item => !item.storage_key && !Object.keys(item.features ?? {}).length), [external])
+  // 「原件已删」和「一条变量都没标」这两件事不再单独占一个框：它们本来就是
+  // 某几条证据自己的毛病，标在那几条身上，比在页顶报个总数更好找。
 
   // 创意批准了、洞察这边还没有的。这个数字是这一屏最上游的缺口：另外三个队列说的
   // 是「进来了但还差点什么」，这一条说的是「压根还没进来」——包括那些「对不上号」，
@@ -182,6 +277,13 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
     return creativeVersions.filter(item => item.status === 'approved' && !imported.has(item.id))
   }, [assets, creativeVersions])
 
+  const alerts = useMemo(() => buildOverviewAlerts({
+    unmatched: unmatched.length,
+    failures: blockingFailures.length,
+    needsReview: needsReview.length,
+    notImported: notImported.length,
+  }), [unmatched, blockingFailures, needsReview, notImported])
+
   if (listState === 'loading') return <div className="panel-empty">正在读取…</div>
   if (listState === 'error') {
     return <div className="panel-empty">读取失败。<button type="button" className="secondary-button"
@@ -189,10 +291,56 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
   }
 
   return <section className="assets-overview">
+    {/* 要人动手的事全在这儿，一件一行。四件都没有时这一块整个不存在——
+        这一屏在正常日子里应该是安静的，跳出一行就意味着真出了事。 */}
+    {alerts.length ? <div className="assets-alerts">
+      {alerts.map(alert => <div key={alert.key}
+        className={alert.tone === 'urgent' ? 'assets-alert urgent' : 'assets-alert'}>
+        <CircleAlert size={15}/>
+        <span>{alert.text}</span>
+        <button type="button" className="secondary-button"
+          onClick={() => { if (alert.target === 'import') onImport(); else onOpenView(alert.target) }}>
+          {alert.action}
+        </button>
+      </div>)}
+    </div> : null}
+
+    {/* 失败的原因跟在告警后面。只在真有挡路的失败时出现——原因这种东西
+        平时摆出来没人读，出事时又是第一个要看的。 */}
+    {blockingFailures.length ? <div className="assets-alert-detail">
+      {blockingFailures.slice(0, 3).map(run => <small key={run.id}>
+        {/* 库里存的是整条错误链，前半截是 Go 的英文 sentinel。原样摆出来的话，
+            人先读到一串读不懂的英文，真正的原因（常常是「还没配模型」这种自己
+            就能处理的事）躲在后面，一眼看去只像「系统崩了」。 */}
+        {assetTitle(run.asset_id)}：{readableError(run.error_message) || run.error_code || '没有留下原因'}
+      </small>)}
+      {/* 一屏之内三条失败都是同一个原因是常态（模型没配，谁跑谁挂）。
+          指路只说一次，挂在末尾，不跟着每一条重复。 */}
+      {blockingFailures.some(run => isModelSetupFailure(run.error_message))
+        ? <small>{modelSetupHint}</small>
+        : null}
+      {blockingFailures.length > 3
+        ? <small>还有 {blockingFailures.length - 3} 条，去「变量」那一屏逐条看。</small>
+        : null}
+      {/* 已经有变量、不挡路的那些失败降到这一行。不提的话，「变量」那一屏上还挂着
+          红色留痕，而总览这边一个字都没有，人会以为两屏对不上。 */}
+      {staleFailures ? <small>
+        另有 {staleFailures} 条上一次跑挂了，但变量已经被人补上，不挡分析。
+      </small> : null}
+    </div> : null}
+
+    {/* 这一行是全屏的落点，所以口径要能一眼数清：第一个数是总数，后面每一项
+        都是它的一部分。不守恒的话，人会拿它和下面两栏去对，对不上就以为算错了。 */}
+    <div className="assets-converge">
+      <Layers3 size={17}/>
+      <span>{overviewTally(live.length, explainable.length, unaccounted)}</span>
+      <button type="button" className="secondary-button" onClick={onOpenAnalysis}>进分析</button>
+    </div>
+
     <div className="assets-columns">
       <div className="assets-column">
         <div className="assets-column-head">
-          <span className="section-label">平台内素材</span>
+          <span className="section-label">平台内素材 {live.length}</span>
           {/* 左栏顶上这个跳转不是方便，是所有权的声明：这些东西不归洞察管，
               要改标题、换封面、加一版，都得回素材库去做。 */}
           <button type="button" className="link-button" onClick={onOpenLibrary}>
@@ -210,158 +358,74 @@ export function OverviewView({ selectedId, onSelect, onOpenLibrary, onOpenView, 
             <Import size={13}/>从创意导入
           </button>
         </div>
-        <p className="assets-column-lead">
-          {live.length} 条。文件躺在素材库里，洞察这边只记住它是哪一条、变量是什么、跑得怎么样。
-        </p>
-        {/* 只在真有落下的时候才出现。常态是 0，天天挂一行「还有 0 条」等于噪音。 */}
-        {notImported.length ? <div className="prelaunch-boundary"><CircleAlert size={16}/><span>
-          <small>创意里还有 {notImported.length} 条没进来</small>
-          创意组批准了但洞察这边没登记。它们的投放数据回流时认不到任何素材头上，
-          这一轮的分析等于漏掉了这几条。
-          <button type="button" className="link-button" onClick={onImport}>去导入</button>
-        </span></div> : null}
+        {/* 每条右边挂状态而不是编号。八条素材列完，人一眼能数出哪几条是好的、
+            哪几条在等——这本来就是打开这一屏唯一想知道的事。 */}
         {live.length ? <ul className="assets-mini-list">
-          {live.slice(0, 8).map(asset => <li key={asset.id}>
-            <button type="button" className={selectedId === asset.id ? 'active' : ''}
-              onClick={() => onSelect(asset.id)}>
-              <b>{asset.title}</b><small>{shortId(asset.id)} · 第 {asset.revision} 版</small>
-            </button>
-          </li>)}
+          {live.slice(0, 8).map(asset => {
+            const status = assetStatusLabel(asset.analysis_status, blockingIds.has(asset.id))
+            return <li key={asset.id}>
+              <button type="button" className={selectedId === asset.id ? 'active' : ''}
+                onClick={() => onSelect(asset.id)}>
+                <b>{asset.title}</b>
+                <em className={`assets-mini-tag tone-${status.tone}`}>{status.text}</em>
+              </button>
+            </li>
+          })}
         </ul> : <p className="panel-empty">还没有可分析素材。</p>}
+        {/* 只列八条是为了这一屏不被一份清单撑满。剩下的必须说一声，
+            不然人会以为库里就这么几条。 */}
+        {live.length > 8
+          ? <p className="assets-column-lead">还有 {live.length - 8} 条没列出来，在「分析」那一屏能看全。</p>
+          : null}
       </div>
 
       <div className="assets-column">
         <div className="assets-column-head">
-          <span className="section-label">外部证据</span>
+          <span className="section-label">外部证据 {external.length}</span>
           <button type="button" className="link-button" onClick={() => onOpenView('外部素材')}>
             <FolderOpen size={13}/>去收一条
           </button>
         </div>
-        <p className="assets-column-lead">
-          {external.length} 条。它们不进共享素材库、不参与归因，只在解释结论时当参照读。
-          {withFile.length ? `其中 ${withFile.length} 条存了原片，有到期日。` : '这里存的是标注，不是文件。'}
-        </p>
-        {/* 到期提示只出现在右栏。放到左栏或者页顶，人会以为平台内素材也会被清掉。 */}
+        {/* 到期提示只出现在右栏，而且只在真快到期时出现。放到左栏或者页顶，
+            人会以为平台内素材也会被清掉。 */}
         {expiring.length ? <div className="prelaunch-boundary"><CircleAlert size={16}/><span>
           <small>原片快到期了</small>
           {expiring.length} 条外部素材的原片将在 {formatDate(expiring[0].retention_until)} 前后清掉，
           只留下人标过的变量。要看原片才能做的分析，赶在那之前做完。
         </span></div> : null}
-        {purged.length ? <p className="assets-column-lead">
-          另有 {purged.length} 条原片已删，只剩标注的变量。引用过它们的复盘仍然说得清当时看到的是什么。
-        </p> : null}
-        {/* 空登记要说出来。它看起来和别的证据一样占一行，实际上什么也证明不了。 */}
-        {emptyEvidence.length ? <div className="prelaunch-boundary"><CircleAlert size={16}/><span>
-          <small>{emptyEvidence.length} 条只有标题</small>
-          既没有文件也没标变量，引用它等于引用一个名字。去「外部素材」把看到的东西补上。
-          <button type="button" className="link-button"
-            onClick={() => onOpenView('外部素材')}>去补变量</button>
-        </span></div> : null}
+        {/* 「只有标题」以前是单独一个红框，现在落在那几条自己身上——哪几条是空的，
+            指着看就行，不用再回头数。 */}
         {external.length ? <ul className="assets-mini-list">
-          {external.slice(0, 8).map(item => <li key={item.id}>
-            <span><b>{item.title}</b><small>{externalNote(item)}</small></span>
-          </li>)}
+          {external.slice(0, 8).map(item => {
+            const note = externalNote(item)
+            return <li key={item.id}>
+              <span>
+                <b>{item.title}</b>
+                <em className={`assets-mini-tag tone-${note.tone}`}>{note.text}</em>
+              </span>
+            </li>
+          })}
         </ul> : <p className="panel-empty">还没有外部证据。</p>}
-      </div>
-    </div>
-
-    {/* 这一行是全屏的落点，所以口径要能被一句话说清楚：**只数已经提出变量的那些**。
-        下面那行小字把「不在这个数里的」全列出来——不列的话，人会拿它和上面两栏的
-        总数去对，对不上就会以为哪里漏了。 */}
-    <div className="assets-converge">
-      <Layers3 size={17}/>
-      <span>已经能拿来解释的 <b>{explainable.length}</b> 条
-        {/* 小字接在同一行里排。不给分隔符的话，读到的是「4 条另有 1 条」——
-            两句话糊成一句，第一眼看不出在哪儿断开。 */}
-        <small> · {unaccounted.length ? `另有 ${unaccounted.join('、')}。` : ''}
-          {external.length
-            ? `${external.length} 条外部证据不进这个数（它们没有投放数据，只能当旁证读）。`
-            : ''}</small>
-      </span>
-      <button type="button" className="secondary-button" onClick={onOpenAnalysis}>进分析</button>
-    </div>
-
-    <div className="assets-queues">
-      {/* 顺序就是优先级，红色那条永远第一。它和另外两条不是一个量级的问题：
-          对不上号意味着这条花费算不到任何素材头上，后面每一个数字都是错的。 */}
-      <div className="assets-queue urgent">
-        <div className="assets-queue-head">
-          <strong>对不上号 {unmatched.length}</strong>
-          <button type="button" className="secondary-button" onClick={() => onOpenView('数据接入')}>
-            去认领
-          </button>
-        </div>
-        <p>平台上回流的对象认不出对应哪一版素材。不处理的话，它们的花费算不到任何素材头上
-          ——后面每一条结论都建立在一份不完整的账上。</p>
-        {unmatched.slice(0, 3).map(mapping => <small key={mapping.id}>
-          {mapping.platform} · {mapping.platform_object_name || mapping.platform_object_id}
-        </small>)}
-      </div>
-
-      <div className="assets-queue">
-        <div className="assets-queue-head">
-          <strong>待提取变量 {awaitingExtraction.length}</strong>
-          <button type="button" className="secondary-button" onClick={() => onOpenView('变量')}>
-            去提取
-          </button>
-        </div>
-        <p>类型已识别、还没提变量。它们不会出现在素材对比和驱动因素里——不是表现不好，
-          是没法判断它们和别人差在哪。</p>
-      </div>
-
-      {/* 「提取失败」和「等人复审」以前是同一条队列，标题写着失败、数的却是待复审，
-          于是真正跑挂的那些一条都没被数进去——素材停在「可分析」，界面上看不出
-          任何异常，人以为只是还没轮到它。现在分成两条，各数各的。 */}
-      <div className="assets-queue">
-        <div className="assets-queue-head">
-          <strong>提取失败 {blockingFailures.length}</strong>
-          <button type="button" className="secondary-button" onClick={() => onOpenView('变量')}>
-            去重跑
-          </button>
-        </div>
-        <p>提取跑挂了，这条素材现在一个变量都没有。它不会自己重试——不重跑的话，
-          它在后面所有对比里都是缺席的。</p>
-        {blockingFailures.slice(0, 3).map(run => <small key={run.id}>
-          {/* 库里存的是整条错误链，前半截是 Go 的英文 sentinel。原样摆出来的话，
-              人先读到一串读不懂的英文，真正的原因（常常是「还没配模型」这种自己
-              就能处理的事）躲在后面，一眼看去只像「系统崩了」。 */}
-          {assetTitle(run.asset_id)}：{readableError(run.error_message) || run.error_code || '没有留下原因'}
-        </small>)}
-        {/* 一屏之内三条失败都是同一个原因是常态（模型没配，谁跑谁挂）。
-            指路只说一次，挂在队列末尾，不跟着每一条重复。 */}
-        {blockingFailures.some(run => isModelSetupFailure(run.error_message))
-          ? <small>{modelSetupHint}</small>
+        {external.length > 8
+          ? <p className="assets-column-lead">还有 {external.length - 8} 条没列出来，在「外部素材」那一屏能看全。</p>
           : null}
-        {blockingFailures.length > 3
-          ? <small>还有 {blockingFailures.length - 3} 条，去「变量」那一屏逐条看。</small>
-          : null}
-        {/* 已经有变量、不挡路的那些失败降到这一行。不提的话，「变量」那一屏上还挂着
-            红色留痕，而总览这边一个字都没有，人会以为两屏对不上。 */}
-        {staleFailures ? <small>
-          另有 {staleFailures} 条上一次跑挂了，但变量已经被人补上，不挡分析。
-        </small> : null}
-      </div>
-
-      <div className="assets-queue">
-        <div className="assets-queue-head">
-          <strong>等人复审 {needsReview.length}</strong>
-          <button type="button" className="secondary-button" onClick={() => onOpenView('变量')}>
-            去看看
-          </button>
-        </div>
-        <p>提取跑完了，但有人把结果打回来要求再看一眼。放着不管，它们带着一份
-          没人认可的变量进分析。</p>
       </div>
     </div>
   </section>
 }
 
-// 右栏每条外部证据后面那句小字。以前一律写「留到 X」——可留存期管的只是原件，
-// 一条没有文件的登记根本没有东西会被清掉，那个日期对它毫无意义。
-function externalNote(item: ApiExternalAsset): string {
+/**
+ * 右栏每条外部证据后面那个标签。以前一律写「留到 X」——可留存期管的只是原件，
+ * 一条没有文件的登记根本没有东西会被清掉，那个日期对它毫无意义。
+ *
+ * 「只有标题」标红：它看起来和别的证据一样占一行，实际上引用它等于引用一个名字。
+ */
+export function externalNote(item: ApiExternalAsset): { text: string; tone: AssetTone } {
   const marked = Object.keys(item.features ?? {}).length
   if (item.storage_key) {
-    return item.original_purged ? '原件已删' : `原件留到 ${formatDate(item.retention_until)}`
+    return item.original_purged
+      ? { text: '原件已删', tone: 'waiting' }
+      : { text: `原件留到 ${formatDate(item.retention_until)}`, tone: 'ready' }
   }
-  return marked ? `标了 ${marked} 条变量` : '只有标题'
+  return marked ? { text: `${marked} 条变量`, tone: 'ready' } : { text: '只有标题', tone: 'bad' }
 }

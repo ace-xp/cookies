@@ -1970,7 +1970,13 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .prelaunch-row > span:first-child b { font-size: 11px; }
 .prelaunch-row > span:first-child small { margin-top: 5px; color: var(--muted); font-size: 9px; }
 .prelaunch-row > span:last-child { display: flex; align-items: center; gap: 5px; color: var(--success); font-weight: 650; }
+/* 右栏没东西可放时整页并成一栏。留着一条空栏的话，主栏永远只有三分之二宽，
+   而那三分之一里什么都没有。 */
+.prelaunch-workspace.is-solo { grid-template-columns: minmax(0, 1fr); }
+.prelaunch-workspace.is-solo .prelaunch-main { border-right: 0; }
 .prelaunch-detail { padding: 22px; }
+.prelaunch-detail-head { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.prelaunch-detail-head .section-label { margin-bottom: 0; }
 .prelaunch-detail h3 { margin-top: 7px; font-size: 17px; line-height: 1.4; }
 .prelaunch-detail > p { margin-top: 6px; color: var(--muted); font-size: 10px; }
 .prelaunch-fact { display: grid; grid-template-columns: 24px 1fr; gap: 9px; padding: 16px 0; border-bottom: 1px solid var(--line); }
@@ -6056,9 +6062,14 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .assets-mini-list { display: grid; margin: 10px 0 0; padding: 0; list-style: none; }
 .assets-mini-list > li { border-bottom: 1px solid var(--line); }
 .assets-mini-list > li:last-child { border-bottom: 0; }
-.assets-mini-list button, .assets-mini-list > li > span { display: grid; width: 100%; gap: 2px; padding: 8px 6px; background: transparent; text-align: left; }
-.assets-mini-list b { font-size: 10px; }
+/* 标题一列吃掉剩下的宽度，状态贴右边。两样东西排一行，八条素材只占八行——
+   状态挂在第二行的话，同样的清单要占十六行，一屏就装不下了。 */
+.assets-mini-list button, .assets-mini-list > li > span { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; gap: 10px; align-items: center; padding: 8px 6px; background: transparent; text-align: left; }
+.assets-mini-list b { min-width: 0; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .assets-mini-list small { color: var(--muted); font-size: 9px; }
+.assets-mini-tag { font-size: 9px; font-style: normal; white-space: nowrap; color: var(--muted); }
+.assets-mini-tag.tone-ready { color: var(--success); }
+.assets-mini-tag.tone-bad { color: var(--danger); }
 .assets-mini-list button:hover { background: var(--subtle); }
 .assets-mini-list button.active { background: var(--cobalt-soft); color: var(--cobalt-dark); }
 .assets-column .prelaunch-boundary { margin: 10px 0 0; }
@@ -6084,19 +6095,18 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 /* 落点行：上面两栏说「有什么」，这一行说「其中能真的拿去解释的有几条」。 */
 .assets-converge { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 13px 18px; border: 1px solid var(--line); background: var(--cobalt-soft); color: var(--cobalt-dark); font-size: 11px; }
 .assets-converge > svg { color: var(--cobalt); }
-.assets-converge > span { margin-right: auto; }
-.assets-converge b { font-size: 15px; }
+.assets-converge > span { margin-right: auto; font-size: 12px; }
 
-/* 三个队列。顺序就是优先级，红色那条永远第一。 */
-.assets-queues { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.assets-queue { display: grid; align-content: start; gap: 7px; padding: 14px 15px; border: 1px solid var(--line); border-top: 2px solid var(--line-strong); background: var(--surface); }
-.assets-queue.urgent { border-top-color: var(--danger); background: oklch(.985 .012 25); }
-.assets-queue.urgent strong { color: var(--danger); }
-.assets-queue-head { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
-.assets-queue-head strong { font-size: 12px; }
-.assets-queue-head .secondary-button { height: 26px; padding: 0 10px; font-size: 9px; }
-.assets-queue > p { color: var(--muted); font-size: 9px; line-height: 1.65; }
-.assets-queue > small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+/* 要处理的事。一件一行，一件也没有时这一块整个不渲染——不留空盒子，
+   否则「什么都没有」也会占掉一块地方，等于四个 0 换了个样子。 */
+.assets-alerts { display: grid; gap: 8px; }
+.assets-alert { display: flex; flex-wrap: wrap; gap: 11px; align-items: center; padding: 11px 15px; border: 1px solid var(--line); border-left: 3px solid var(--warning); background: oklch(.985 .028 88); font-size: 11px; }
+.assets-alert > svg { flex: none; color: var(--warning); }
+.assets-alert > span { margin-right: auto; }
+.assets-alert.urgent { border-left-color: var(--danger); background: oklch(.985 .012 25); }
+.assets-alert.urgent > svg { color: var(--danger); }
+.assets-alert .secondary-button { height: 27px; padding: 0 11px; font-size: 9px; }
+.assets-alert-detail { display: grid; gap: 4px; padding: 0 18px; color: var(--muted); font-size: 9px; line-height: 1.55; }
 
 /* 找相似。 */
 .similar-view { display: grid; padding: 18px 24px 24px; }
@@ -6318,7 +6328,9 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .cite-error { display: inline-flex; align-items: center; gap: 4px; color: var(--danger); font-size: 10px; }
 
 @media (max-width: 1180px) {
-  .assets-queues { grid-template-columns: minmax(0, 1fr); }
+  .assets-columns { grid-template-columns: minmax(0, 1fr); }
+  .assets-column { border-right: 0; border-bottom: 1px solid var(--line); }
+  .assets-column:last-child { border-bottom: 0; }
   .external-columns { grid-template-columns: minmax(0, 1fr); }
   .external-list { border-right: 0; border-bottom: 1px solid var(--line); }
 }
