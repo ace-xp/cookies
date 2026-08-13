@@ -79,6 +79,9 @@ type Application interface {
 	ListAssetPage(context.Context, contract.ActorContext, contract.ProjectID, insights.AssetFilter) (insights.AssetPage, error)
 	GetAsset(context.Context, contract.ActorContext, contract.ProjectID, string) (insights.Asset, error)
 	ListAssetLineage(context.Context, contract.ActorContext, contract.ProjectID, string) ([]insights.Asset, error)
+	// ReadAssetPoster 返回封面的地址，不返回图片本身。取不到时报 ErrNotFound，
+	// 前端退回类型图标。
+	ReadAssetPoster(context.Context, contract.ActorContext, contract.ProjectID, string) (string, error)
 	IdentifyAssetType(context.Context, contract.ActorContext, contract.ProjectID, string, insights.IdentifyAssetTypeRequest) (insights.Asset, error)
 	RegisterAssetMapping(context.Context, contract.ActorContext, contract.ProjectID, insights.RegisterAssetMappingRequest) (insights.AssetMapping, error)
 	ListAssetMappings(context.Context, contract.ActorContext, contract.ProjectID, insights.AssetMappingFilter) ([]insights.AssetMapping, error)

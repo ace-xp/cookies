@@ -563,6 +563,30 @@ func TestInsightsHTTPExposesAssetAnalysisSurface(t *testing.T) {
 	}
 }
 
+// 封面走 302 而不是代理字节：一屏几十张缩略图，全从 API 过一遍会把它压垮。
+func TestInsightsHTTPRedirectsToAssetPoster(t *testing.T) {
+	t.Parallel()
+	server := New(&applicationStub{posterURL: "https://blob.example.com/poster.jpg?sig=abc"})
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, authenticatedRequest(http.MethodGet,
+		"/api/insights/v1/projects/project_1/assets/insightasset_1/poster", ""))
+	if response.Code != http.StatusFound {
+		t.Fatalf("应当 302，得到 %d：%s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Location"); got != "https://blob.example.com/poster.jpg?sig=abc" {
+		t.Fatalf("Location 不对：%q", got)
+	}
+
+	// 没有封面是常态——还没抽完帧、或者这条素材根本没有平台文件。
+	// 这时候要给 404 让前端退回类型图标，不能 500 把它当故障。
+	missing := httptest.NewRecorder()
+	New(&applicationStub{}).ServeHTTP(missing, authenticatedRequest(http.MethodGet,
+		"/api/insights/v1/projects/project_1/assets/insightasset_1/poster", ""))
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("没有封面时应当 404，得到 %d", missing.Code)
+	}
+}
+
 // AI 提特征只挂在一条显式的动词上，分析留痕可按素材读也可按项目读。
 func TestInsightsHTTPExposesFeatureExtraction(t *testing.T) {
 	t.Parallel()
@@ -731,6 +755,8 @@ type applicationStub struct {
 
 	asset           insights.Asset
 	assetNextCursor string
+	// posterURL 为空表示这条素材现在没有封面——那是常态，不是故障。
+	posterURL       string
 	promotedAssetID string
 	returnedAssetID string
 
@@ -974,6 +1000,12 @@ func (s *applicationStub) GetAsset(context.Context, contract.ActorContext, contr
 }
 func (s *applicationStub) ListAssetLineage(context.Context, contract.ActorContext, contract.ProjectID, string) ([]insights.Asset, error) {
 	return []insights.Asset{s.asset}, nil
+}
+func (s *applicationStub) ReadAssetPoster(context.Context, contract.ActorContext, contract.ProjectID, string) (string, error) {
+	if s.posterURL == "" {
+		return "", insights.ErrNotFound
+	}
+	return s.posterURL, nil
 }
 func (s *applicationStub) IdentifyAssetType(context.Context, contract.ActorContext, contract.ProjectID, string, insights.IdentifyAssetTypeRequest) (insights.Asset, error) {
 	return s.asset, nil

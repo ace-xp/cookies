@@ -1104,3 +1104,37 @@ func TestMiyunIsItsOwnSourceKind(t *testing.T) {
 		t.Fatal("米云不是外部证据")
 	}
 }
+
+func TestReadAssetPosterNeedsPlatformReference(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	ctx := context.Background()
+	asset, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+		Title: "手工登记的一条", SourceKind: AssetSourceUpload,
+	})
+	if err != nil {
+		t.Fatalf("登记失败：%v", err)
+	}
+	// 没有平台引用就没有源文件，也就无从抽帧。这时候要明确说没有，
+	// 不能返回空串让前端拿去当 URL——那会加载一个空地址，控制台一片红。
+	if _, err = service.ReadAssetPoster(ctx, actor, "project_1", asset.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("没有平台引用时应当报没有，得到 %v", err)
+	}
+}
+
+func TestReadAssetPosterWithoutPortSaysSo(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	service.Posters = nil
+	ctx := context.Background()
+	asset, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+		Title: "有平台引用的一条", SourceKind: AssetSourceUpload,
+		PlatformAssetID: "asset_1", PlatformAssetVersion: 1,
+	})
+	if err != nil {
+		t.Fatalf("登记失败：%v", err)
+	}
+	if _, err := service.ReadAssetPoster(ctx, actor, "project_1", asset.ID); err == nil {
+		t.Fatal("没接封面端口时应当报错，而不是假装有封面")
+	}
+}

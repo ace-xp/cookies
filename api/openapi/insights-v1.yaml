@@ -691,6 +691,29 @@ paths:
                       $ref: '#/components/schemas/InsightAsset'
         default:
           $ref: '#/components/responses/Problem'
+  /api/insights/v1/projects/{project_id}/assets/{asset_id}/poster:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - $ref: '#/components/parameters/AssetID'
+    get:
+      summary: Fetch the asset poster
+      description: >-
+        Redirects to a signed, expiring image URL. Returns 404 whenever there is
+        no poster right now — still being extracted, extraction failed, or the
+        asset has no platform file at all. Clients should fall back to a type
+        icon rather than treating 404 as an error.
+      operationId: getInsightAssetPoster
+      responses:
+        '302':
+          description: Redirect to the poster image.
+          headers:
+            Location:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
   /api/insights/v1/projects/{project_id}/assets/similar:
     parameters:
       - $ref: '#/components/parameters/ProjectID'

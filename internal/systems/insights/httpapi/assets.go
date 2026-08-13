@@ -28,6 +28,7 @@ func (s *Server) registerAssetRoutes() {
 	s.mux.HandleFunc("POST /api/insights/v1/projects/{project_id}/assets/{asset_action}", s.assetAction)
 	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}", s.getAsset)
 	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}/lineage", s.listAssetLineage)
+	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}/poster", s.getAssetPoster)
 	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}/features", s.listAssetFeatures)
 	s.mux.HandleFunc("PATCH /api/insights/v1/projects/{project_id}/assets/{asset_id}/features", s.patchAssetFeatures)
 	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}/analysis-runs", s.listAssetAnalysisRuns)
@@ -115,6 +116,19 @@ func (s *Server) listAssetLineage(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"items": values})
+}
+
+// getAssetPoster 把请求 302 到一个带签名、会过期的地址。
+//
+// 不代理字节：缩略图是最高频的请求，一个清单一屏就是几十张。让它们直接
+// 打到对象存储，API 只负责说清「哪一张、能看多久」。
+func (s *Server) getAssetPoster(writer http.ResponseWriter, request *http.Request) {
+	url, err := s.app.ReadAssetPoster(request.Context(), mustActor(request), projectID(request), request.PathValue("asset_id"))
+	if err != nil {
+		writeError(writer, request, err)
+		return
+	}
+	http.Redirect(writer, request, url, http.StatusFound)
 }
 
 func (s *Server) listAssetFeatures(writer http.ResponseWriter, request *http.Request) {

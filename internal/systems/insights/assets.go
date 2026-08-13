@@ -711,6 +711,13 @@ type AssetRepository interface {
 	CountAssetFeaturesByReviewState(context.Context, contract.OrganizationID, contract.ProjectID, string, ReviewState) (int, error)
 }
 
+// PosterReader 把一个平台素材版本的封面换成一个可以直接放进 <img src> 的地址。
+//
+// 洞察自己不抽帧、不存图：那是素材库的事。这里只要一个能看的地址。
+type PosterReader interface {
+	ReadPoster(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, platformAssetID string, platformAssetVersion int64) (string, error)
+}
+
 // IndexAsset registers a creative revision so it can be analysed (AM-001).
 func (s Service) IndexAsset(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, request IndexAssetRequest) (Asset, error) {
 	if err := s.assetsReady(actor, projectID, ScopeWrite); err != nil {
@@ -795,6 +802,27 @@ func (s Service) ListAssetPage(ctx context.Context, actor contract.ActorContext,
 		filter.Limit = assetPageDefaultLimit
 	}
 	return s.Assets.ListAssetPage(ctx, actor.OrganizationID, projectID, filter)
+}
+
+// ReadAssetPoster 取一条素材的封面地址。
+//
+// 取不到就报 ErrNotFound，让前端退回类型图标。封面是锦上添花——
+// 为了一张缩略图让整个清单打不开是本末倒置。
+func (s Service) ReadAssetPoster(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, assetID string) (string, error) {
+	if err := s.assetsReady(actor, projectID, ScopeRead); err != nil {
+		return "", err
+	}
+	asset, err := s.Assets.GetAsset(ctx, actor.OrganizationID, projectID, assetID)
+	if err != nil {
+		return "", err
+	}
+	if asset.PlatformAssetID == "" || asset.PlatformAssetVersion == 0 {
+		return "", fmt.Errorf("%w: 这条素材没有对应的平台文件，没有封面可取", ErrNotFound)
+	}
+	if s.Posters == nil {
+		return "", fmt.Errorf("封面服务没有接通")
+	}
+	return s.Posters.ReadPoster(ctx, actor, projectID, asset.PlatformAssetID, asset.PlatformAssetVersion)
 }
 
 const (

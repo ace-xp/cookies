@@ -586,6 +586,9 @@ type Service struct {
 	// Media 是客观可测层的唯一入口：从素材库读文件已经探测出来的元数据。
 	// 为 nil 时 DeriveFeatures 直接失败，不会退化成「按类型猜一个默认时长」。
 	Media MediaReader
+	// Posters 是素材封面的入口。为 nil 时清单退回类型图标，不影响其他功能——
+	// 缩略图是锦上添花，不该让一整页打不开。
+	Posters PosterReader
 	// Understanding 是视频语义特征的入口：把视频交给多模态，拿回带帧号的证据。
 	// 为 nil 时视频类退回老路（人填画面描述），不是报错——没接多模态的环境里，
 	// 提取仍然应该做得成，只是做得糙。
