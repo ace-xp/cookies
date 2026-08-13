@@ -34,6 +34,26 @@ func (r *derivativeRepoStub) FailDerivativeScheduling(_ context.Context, id, cod
 	r.job.Status, r.job.ErrorCode, r.job.UpdatedAt = ProcessingFailed, code, now
 	return r.value, r.job, nil
 }
+func (r *derivativeRepoStub) GetDerivative(_ context.Context, org contract.OrganizationID, project contract.ProjectID, source contract.AssetVersionRef, profile DerivativeProfile) (AssetDerivative, error) {
+	if r.value.ID == "" || r.value.OrganizationID != org || r.value.ProjectID != project ||
+		r.value.Source != source || r.value.Profile != profile {
+		return AssetDerivative{}, ErrNotFound
+	}
+	return r.value, nil
+}
+func (r *derivativeRepoStub) GetDerivativeByID(_ context.Context, id string) (AssetDerivative, error) {
+	if r.value.ID != id {
+		return AssetDerivative{}, ErrNotFound
+	}
+	return r.value, nil
+}
+func (r *derivativeRepoStub) CompleteDerivative(_ context.Context, id string, output contract.AssetVersionRef, now time.Time) (AssetDerivative, error) {
+	if r.value.ID != id {
+		return AssetDerivative{}, ErrNotFound
+	}
+	r.value.Status, r.value.Output, r.value.ErrorCode, r.value.UpdatedAt = DerivativeReady, &output, "", now
+	return r.value, nil
+}
 
 type derivativeSchedulerStub struct {
 	calls int
@@ -72,5 +92,23 @@ func TestDerivativeSchedulingFailureIsTerminalAndRetryable(t *testing.T) {
 	value, job, err = service.RetryDerivative(context.Background(), "org_1", "project_1", value.ID)
 	if err != nil || value.Status != DerivativeQueued || job.Status != ProcessingQueued || scheduler.calls != 2 {
 		t.Fatalf("retry failed: %#v %#v %v", value, job, err)
+	}
+}
+
+func TestFindDerivativeRequiresConfiguredRepository(t *testing.T) {
+	service := DerivativeService{}
+	_, err := service.FindDerivative(context.Background(), "k_org_1", "k_project_1",
+		contract.AssetVersionRef{AssetID: "asset_1", Version: 1}, DerivativePoster)
+	if err == nil {
+		t.Fatal("没有仓储时应当报错")
+	}
+}
+
+func TestFindDerivativeRejectsUnknownProfile(t *testing.T) {
+	service := DerivativeService{Repository: &derivativeRepoStub{}}
+	_, err := service.FindDerivative(context.Background(), "k_org_1", "k_project_1",
+		contract.AssetVersionRef{AssetID: "asset_1", Version: 1}, DerivativeProfile("thumbnail_v9"))
+	if err == nil {
+		t.Fatal("不认识的派生物规格应当被拒")
 	}
 }

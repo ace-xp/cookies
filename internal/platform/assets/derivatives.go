@@ -73,6 +73,9 @@ type DerivativeRepository interface {
 	EnsureDerivative(context.Context, AssetDerivative, ProcessingJob) (AssetDerivative, ProcessingJob, bool, error)
 	FailDerivativeScheduling(context.Context, string, string, time.Time) (AssetDerivative, ProcessingJob, error)
 	RetryDerivative(context.Context, contract.OrganizationID, contract.ProjectID, string, string, time.Time) (AssetDerivative, ProcessingJob, error)
+	GetDerivative(context.Context, contract.OrganizationID, contract.ProjectID, contract.AssetVersionRef, DerivativeProfile) (AssetDerivative, error)
+	GetDerivativeByID(context.Context, string) (AssetDerivative, error)
+	CompleteDerivative(context.Context, string, contract.AssetVersionRef, time.Time) (AssetDerivative, error)
 }
 
 type DerivativeScheduler interface {
@@ -153,6 +156,22 @@ func (s DerivativeService) RetryDerivative(ctx context.Context, org contract.Org
 		return value, job, fmt.Errorf("schedule derivative retry: %w", err)
 	}
 	return value, job, nil
+}
+
+// FindDerivative 查一个素材版本的某种派生物现在什么状态、产物在哪。
+//
+// 派生物这套东西建好之后一直没有查询口——只能建不能查，所以谁也用不上它。
+func (s DerivativeService) FindDerivative(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, source contract.AssetVersionRef, profile DerivativeProfile) (AssetDerivative, error) {
+	if s.Repository == nil {
+		return AssetDerivative{}, fmt.Errorf("derivative repository is required")
+	}
+	if !validDerivativeProfile(profile) {
+		return AssetDerivative{}, fmt.Errorf("unsupported derivative profile")
+	}
+	if err := source.Validate(); err != nil {
+		return AssetDerivative{}, err
+	}
+	return s.Repository.GetDerivative(ctx, organizationID, projectID, source, profile)
 }
 
 func validDerivativeProfile(profile DerivativeProfile) bool {

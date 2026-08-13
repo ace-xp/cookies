@@ -93,6 +93,63 @@ func (r MySQLRepository) RetryDerivative(ctx context.Context, org contract.Organ
 	return value, job, nil
 }
 
+// GetDerivative / GetDerivativeByID 是把已有的两个内部取数函数露出去。
+// 之前它们只在事务里被自己人用，外面既查不到派生物状态也拿不到产物——
+// 这套脚手架建好之后一直没跑起来，缺的就是这个口。
+func (r MySQLRepository) GetDerivative(ctx context.Context, org contract.OrganizationID, project contract.ProjectID, source contract.AssetVersionRef, profile DerivativeProfile) (AssetDerivative, error) {
+	db, err := r.db()
+	if err != nil {
+		return AssetDerivative{}, err
+	}
+	value, _, err := getDerivativeByKey(ctx, db, org, project, source, profile)
+	return value, err
+}
+
+func (r MySQLRepository) GetDerivativeByID(ctx context.Context, id string) (AssetDerivative, error) {
+	db, err := r.db()
+	if err != nil {
+		return AssetDerivative{}, err
+	}
+	value, _, err := getDerivativeByID(ctx, db, id)
+	return value, err
+}
+
+// CompleteDerivative 把产物写回并置为 ready。
+//
+// 只从 queued/running 转过来：worker 重复投递时，第二次的 UPDATE 影响 0 行，
+// 而不是把一条已经 ready 的记录指向另一张图。任务行跟着一起结，否则队列里
+// 那条永远停在 running，重试通道会以为它还在跑。
+func (r MySQLRepository) CompleteDerivative(ctx context.Context, id string, output contract.AssetVersionRef, now time.Time) (AssetDerivative, error) {
+	db, err := r.db()
+	if err != nil {
+		return AssetDerivative{}, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return AssetDerivative{}, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE asset_derivatives SET status='ready',output_asset_id=?,output_asset_version=?,error_code=NULL,updated_at=?
+		 WHERE id=? AND status IN ('queued','running')`,
+		string(output.AssetID), output.Version, now, id); err != nil {
+		return AssetDerivative{}, err
+	}
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE asset_processing_jobs SET status='succeeded',error_code=NULL,updated_at=?
+		 WHERE derivative_id=? AND status IN ('queued','running')`, now, id); err != nil {
+		return AssetDerivative{}, err
+	}
+	value, _, err := getDerivativeByID(ctx, tx, id)
+	if err != nil {
+		return value, err
+	}
+	if err = tx.Commit(); err != nil {
+		return AssetDerivative{}, err
+	}
+	return value, nil
+}
+
 type derivativeQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
