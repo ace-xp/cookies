@@ -3,18 +3,18 @@ import test from 'node:test'
 import {
   assetStatusLabel,
   buildOverviewAlerts,
-  externalNote,
   overviewTally,
 } from '../src/components/insight/assets/OverviewView.tsx'
-import type { ApiExternalAsset } from '../src/data/api.ts'
 
 /**
  * 素材总览这一屏的规矩是「有事才出声」：没事的时候一个字都不该出现。
  * 这里守的就是这条——一旦哪天有人给告警块加了个「全都正常」的空态，
  * 第一个 case 就会挂。
  */
-test('四件事都没有时一行都不出', () => {
-  assert.deepEqual(buildOverviewAlerts({ unmatched: 0, failures: 0, needsReview: 0, notImported: 0 }), [])
+test('每件事都没有时一行都不出', () => {
+  assert.deepEqual(buildOverviewAlerts({
+    unmatched: 0, failures: 0, needsReview: 0, notImported: 0, expiring: 0, emptyEvidence: 0,
+  }), [])
 })
 
 test('只有非零的那件事会出声', () => {
@@ -85,45 +85,42 @@ test('没有别的情况时横幅只有两段', () => {
   assert.equal(overviewTally(6, 6, []), '6 条素材 · 6 条已能解释')
 })
 
-const evidence = (patch: Partial<ApiExternalAsset>): ApiExternalAsset => ({
-  id: 'external_1',
-  project_id: 'project_1',
-  title: '竞品B·信息流首帧',
-  purpose: 'benchmark',
-  asset_type: 'preroll_ad',
-  features: {},
-  retention_until: '2026-09-30',
-  original_purged: false,
-  created_at: '2026-08-01T00:00:00Z',
-  ...patch,
-} as ApiExternalAsset)
+/**
+ * 外部证据的正文搬去了它自己那个标签页，总览不再并排列一栏。但有两件事不能跟着
+ * 搬走：它们有时限，人不主动去那一页看就会白白错过。所以正文归正文，这两件事
+ * 仍然汇到总览顶上来。
+ */
+test('原片快到期要汇到总览顶上，日子写进话里', () => {
+  const [alert] = buildOverviewAlerts({
+    unmatched: 0, failures: 0, needsReview: 0, notImported: 0,
+    expiring: 2, expiringDate: '9月14日',
+  })
+  assert.equal(alert.key, 'expiring')
+  assert.equal(alert.target, '外部素材')
+  assert.match(alert.text, /2 条外部证据的原片 9月14日 前后/)
+})
+
+test('日子算不出来时话还是通顺的', () => {
+  const [alert] = buildOverviewAlerts({
+    unmatched: 0, failures: 0, needsReview: 0, notImported: 0, expiring: 1, expiringDate: '',
+  })
+  assert.match(alert.text, /原片就快被清掉/)
+})
+
+test('只有标题的证据也要出声，落到外部素材那一页', () => {
+  const [alert] = buildOverviewAlerts({
+    unmatched: 0, failures: 0, needsReview: 0, notImported: 0, emptyEvidence: 3,
+  })
+  assert.equal(alert.key, 'empty-evidence')
+  assert.equal(alert.target, '外部素材')
+  assert.equal(alert.action, '去补变量')
+  assert.match(alert.text, /3 条外部证据既没有文件也没标变量/)
+})
 
 /**
- * 一条既没有文件也没标变量的登记，引用它等于引用一个名字。
- * 它必须在自己那一行上标红——以前是在页顶报个总数，人还得回头数是哪几条。
+ * 外部证据的两件事是后加的，调用方可以不传。不传等于没事，
+ * 不能因为少了两个参数就凭空多出两行。
  */
-test('什么都没有的证据标红', () => {
-  assert.deepEqual(externalNote(evidence({})), { text: '只有标题', tone: 'bad' })
-})
-
-test('标了变量就算数，说清标了几条', () => {
-  assert.deepEqual(
-    externalNote(evidence({ features: { 开头形式: '人脸', 时长: '15s' } })),
-    { text: '2 条变量', tone: 'ready' })
-})
-
-/**
- * 留存期管的只是原件。一条没有文件的登记根本没有东西会被清掉，
- * 对它说「留到 X」是在催人做一件做不到的事。
- */
-test('只有真存了原件才提到期日', () => {
-  const note = externalNote(evidence({ storage_key: 'external/1.mp4' }))
-  assert.equal(note.tone, 'ready')
-  assert.match(note.text, /^原件留到 /)
-})
-
-test('原件删了就说删了，不再挂一个过去的日期', () => {
-  assert.deepEqual(
-    externalNote(evidence({ storage_key: 'external/1.mp4', original_purged: true })),
-    { text: '原件已删', tone: 'waiting' })
+test('不传外部证据那两项时不多出行', () => {
+  assert.deepEqual(buildOverviewAlerts({ unmatched: 0, failures: 0, needsReview: 0, notImported: 0 }), [])
 })

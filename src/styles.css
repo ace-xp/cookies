@@ -6053,9 +6053,12 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 
 /* 总览。左右两栏不只是分类，是两种所有权，所以中间那道竖线要看得见。 */
 .assets-overview { display: grid; gap: 18px; padding: 20px 24px 24px; }
-.assets-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 1px solid var(--line); background: var(--surface); }
-.assets-column { min-width: 0; padding: 16px 18px; border-right: 1px solid var(--line); }
-.assets-column:last-child { border-right: 0; }
+.assets-panel { border: 1px solid var(--line); background: var(--surface); }
+.assets-column { min-width: 0; padding: 16px 18px; }
+/* 外部证据在总览上只剩这一条去处：报个数、说清它算不算在结论里，然后让路。 */
+.assets-crosslink { display: flex; width: 100%; gap: 10px; align-items: center; padding: 12px 16px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 10px; text-align: left; }
+.assets-crosslink > span { margin-right: auto; }
+.assets-crosslink:hover { background: var(--subtle); color: var(--text); }
 .assets-column-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
 .assets-column-head .section-label { margin-bottom: 0; margin-right: auto; }
 .assets-column-lead { margin-top: 8px; color: var(--muted); font-size: 10px; line-height: 1.6; }
@@ -6328,9 +6331,6 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .cite-error { display: inline-flex; align-items: center; gap: 4px; color: var(--danger); font-size: 10px; }
 
 @media (max-width: 1180px) {
-  .assets-columns { grid-template-columns: minmax(0, 1fr); }
-  .assets-column { border-right: 0; border-bottom: 1px solid var(--line); }
-  .assets-column:last-child { border-bottom: 0; }
   .external-columns { grid-template-columns: minmax(0, 1fr); }
   .external-list { border-right: 0; border-bottom: 1px solid var(--line); }
 }

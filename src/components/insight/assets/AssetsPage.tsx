@@ -31,7 +31,7 @@ const headings: Record<AssetsView, { label: string; title: string; lead: string 
   overview: {
     label: 'ASSETS',
     title: '手上有哪些素材，它们还差什么才能进复盘',
-    lead: '左边是平台内的，右边是外部证据。要你处理的事会跳到最上面一行，没跳就是没事。',
+    lead: '这一屏只讲平台内素材，外部证据在它自己那一页。要你处理的事会跳到最上面一行，没跳就是没事。',
   },
   ledger: {
     label: 'LEDGER',
