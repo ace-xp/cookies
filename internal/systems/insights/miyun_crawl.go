@@ -609,7 +609,7 @@ func (s Service) HandleMiyunMaterialImportJob(ctx context.Context, claim jobrunt
 		// 台账那一套是给平台自己产的素材用的，米云不走那条路。
 		Role: AssetRoleAnalysis,
 		ID:   insightID, OrganizationID: payload.OrganizationID, ProjectID: payload.ProjectID, LineageID: insightID, Revision: 1,
-		Title: material.Title, SourceKind: AssetSourceExternal, SourceRef: miyunTraceableSourceRef(material),
+		Title: material.Title, SourceKind: AssetSourceMiyun, SourceRef: miyunTraceableSourceRef(material),
 		SourceJobID:     material.FirstSeenCrawlJobID,
 		PlatformAssetID: string(result.AssetRef.AssetID), PlatformAssetVersion: result.AssetRef.Version,
 		AnalysisStatus: AnalysisAwaitingData, AnalysisStatusReason: "Authorized Miyun import; awaiting analysis.",

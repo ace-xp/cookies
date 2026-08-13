@@ -254,7 +254,7 @@ func TestMiyunFoundationAgainstMySQL(t *testing.T) {
 		Result: insights.MiyunAuthorizedImportResult{ExternalImportID: ledger.ID, AssetRef: assetRef.AssetVersion},
 		InsightAsset: insights.Asset{
 			ID: insightAssetID, OrganizationID: organizationID, ProjectID: projectID, LineageID: insightAssetID, Revision: 1,
-			Title: "Imported Miyun material", SourceKind: insights.AssetSourceExternal, SourceRef: "miyun://material/" + material.MiyunMaterialID,
+			Title: "Imported Miyun material", SourceKind: insights.AssetSourceMiyun, SourceRef: "miyun://material/" + material.MiyunMaterialID,
 			SourceJobID: job.ID, PlatformAssetID: string(assetRef.AssetVersion.AssetID), PlatformAssetVersion: assetRef.AssetVersion.Version,
 			AnalysisStatus: insights.AnalysisAwaitingData, AnalysisStatusReason: "Authorized Miyun import; awaiting analysis.",
 			AnalysisStatusChangedAt: &material.UpdatedAt, Version: 1, CreatedBy: userID, CreatedAt: material.UpdatedAt, UpdatedAt: material.UpdatedAt,

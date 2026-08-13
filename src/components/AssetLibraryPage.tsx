@@ -62,7 +62,12 @@ const sourceKindLabels: Record<string, string> = {
   creative: '创意模块产物',
   upload: '上传文件',
   external: '外部引用',
+  miyun: '米云',
 }
+
+// 手工登记只给这三种。米云的素材是米云那条线自己写进来的，
+// 人在这儿选「米云」等于给一个别处来的东西盖米云的章——那个章后面没有采集记录。
+const registerableSourceKinds: ApiAssetSourceKind[] = ['creative', 'upload', 'external']
 
 const confidenceLabels: Record<ApiConfidence, string> = { low: '低', medium: '中', high: '高' }
 
@@ -517,7 +522,7 @@ export function AssetIndexForm({ assets, projectId, busy, onCancel, onDone }: {
       <div className="revise-grid">
         <label><small>来源</small>
           <select value={sourceKind} onChange={event => setSourceKind(event.target.value as ApiAssetSourceKind)}>
-            {(Object.keys(sourceKindLabels) as ApiAssetSourceKind[]).map(kind => <option key={kind} value={kind}>{sourceKindLabels[kind]}</option>)}
+            {registerableSourceKinds.map(kind => <option key={kind} value={kind}>{sourceKindLabels[kind]}</option>)}
           </select>
         </label>
         <label><small>内容类型（认不准就留空）</small>

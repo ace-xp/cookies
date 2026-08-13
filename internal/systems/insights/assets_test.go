@@ -1092,3 +1092,15 @@ func TestBothAssetListersRejectUnknownRole(t *testing.T) {
 		t.Fatalf("ListAssetPage 应拒绝未知身份，得到：%v", err)
 	}
 }
+
+func TestMiyunIsItsOwnSourceKind(t *testing.T) {
+	t.Parallel()
+	if !AssetSourceMiyun.valid() {
+		t.Fatal("米云应该是一档独立来源")
+	}
+	// external 在界面上写的是「外部引用」，指的是平台外的竞品参照证据，那些永远不能投。
+	// 米云的素材能投、要跑归因，两者不能共用一个标签。
+	if AssetSourceMiyun == AssetSourceExternal {
+		t.Fatal("米云不是外部证据")
+	}
+}

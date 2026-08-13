@@ -68,11 +68,17 @@ const (
 	AssetSourceCreative AssetSourceKind = "creative" // 创意模块产物
 	AssetSourceUpload   AssetSourceKind = "upload"   // 上传文件
 	AssetSourceExternal AssetSourceKind = "external" // 外部引用
+	// AssetSourceMiyun 是米云采集、导入或回流回来的素材。
+	//
+	// 它从 external 里拆出来是因为那个标签在界面上写的是「外部引用」，指的是
+	// 平台外的竞品参照证据——那些永远不能投。米云的素材有 platform_asset_id、
+	// 能投、要跑归因。同一个词指两样东西，看的人一定会搞错。
+	AssetSourceMiyun AssetSourceKind = "miyun"
 )
 
 func (k AssetSourceKind) valid() bool {
 	switch k {
-	case AssetSourceCreative, AssetSourceUpload, AssetSourceExternal:
+	case AssetSourceCreative, AssetSourceUpload, AssetSourceExternal, AssetSourceMiyun:
 		return true
 	}
 	return false

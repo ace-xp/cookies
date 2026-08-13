@@ -139,7 +139,7 @@ func (s Service) UploadMiyunHandoffReturn(ctx context.Context, actor contract.Ac
 	if sourceMaterialID != "" {
 		sourceRef += ":" + sourceMaterialID
 	}
-	indexed, err := s.IndexAsset(ctx, actor, projectID, IndexAssetRequest{Title: request.Filename, SourceKind: AssetSourceExternal, SourceRef: sourceRef, SourceJobID: value.ID, PlatformAssetID: string(result.AssetVersion.AssetID), PlatformAssetVersion: result.AssetVersion.Version})
+	indexed, err := s.IndexAsset(ctx, actor, projectID, IndexAssetRequest{Title: request.Filename, SourceKind: AssetSourceMiyun, SourceRef: sourceRef, SourceJobID: value.ID, PlatformAssetID: string(result.AssetVersion.AssetID), PlatformAssetVersion: result.AssetVersion.Version})
 	if err != nil {
 		value.UpdatedAt = s.now()
 		_, _ = r.FailMiyunHandoffReturn(context.Background(), value, value.Version, "INSIGHT_INDEX_FAILED")

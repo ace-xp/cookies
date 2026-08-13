@@ -115,7 +115,7 @@ func (r MySQLRepository) CreateManualMiyunMaterial(ctx context.Context, record M
 		record.Snapshot.MaterialID != record.Material.ID || record.InsightAsset.ID != record.Material.InsightAssetID ||
 		record.Snapshot.OrganizationID != record.Material.OrganizationID || record.Snapshot.ProjectID != record.Material.ProjectID ||
 		record.InsightAsset.OrganizationID != record.Material.OrganizationID || record.InsightAsset.ProjectID != record.Material.ProjectID ||
-		record.InsightAsset.SourceKind != AssetSourceExternal ||
+		record.InsightAsset.SourceKind != AssetSourceMiyun ||
 		record.InsightAsset.PlatformAssetID != string(record.Material.PlatformAssetID) ||
 		record.InsightAsset.PlatformAssetVersion != record.Material.PlatformAssetVersion {
 		return MiyunManualImportResult{}, ErrInvalidRequest

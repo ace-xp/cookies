@@ -3477,8 +3477,13 @@ components:
       enum: [xiaohongshu_note, wechat_article, brand_ad, digital_human_ad, preroll_ad, hit_replica_ad]
     AssetSourceKind:
       type: string
-      description: Where an indexed asset came from (AM-001).
-      enum: [creative, upload, external]
+      description: >-
+        Where an indexed asset came from (AM-001). `external` means reference
+        evidence from outside the platform — competitor material that is never
+        run as an ad. `miyun` assets come from the Miyun pipeline and do go
+        live, so they are attributed like any other creative; the two used to
+        share the `external` label and reading it was a coin toss.
+      enum: [creative, upload, external, miyun]
     AssetRole:
       type: string
       description: >-

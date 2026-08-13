@@ -466,7 +466,7 @@ func (s Service) ManualImportMiyunMaterial(ctx context.Context, actor contract.A
 		InsightAsset: Asset{
 			Role: AssetRoleAnalysis,
 			ID:   insightAssetID, OrganizationID: actor.OrganizationID, ProjectID: projectID,
-			LineageID: insightAssetID, Revision: 1, Title: title, SourceKind: AssetSourceExternal,
+			LineageID: insightAssetID, Revision: 1, Title: title, SourceKind: AssetSourceMiyun,
 			SourceRef: request.SourceRef, PlatformAssetID: string(request.AssetRef.AssetID),
 			PlatformAssetVersion: request.AssetRef.Version, AnalysisStatus: AnalysisAwaitingData,
 			AnalysisStatusReason:    "Manual Miyun import registered; awaiting type identification and analysis.",

@@ -2217,7 +2217,7 @@ export type ApiInsightAssetType =
   | 'xiaohongshu_note' | 'wechat_article' | 'brand_ad'
   | 'digital_human_ad' | 'preroll_ad' | 'hit_replica_ad'
 
-export type ApiAssetSourceKind = 'creative' | 'upload' | 'external'
+export type ApiAssetSourceKind = 'creative' | 'upload' | 'external' | 'miyun'
 
 /**
  * AI 推断与人工结论是两层，互不覆盖（03 §14）。
