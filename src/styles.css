@@ -2053,6 +2053,11 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .freeze-pick small { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; }
 .freeze-pick select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 10px; }
 .freeze-pick select:focus { border-color: var(--cobalt); outline: none; }
+.freeze-pick input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 10px; }
+.freeze-pick input:focus { border-color: var(--cobalt); outline: none; }
+/* 控件后面那一句是补充说明，得往下贴；控件前面那一句是标题，往上贴。 */
+.freeze-pick input + small, .freeze-pick select + small { margin: 5px 0 0; line-height: 1.6; }
+.freeze-pick-warn { color: var(--danger); }
 /* 经验修订表单。字段多，两列排；输入框沿用 .experience-reason 的口径，
    免得同一屏里出现两种粗细的框。 */
 .experience-revise { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
@@ -6128,6 +6133,12 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .external-purpose { padding: 2px 8px; border-radius: 999px; background: var(--cobalt-soft); color: var(--cobalt-dark); font-size: 9px; font-weight: 650; }
 /* 到期日单独一行、不缩成灰字：原件被清掉之前，这是唯一的提醒。 */
 .external-retention { color: var(--warning); font-size: 9px; font-weight: 650; }
+/* 变量列表是这条证据的实际内容。原件被清掉之后它就是全部，所以给它正文的颜色，
+   不缩成灰字——灰字读起来像元信息，而这几行才是人当初收它的理由。 */
+.external-features { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 2px 0 0; padding: 0; list-style: none; }
+.external-features > li { padding: 2px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--subtle); color: var(--text); font-size: 9px; }
+.external-features > li > b { margin-right: 5px; color: var(--muted); font-weight: 650; }
+.external-empty-features { color: var(--warning) !important; }
 .external-form { display: grid; align-content: start; gap: 11px; padding: 16px; }
 .external-form label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
 .external-form input, .external-form select, .external-form textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; }
@@ -6178,9 +6189,14 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
    又不至于弱到像被禁用了——它仍然是可以参考的。 */
 .experience-card-soft { border-style: dashed; }
 .experience-review-flag { padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); font-size: 9px; font-weight: 650; }
+/* 版本标记是中性信息，不是警告：用灰底，别和「该看一眼了」抢注意力。 */
+.experience-lineage-flag { padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); font-size: 9px; font-weight: 650; }
 .experience-scope { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .experience-scope small { margin-left: 4px; font-size: 9px; }
 .experience-caveat { margin: 8px 0 0; padding: 7px 10px; background: color-mix(in srgb, var(--warning) 8%, transparent); color: var(--text-1); font-size: 10px; line-height: 1.6; }
+/* 缺格提示比档位提醒轻一档：档位说的是「这条结论靠不靠得住」，缺格说的是
+   「这条经验还没写完」。用同样的警示底色会让两件事看上去一样严重。 */
+.experience-gaps { margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .experience-trail-toggle { height: auto; margin-top: 9px; font-size: 10px; }
 .experience-trail-toggle svg { transition: transform .12s ease; }
 .experience-trail-toggle svg.rotated { transform: rotate(90deg); }
@@ -6194,6 +6210,17 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .evidence-trail p { margin: 0 0 4px; font-size: 10px; line-height: 1.6; }
 .evidence-trail ul { margin: 0; padding-left: 16px; font-size: 10px; line-height: 1.7; }
 .evidence-trail .panel-empty { padding: 0; text-align: left; font-size: 10px; }
+/* 「按哪一版标准判的」比同段其他行轻一档：它是查证时才要看的出处，不是结论本身。
+   里面那枚 .threshold-stamp 是 11px，比这一行还大，单独压回来对齐。 */
+/* 「留的是哪一条发现」。下拉排在文本框上面：先选依据、再改措辞，顺序反过来的话
+   人会先写完一句话，然后没有任何理由回头去挑发现。 */
+.harvest-source { display: grid; gap: 4px; margin-top: 10px; }
+.harvest-source small { color: var(--muted); font-size: 9px; }
+.harvest-source select { height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; }
+.harvest-source select:focus { outline: none; border-color: var(--cobalt); }
+.harvest-hint { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.evidence-threshold, .insight-card-threshold { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.evidence-threshold .threshold-stamp, .insight-card-threshold .threshold-stamp { margin-left: 0; font-size: 10px; line-height: inherit; }
 /* 反例给一点底色：填了这一格的经验才是真被人推敲过的，不能和别的段落一样平。 */
 .evidence-counterexamples { padding: 8px 10px; background: var(--subtle); }
 /* 「抄到别处」把要抄走的那句话原样摆出来。摆出来而不是只给一个按钮：
@@ -6246,6 +6273,14 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 /* 「这次该怎么做」独占一段并给底色：开工前的人只会读这一行，它得比结论本身还好找。 */
 .insight-card-action { margin: 9px 0 0; padding: 8px 10px; background: var(--cobalt-soft); color: var(--cobalt-dark); font-size: 10px; line-height: 1.6; }
 .pattern-conclusions { margin: 9px 0 0; padding-left: 16px; font-size: 10px; line-height: 1.7; }
+
+/* 「反复出现的」与「目前只算得上单次」两组之间的小标题。带一句解释，
+   否则人只看到两堆卡片，不知道凭什么分的。 */
+.pattern-group-head { margin: 6px 0 -2px; }
+.pattern-group-head p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+/* 名字没进特征体系的提醒。用警示底色而不是灰字：这不是补充说明，
+   是「这一行的次数可能是错的」。 */
+.pattern-ungoverned { margin: 8px 0 0; padding: 7px 9px; background: var(--subtle); color: var(--muted); font-size: 10px; line-height: 1.6; border-left: 2px solid var(--warning); }
 
 /* 「凭什么」和「用进 Brief」并排。两个都是次级按钮，谁也不抢——一个是查证，
    一个是动作，页面不替人决定先做哪个。 */

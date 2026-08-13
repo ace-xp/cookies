@@ -128,11 +128,16 @@ func externalRetentionUntil(windowEnd time.Time) time.Time {
 }
 
 // externalStorageKey 拼存储路径。前缀写死，和平台素材物理隔开。
+//
+// **没有文件就不给路径**。以前不带扩展名时也会拼出一条 external/xxx 的路径，于是
+// 一条只填了标题和用途、根本没有任何文件的登记，在库里看起来和「存了原片」一模一样
+// ——界面据此对它说「原片将在 X 前后清掉」，而那个原片从来不存在。空字符串是这里
+// 唯一诚实的值：清理任务本来就跳过空 storage_key。
 func externalStorageKey(id, ext string) string {
-	if ext == "" {
-		return externalStoragePrefix + id
+	if strings.TrimSpace(ext) == "" {
+		return ""
 	}
-	return externalStoragePrefix + id + "." + strings.TrimPrefix(ext, ".")
+	return externalStoragePrefix + id + "." + strings.TrimPrefix(strings.TrimSpace(ext), ".")
 }
 
 // ExternalAssetRepository 单独一个接口，不并进 AssetRepository。

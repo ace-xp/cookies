@@ -34,6 +34,24 @@ export function SimilarPanel({ result }: { result: ApiSimilarAssetResult }) {
           </li>)}
         </ul>
       </li>)}
-    </ul> : <p className="panel-empty">没有在这些变量上一致的素材。</p>}
+    </ul> : result.note
+      // 后端一条都没找到时已经给了 note（「库里没有在这些变量上和它一致的素材。」），
+      // 再补一句自己的空态，人会连着读到两句一模一样的话，像是页面出了故障。
+      ? null
+      : <p className="panel-empty">没有在这些变量上一致的素材。</p>}
+
+    {/* 探针太薄这件事，找到和没找到都要说。
+        没找到时：按 1~2 个变量本来就极容易落空，这个否定说明不了任何事，
+        而屏幕上它和一个货真价实的否定长得一模一样。
+        找到了时同样危险——一条只在「时长=15」上一致的素材，会被当成同一类拉进
+        样本里去撑结论，而那一行「重叠 1 个变量」看着像结果，不像警告。 */}
+    {result.probe.length > 0 && result.probe.length < 3
+      ? <p className="similar-note">
+        这次只按 {result.probe.length} 个变量找的——种子素材身上能比对的变量本来就少
+        （可能是提取失败，也可能是还没填）。{result.items.length
+          ? '按这么薄的条件凑出来的一致，不足以说明它们是同一类；拿去把样本做厚之前，先把变量补齐再找一次。'
+          : '所以「一条都没有」不代表库里真的没有相似素材。先去「素材 · 变量」把它的变量补齐，再找一次。'}
+      </p>
+      : null}
   </div>
 }

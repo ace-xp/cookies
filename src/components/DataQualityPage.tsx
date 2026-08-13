@@ -9,7 +9,9 @@ import {
   type ApiDataQualityIssueState,
   type ApiDataQualityReport,
   type ApiDataQualitySeverity,
+  type ApiDataSourceStatus,
   type ApiQualityStatus,
+  type ApiSourceHealth,
 } from '../data/api'
 import type { DataState } from '../types'
 import { StateBoundary } from './StateBoundary'
@@ -17,7 +19,7 @@ import { StateBoundary } from './StateBoundary'
 /**
  * 数据质量（10-ad-data-connectors.md §10/§11，导航见 19 §5.2）。
  *
- * 这个模块存在的理由只有一条：阻止错误数据产生强结论。所以它不是一个仪表盘，
+ * 这个模块存在的理由只有一条：阻止错误数据被拿去当依据。所以它不是一个仪表盘，
  * 是一个队列——20 §4.1 明确要求问题队列为主，影响范围和修复状态为辅，错误与
  * 延迟置顶。
  *
@@ -101,6 +103,16 @@ const qualityStatusLabels: Record<ApiQualityStatus, string> = {
   blocked: '已阻断',
 }
 
+// 数据源的**生命周期**状态。和上面那张 qualityStatusLabels 不是一回事：这一张说的是
+// 「这条通路开着没有」，那一张说的是「收进来的数对不对」。措辞和「数据接入」页保持一致，
+// 免得同一个源在两页里叫两个名字。
+const sourceStatusLabels: Record<ApiDataSourceStatus, string> = {
+  draft: '未启用',
+  active: '同步中',
+  paused: '已暂停',
+  revoked: '已撤销授权',
+}
+
 const headings: Record<ViewTarget, { title: string; blurb: string }> = {
   freshness: {
     title: '数据够不够新',
@@ -129,7 +141,10 @@ const headings: Record<ViewTarget, { title: string; blurb: string }> = {
 }
 
 const emptyHints: Record<ViewTarget, string> = {
-  freshness: '所有启用中的数据源都在按时回数，没有滞后。',
+  // 「没有滞后」不能一句话说死：底表里可能正躺着一个落后 2 天的源。这一句要把
+  // 「为什么它不算问题」一并说了，否则同一屏上下两句互相打脸。
+  freshness: '没有需要处理的新鲜度问题。落后两天以内算正常波动，不进这个队列；'
+    + '已暂停和已撤销的源不判滞后，但它们如果在窗口中途停掉，会另报一条覆盖不全。',
   missing: '窗口内没有发现日期空洞，也没有导入被拒的行。',
   anomaly: '没有数据源被标为异常，也没有检出物理上不成立的数值。',
   caliber: '这个窗口里的数据口径一致，可以直接相加和比较。',
@@ -229,7 +244,7 @@ export function DataQualityPage({ state, activeView }: { state: DataState; activ
         {report && !report.strong_conclusions_allowed ? <div className="feature-stack">
           <span>这个窗口的数据现在不能用来下结论</span>
           <b>{report.blocked_reason || '存在阻断级问题。'}</b>
-          <b>投前洞察和投后分析都不应据此给出强结论，也不应触发自动优化动作。先把上面这些修掉。</b>
+          <b>投前洞察和投后分析都不应据此给出能归因的结论，也不应触发自动优化动作。先把上面这些修掉。</b>
         </div> : null}
 
         <div className="prelaunch-filterbar">
@@ -262,15 +277,26 @@ export function DataQualityPage({ state, activeView }: { state: DataState; activ
             </button>)}
         </div>
 
-        {/* 新鲜度视图额外给出底表：哪个源截止到哪天，是所有滞后判断的依据（doc10 §11）。 */}
+        {/* 新鲜度视图额外给出底表：哪个源截止到哪天，是所有滞后判断的依据（doc10 §11）。
+            这张表以前只写「滞后 N 天」，于是一个滞后 2 天（还在容忍范围内）或者已经暂停
+            （本来就不判滞后）的源，会顶着一个天数躺在这里，而上面的队列一条问题都没有
+            ——同一屏两句相反的话。现在每一行都说清自己算不算数。 */}
         {target === 'freshness' && report?.sources?.length ? <div className="feature-stack">
           <span>数据源截止到哪天（{report.sources.length} 个）</span>
           {report.sources.map(source => <b key={source.data_source_id}>
-            {source.label} · {qualityStatusLabels[source.quality_status]}
+            {/* 这两段必须连在一行里写。跨行时 JSX 会把表达式和下一行文字之间的换行
+                连同缩进一起吃掉，屏幕上出现「接入未启用· 数据正常」——分隔符贴在前一个
+                词屁股上，读起来像少打了一个字。 */}
+            {source.label} · 接入{sourceStatusLabels[source.status] ?? source.status} · 数据{qualityStatusLabels[source.quality_status]}
             {source.data_through ? ` · 数据到 ${formatDate(source.data_through)}` : ' · 还没有任何数据'}
-            {source.freshness_days > 0 ? ` · 滞后 ${source.freshness_days} 天` : ''}
+            {source.freshness_days > 0 ? ` · 落后今天 ${source.freshness_days} 天` : ''}
             {source.quality_note ? ` · ${source.quality_note}` : ''}
+            <small>{freshnessVerdict(source)}</small>
           </b>)}
+          <b><small>
+            「接入状态」说的是这条通路开着还是关着，「数据状态」说的是收进来的数东西对不对
+            ——两个都叫状态，但一个是通路的事，一个是数的事。
+          </small></b>
         </div> : null}
       </section>
 
@@ -357,6 +383,23 @@ function IssueDetail({ issue, busy, onResolve }: {
 // 在「修复队列」里数出来的条数会和角标对不上。
 function inQueue(state: ApiDataQualityIssueState): boolean {
   return state === 'open' || state === 'acknowledged' || state === 'reopened'
+}
+
+/**
+ * 底表每一行后面那句话：这个天数算不算问题。
+ *
+ * 「算不算」由后端给（`freshness_judged`），前端不自己按天数推——阈值是后端的口径，
+ * 这边复制一份，改了 Go 忘了改这里，底表就会开始说一件和队列相反的事。这里只负责
+ * 把「为什么不算」讲清楚，而理由分三种：没启用、还没有数据、在容忍范围内。
+ */
+function freshnessVerdict(source: ApiSourceHealth): string {
+  if (source.freshness_judged) return '已经进了上面的待处理队列。'
+  if (source.status !== 'active') {
+    return `这个源${sourceStatusLabels[source.status]}，不判滞后——停着的通路本来就不会有新数据。`
+      + '它如果是在窗口中途停的，会另报一条「覆盖不全」。'
+  }
+  if (!source.data_through) return '还没有回过任何数据，已经另报了一条。'
+  return '落后在容忍范围内，不算问题：平台侧报表本身就有一两天延迟。'
 }
 
 function describeScope(issue: ApiDataQualityIssue): string {

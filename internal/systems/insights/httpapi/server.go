@@ -279,7 +279,7 @@ func (s *Server) listReports(writer http.ResponseWriter, request *http.Request) 
 // submitReview 提交复盘。
 //
 // 单独一条路径，不走 reportAction 的 `{id}:submit` 后缀：提交要带请求体
-// （投放执行 + 版本号），和那一串只带版本号的动作不是一回事，挤在同一个
+// （摘要 + 投放执行 + 版本号），和那一串只带版本号的动作不是一回事，挤在同一个
 // switch 里会让「哪些动作要填什么」变成读代码才知道的事。
 func (s *Server) submitReview(writer http.ResponseWriter, request *http.Request) {
 	var body insights.SubmitReviewRequest

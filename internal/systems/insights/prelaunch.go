@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
@@ -256,6 +257,11 @@ type InsightCard struct {
 	Action         string           `json:"recommended_action"`
 	Status         ExperienceStatus `json:"status"`
 
+	// ThresholdVersion 跟着经验一起投影过来。**缺失表示不知道**（人自己填的档位、
+	// 老数据），此时界面上不得出现任何阈值标注——这一页是拿经验去指导下一轮投放的
+	// 地方，替一条来历不明的结论盖上「按第 N 版判定」，比不盖更糟。
+	ThresholdVersion *int64 `json:"threshold_version,omitempty"`
+
 	// MissingFields 把缺的字段直接摊开。§3.1 说「缺字段即不合格」，
 	// 但把不合格的卡藏起来更糟——人会以为经验库里就这么点东西。
 	// 所以照样返回，只是标出来哪里不完整。
@@ -267,12 +273,41 @@ type InsightCard struct {
 // FeaturePattern 是「历史模式」视图的数据：同一个素材特征在多少张卡里出现过。
 // 它不做排行——只说「这个特征反复出现在被确认的结论里」，把是否采纳留给人。
 type FeaturePattern struct {
-	Feature        string          `json:"feature"`
+	// Feature 是分桶用的键。落在特征体系里的是那个字段的 Key（比如 hook_type），
+	// 没落上的是原样的文本。**不要拿它显示给人看**，用 Label。
+	Feature string `json:"feature"`
+
+	// Label 是人话名。落在特征体系里的取字段的中文名（hook_type → 钩子类型），
+	// 没落上的原样显示——原来这里把 hook_type 直接印在屏幕上，读的人得会认键名。
+	Label string `json:"label"`
+
+	// Governed 说明这个名字有没有落在特征体系里（03 §5 末：受控词表由管理员维护，
+	// 避免同义词碎片化）。false 的那些不算「反复」：名字没进表，就没人担保
+	// 「首图卖点数」和「首图卖点个数」已经合成了一个桶，这时候说它反复出现过 N 次
+	// 是没有依据的。
+	Governed bool `json:"governed"`
+
 	CardCount      int             `json:"card_count"`
 	Channels       []string        `json:"channels"`
 	BestConfidence ConfidenceLevel `json:"best_confidence"`
 	Conclusions    []string        `json:"conclusions"`
+
+	// Repeated 说明它够不够得上「反复」（CardCount >= repeatedPatternMinCards
+	// 且 Governed）。整屏的标题写着「哪些内容特征反复有效」、导语写着「比只被提过
+	// 一次可信得多」，而以前每一条都是「1 条结论提到」——门槛不设，那两句话就是
+	// 屏幕在自己骗自己。
+	Repeated bool `json:"repeated"`
 }
+
+// repeatedPatternMinCards 是「反复」的门槛：至少两条互相独立的结论提到过。
+//
+// 它不进判定阈值那一套设置。那套管的是「样本够不够下这个结论」，是统计口径；
+// 这里管的是「几条算反复」，是一个词的定义。混进去的话，设置页上会多出一格
+// 语义完全不同的数字，而调它的人以为自己在调样本量。
+//
+// 取 2 而不是 3：这个模块目前的经验总量本来就少，取 3 会让整屏长期为空，而空屏
+// 说不出「有 4 个特征各被提到过一次」这个真实情况——那恰恰是人该知道的。
+const repeatedPatternMinCards = 2
 
 type PreLaunchFacets struct {
 	Channels      []string `json:"channels"`
@@ -433,7 +468,8 @@ func buildInsightCard(value Experience, referenceCount int) InsightCard {
 		Confidence: value.Confidence, ConfidenceHint: value.Confidence.Hint(),
 		Counterexample: value.Counterexamples, Action: value.RecommendedAction,
 		Status: value.Status, ReferenceCount: referenceCount, UpdatedAt: value.UpdatedAt,
-		MissingFields: []string{},
+		ThresholdVersion: value.ThresholdVersion,
+		MissingFields:    []string{},
 	}
 	if value.Applicability.empty() {
 		card.MissingFields = append(card.MissingFields, "适用范围")
@@ -464,6 +500,8 @@ func buildInsightCard(value Experience, referenceCount int) InsightCard {
 // 出现得多不代表效果好，可能只是被反复试过。
 func buildFeaturePatterns(values []Experience) []FeaturePattern {
 	type accumulator struct {
+		label       string
+		governed    bool
 		count       int
 		channels    map[string]struct{}
 		best        ConfidenceLevel
@@ -473,13 +511,16 @@ func buildFeaturePatterns(values []Experience) []FeaturePattern {
 	byFeature := map[string]*accumulator{}
 	for _, value := range values {
 		for _, feature := range value.ContentBasis.Features {
-			key := strings.TrimSpace(feature)
+			// 先过一遍特征体系：「hook_type」「钩子类型」「 Hook_Type 」写的是同一件事，
+			// 不归一的话它们是三个各自「1 条」的桶，永远攒不到「反复」——而这正是
+			// 03 §5 末要受控词表防的事。
+			key, label, governed := canonicalFeature(feature)
 			if key == "" {
 				continue
 			}
 			entry, ok := byFeature[key]
 			if !ok {
-				entry = &accumulator{channels: map[string]struct{}{}}
+				entry = &accumulator{label: label, governed: governed, channels: map[string]struct{}{}}
 				byFeature[key] = entry
 				order = append(order, key)
 			}
@@ -497,17 +538,100 @@ func buildFeaturePatterns(values []Experience) []FeaturePattern {
 	for _, key := range order {
 		entry := byFeature[key]
 		patterns = append(patterns, FeaturePattern{
-			Feature: key, CardCount: entry.count, Channels: sortedKeys(entry.channels),
+			Feature: key, Label: entry.label, Governed: entry.governed,
+			CardCount: entry.count, Channels: sortedKeys(entry.channels),
 			BestConfidence: entry.best, Conclusions: entry.conclusions,
+			Repeated: entry.governed && entry.count >= repeatedPatternMinCards,
 		})
 	}
 	sort.SliceStable(patterns, func(i, j int) bool {
+		// 够得上「反复」的一律排在前面，次数相同也是。这一屏问的是「有没有什么
+		// 一直有效」，一个没入表的名字凑巧被提了两次，不该排在一个入了表、被两条
+		// 独立结论提到的特征前面。
+		if patterns[i].Repeated != patterns[j].Repeated {
+			return patterns[i].Repeated
+		}
 		if patterns[i].CardCount != patterns[j].CardCount {
 			return patterns[i].CardCount > patterns[j].CardCount
 		}
-		return patterns[i].Feature < patterns[j].Feature
+		return patterns[i].Label < patterns[j].Label
 	})
 	return patterns
+}
+
+// canonicalFeature 把一个写法不定的特征名归到特征体系里的那一格。
+//
+// 返回分桶键、人话名、以及有没有归上。归不上的原样留着（键和名都是那段文本）
+// ——丢掉的话，屏幕上会少掉一条真实存在的内容依据，而人不会知道少了什么；
+// 留着但标成「没入表」，人才知道该去 能力运营 → 特征体系 把它收进去。
+//
+// 认两种写法：字段键（hook_type）和字段中文名（钩子类型）。中文名有歧义的不认
+// ——「主题」在公众号图文里是 headline_theme、在品牌广告里是 theme，猜一个等于
+// 把两类素材的结论混进同一个桶。
+func canonicalFeature(feature string) (key string, label string, governed bool) {
+	raw := strings.TrimSpace(feature)
+	if raw == "" {
+		return "", "", false
+	}
+	index := featureNameIndex()
+	if entry, ok := index[strings.ToLower(raw)]; ok {
+		return entry.key, entry.label, true
+	}
+	return raw, raw, false
+}
+
+type featureNameEntry struct {
+	key   string
+	label string
+}
+
+var featureNameIndexOnce struct {
+	sync.Once
+	value map[string]featureNameEntry
+}
+
+// featureNameIndex 是「怎么写都认得出来」的索引：键名和中文名都指向同一格。
+//
+// 只建一次。它完全由 features.go 里那几张静态表派生，跟着 AllAssetTypes 走——
+// 手抄一份的话，将来加第七类素材，那类的特征会全部被判成「没入表」。
+func featureNameIndex() map[string]featureNameEntry {
+	featureNameIndexOnce.Do(func() {
+		// 键名和中文名分两张表建，最后才合——合着建的话，某个字段的中文名万一
+		// 撞上另一个字段的键名，撤歧义时会把那个键名一起撤掉，那格特征就此认不出来。
+		byKey := map[string]featureNameEntry{}
+		byLabel := map[string]featureNameEntry{}
+		ambiguous := map[string]struct{}{}
+		for _, schema := range AllFeatureSchemas() {
+			for _, field := range schema.Fields {
+				entry := featureNameEntry{key: field.Key, label: field.Label}
+				byKey[strings.ToLower(field.Key)] = entry
+				label := strings.ToLower(strings.TrimSpace(field.Label))
+				if label == "" {
+					continue
+				}
+				if existing, ok := byLabel[label]; ok {
+					if existing.key != field.Key {
+						ambiguous[label] = struct{}{}
+					}
+					continue
+				}
+				byLabel[label] = entry
+			}
+		}
+		index := make(map[string]featureNameEntry, len(byKey)+len(byLabel))
+		for label, entry := range byLabel {
+			if _, bad := ambiguous[label]; bad {
+				continue
+			}
+			index[label] = entry
+		}
+		// 键名后放：它没有歧义可言，撞上同名的中文名时以它为准。
+		for key, entry := range byKey {
+			index[key] = entry
+		}
+		featureNameIndexOnce.value = index
+	})
+	return featureNameIndexOnce.value
 }
 
 func confidenceRank(value ConfidenceLevel) int {

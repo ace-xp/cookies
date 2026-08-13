@@ -1481,7 +1481,7 @@ const assetsViews: Record<string, AssetsView> = {
 const reviewViews: Record<string, ReviewView> = {
   本轮: 'current',
   全部复盘: 'all',
-  已沉淀经验: 'harvest',
+  留下的经验: 'harvest',
 }
 
 // 经验入口的两个模式。认不出来的落到「查」：那是高频的一屏，

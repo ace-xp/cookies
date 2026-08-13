@@ -2,6 +2,7 @@ package insights
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -40,16 +41,28 @@ func TestSubmitReviewRequestValidation(t *testing.T) {
 		t.Fatalf("合法请求被拒了：%v", err)
 	}
 
+	// 没挂投放执行照样能提交。原来这里是必填，结果是「还没跑过投放」的人
+	// 记了一屏发现之后被挡在提交那一步——而他要复盘的正是那批还没投出去的素材。
+	// doc22 §6.4 验收 5 只要求「可以创建当前 Project 的复盘报告」，没有这个前置。
 	noExecution := SubmitReviewRequest{ExpectedVersion: 3}
-	if err := noExecution.Validate(); err == nil {
-		// 提交是全流程唯一必须回答「这份复盘算哪次投放」的地方。不回答的话，
-		// 这份复盘沉淀出的经验就没有来源执行，下一轮引用它的人无从追溯。
-		t.Error("没有投放执行的提交应该被拒")
+	if err := noExecution.Validate(); err != nil {
+		t.Errorf("没挂投放执行不该拦住提交：%v", err)
 	}
 
 	noVersion := SubmitReviewRequest{ExecutionID: "exec_1"}
 	if err := noVersion.Validate(); err == nil {
 		t.Error("没有版本号的提交应该被拒——并发编辑会静默覆盖")
+	}
+
+	// 摘要是列表主列上的一行。粘一整段进来，列表会被撑成一堵墙，
+	// 比原来那列「（这一轮还没写摘要）」更认不出哪份是哪份。
+	longSummary := SubmitReviewRequest{ExpectedVersion: 3, Summary: strings.Repeat("摘", summaryLimit+1)}
+	if err := longSummary.Validate(); err == nil {
+		t.Error("超长摘要应该被拒")
+	}
+	atLimit := SubmitReviewRequest{ExpectedVersion: 3, Summary: strings.Repeat("摘", summaryLimit)}
+	if err := atLimit.Validate(); err != nil {
+		t.Errorf("正好到上限的摘要不该被拒：%v", err)
 	}
 }
 

@@ -82,6 +82,31 @@ func TestVariantComparisonAttributableOnlyWhenSingleVariable(t *testing.T) {
 	}
 }
 
+// 一个受控变量都没有的时候，「只改了这一个」是句空话：两条素材身上各自只记着
+// 这一个能比的特征，别的地方一样不一样根本没量过。样本再充分也只能给方向。
+func TestVariantComparisonNotAttributableWithoutControlledFeature(t *testing.T) {
+	facts := append(
+		factsFor("asset_a", "露脸版", AssetTypePrerollAd, "obj_a", 10, MetricCounts{Impressions: 4000, Clicks: 200, SpendCents: 10000}),
+		factsFor("asset_b", "不露脸版", AssetTypePrerollAd, "obj_b", 10, MetricCounts{Impressions: 4000, Clicks: 80, SpendCents: 10000})...,
+	)
+	// 两边各只有一个特征，而且正好是变了的那个——受控数为 0。
+	features := []AssetFeature{
+		enumFeature("asset_a", AssetTypePrerollAd, "preroll_hook_type", "露脸"),
+		enumFeature("asset_b", AssetTypePrerollAd, "preroll_hook_type", "不露脸"),
+	}
+
+	comparison := findComparison(t, buildPerformanceAnalysis(testWindow(10), facts, features, ResolvedThresholds{}), "asset_a", "asset_b")
+	if comparison.ControlledCount != 0 {
+		t.Fatalf("这一组的受控特征应为 0，实际 %d", comparison.ControlledCount)
+	}
+	if comparison.VariantVerdict != VerdictDirectional {
+		t.Fatalf("没有受控变量时最多只能看方向，实际 %q（%s）", comparison.VariantVerdict, comparison.Note)
+	}
+	if comparison.Judgement.Verdict == VerdictExplained {
+		t.Fatalf("三档也不能给「能归因」：%s", comparison.Note)
+	}
+}
+
 // 同时改两个变量就是混杂，不管差异多大。这一条是 AM-009 的全部意义。
 func TestVariantComparisonConfoundedWhenTwoVariablesChange(t *testing.T) {
 	facts := append(
@@ -488,5 +513,62 @@ func TestComparisonChangedFeaturesSerializesAsArray(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"changed_features":[]`) {
 		t.Fatalf("没有差异时必须序列化成空数组，实际是 %s", encoded)
+	}
+}
+
+// 异常屏零条有两种相反的含义，屏级徽章必须分得开。这一条守的就是这个分岔：
+// 查过了很干净要给「能归因」，一条序列都没跑够天数才是「算不出来」。
+// 两种都判成「算不出来」的话，一屏干净数据会被读成「检测没跑起来」。
+func TestAnomalyEmptyScreenSeparatesCleanFromUnchecked(t *testing.T) {
+	// 天数够、每天曝光有轻微波动（MAD > 0）但都在 3.5 MAD 以内——真的查过，没异常。
+	clean := make([]MetricFactWithMapping, 0, 8)
+	for index, impressions := range []int64{1000, 1050, 980, 1020, 1010, 990, 1030, 1005} {
+		day := factsFor("asset_clean", "干净素材", AssetTypePrerollAd, "obj_clean", 1,
+			MetricCounts{Impressions: impressions, Clicks: impressions / 50, SpendCents: 1000 + int64(index)*10})
+		day[0].StatDate = day[0].StatDate.AddDate(0, 0, index)
+		clean = append(clean, day[0])
+	}
+
+	analysis := buildPerformanceAnalysis(testWindow(8), clean, nil, ResolvedThresholds{})
+	if len(analysis.Anomalies) != 0 {
+		t.Fatalf("这组数据不该判出异常，实际 %d 条：%+v", len(analysis.Anomalies), analysis.Anomalies)
+	}
+	judgement := analysis.ViewJudgements["anomalies"]
+	if judgement.Verdict != VerdictExplained {
+		t.Fatalf("查过了没异常应给「能归因」，实际 %q（%s）", judgement.Verdict, judgement.Note)
+	}
+	if !strings.Contains(judgement.Note, "查过了") {
+		t.Fatalf("空态那句话要说清是查过的，实际 %q", judgement.Note)
+	}
+
+	// 天数不够：一条序列都没跑够门槛，这才是「算不出来」。
+	short := factsFor("asset_short", "短样本", AssetTypePrerollAd, "obj_short", 2,
+		MetricCounts{Impressions: 200, Clicks: 3, SpendCents: 800})
+	shortAnalysis := buildPerformanceAnalysis(testWindow(2), short, nil, ResolvedThresholds{})
+	if len(shortAnalysis.Anomalies) != 0 {
+		t.Fatalf("两天数据不该判出异常，实际 %d 条", len(shortAnalysis.Anomalies))
+	}
+	shortJudgement := shortAnalysis.ViewJudgements["anomalies"]
+	if shortJudgement.Verdict != VerdictUnclear {
+		t.Fatalf("一条序列都没跑够天数时必须说算不出来，实际 %q（%s）", shortJudgement.Verdict, shortJudgement.Note)
+	}
+	if !strings.Contains(shortJudgement.Note, "根本没查") {
+		t.Fatalf("这一档要挑明这一屏的空不代表没问题，实际 %q", shortJudgement.Note)
+	}
+
+	// 天数够但每天数字一模一样：也没查成，但原因不是天数——不能对着一条跑满
+	// 8 天的素材说「还没跑够 5 天」。
+	flat := factsFor("asset_flat", "补录素材", AssetTypePrerollAd, "obj_flat", 8,
+		MetricCounts{Impressions: 1000, Clicks: 20, SpendCents: 1000})
+	flatAnalysis := buildPerformanceAnalysis(testWindow(8), flat, nil, ResolvedThresholds{})
+	flatJudgement := flatAnalysis.ViewJudgements["anomalies"]
+	if flatJudgement.Verdict != VerdictUnclear {
+		t.Fatalf("没有波动就算不出偏离，实际 %q（%s）", flatJudgement.Verdict, flatJudgement.Note)
+	}
+	if strings.Contains(flatJudgement.Note, "跑够") {
+		t.Fatalf("这条跑满了天数，理由不能说成天数不够：%q", flatJudgement.Note)
+	}
+	if !strings.Contains(flatJudgement.Note, "一模一样") {
+		t.Fatalf("要说清没查成是因为数字没有起伏，实际 %q", flatJudgement.Note)
 	}
 }

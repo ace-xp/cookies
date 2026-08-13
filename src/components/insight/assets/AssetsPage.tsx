@@ -30,7 +30,7 @@ const headings: Record<AssetsView, { label: string; title: string; lead: string 
   overview: {
     label: 'ASSETS',
     title: '手上有哪些素材，它们还差什么才能进复盘',
-    lead: '左边是平台内的（躺在素材库里），右边是外部证据（洞察自己存的，有到期日）。下面三个队列是还差的那几样。',
+    lead: '左边是平台内的（躺在素材库里），右边是外部证据（洞察自己存的，有到期日）。下面四个队列是还差的那几样。',
   },
   intake: {
     label: 'DATA INTAKE',

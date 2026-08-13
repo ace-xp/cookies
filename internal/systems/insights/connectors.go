@@ -750,9 +750,20 @@ type PlatformTotal struct {
 }
 
 type SourceHealth struct {
-	DataSourceID  string        `json:"data_source_id"`
-	Platform      Platform      `json:"platform"`
-	Label         string        `json:"label"`
+	DataSourceID string   `json:"data_source_id"`
+	Platform     Platform `json:"platform"`
+	Label        string   `json:"label"`
+
+	// Status 是数据源的**生命周期**状态（草稿 / 已启用 / 已暂停 / 已吊销），
+	// QualityStatus 是它的**数据质量**状态（健康 / 有降级 / 有阻断）。两者同名叫
+	// 「状态」，但说的是两件不同的事，而新鲜度只对已启用的源判定——底表以前不给
+	// 生命周期状态，于是一个已暂停的源顶着「滞后 12 天」躺在表里，同一屏却没有
+	// 任何一条滞后问题，看上去像检查漏了。
+	Status DataSourceStatus `json:"status"`
+	// FreshnessJudged 说明这一条有没有进新鲜度判定。false 有两种情形：源没启用，
+	// 或者滞后还在容忍范围内。给出来是为了让界面能解释「表里有天数、队列里没问题」。
+	FreshnessJudged bool `json:"freshness_judged"`
+
 	QualityStatus QualityStatus `json:"quality_status"`
 	QualityNote   string        `json:"quality_note,omitempty"`
 	DataThrough   *time.Time    `json:"data_through,omitempty"`

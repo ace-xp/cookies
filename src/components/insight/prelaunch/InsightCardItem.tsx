@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { ChevronRight, Quote } from 'lucide-react'
 import type { ApiConfidenceLevel, ApiInsightCard } from '../../../data/api'
 import { formatScope } from '../experience/ExperienceCard'
+import { ThresholdStamp } from '../shared'
 import { CiteTargetPanel } from './CiteTargetPanel'
 
 /**
- * 洞察卡。同一条经验在「经验」入口里看的是它的生命周期（谁确认的、要不要复审、
+ * 投前洞察里的一张经验卡。同一条经验在「经验」入口里看的是它的生命周期（谁确认的、要不要复审、
  * 停用没有），在这里看的是**能不能用在这次投放上**——所以卡面第一眼给的是
  * 「建议怎么做」，不是「这条结论处于什么状态」。
  *
@@ -75,6 +76,15 @@ export function InsightCardItem({ card }: { card: ApiInsightCard }) {
         <p>{describeData(card)}</p>
         {card.data_basis.baseline ? <p>跟什么比：{card.data_basis.baseline}</p> : null}
         <p>够不够硬：{card.confidence_hint || confidenceLabel[card.confidence]}</p>
+        {/* 「按哪一版标准判的」。这一页是拿经验去指导下一轮投放的地方，标准改过之后
+            回头看一条老结论，这个号码是唯一能说清它当初按什么算的东西。
+            没有号码时不留白——空着的话，人会默认它和屏幕上其他标了版本的结论
+            是同一套标准算出来的。 */}
+        <p className="insight-card-threshold">
+          {card.threshold_version === undefined || card.threshold_version === null
+            ? '判定标准：没留下版本号（这一档是人自己填的，或是早期数据），说不清它按哪一版算的。'
+            : <>判定标准：<ThresholdStamp version={card.threshold_version}/></>}
+        </p>
       </section>
 
       {card.content_basis.features?.length || card.content_basis.example_asset_versions?.length

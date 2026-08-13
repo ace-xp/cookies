@@ -342,7 +342,16 @@ func memberScopes() []contract.Scope {
 		"strategy.read", "strategy.write", "strategy.confirm", "strategy.review",
 		"strategy.approve", "strategy.package.read", "creative.read", "creative.write",
 		"delivery.read", "delivery.write", "delivery.approve", "delivery.execute",
-		"insights.read", "insights.write", "insights.confirm",
+		// **member 没有 insights.confirm**，这是有意的。
+		//
+		// 洞察这三个权限的整个意义在于「提特征的人和认结论的人可以不是同一个人」
+		// （03 §11.1、AM-006）：确认动作会把一条结论变成可被下一轮引用的东西，
+		// 改判定阈值更是一改改全组织。以前 member 拿全三档，等于组织里每个人都能
+		// 单方面把机器说的变成「我们认的」——设置页上那句「分开授予」于是成了空话。
+		//
+		// 要让某个人能确认，把他的组织角色提到 admin。按人单授权还没有对象模型
+		// （scope 现在只从 organization_memberships.role 推），那是后面的事。
+		"insights.read", "insights.write",
 	}
 	return contract.ScopesFromStrings(values)
 }

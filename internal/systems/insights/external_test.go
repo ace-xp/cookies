@@ -1,6 +1,7 @@
 package insights
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -98,7 +99,19 @@ func TestImportedExternalAssetCarriesItsPurposeAndDeadline(t *testing.T) {
 	if value.OriginalPurged {
 		t.Error("刚导入的原件不该是已删状态")
 	}
-	if got := value.StorageKey; got[:len(externalStoragePrefix)] != externalStoragePrefix {
+	// 这一条没带文件，所以不该有存储路径。有路径就意味着界面会对它说
+	// 「原片将在 X 前后清掉」——而那个原片根本不存在。
+	if value.StorageKey != "" {
+		t.Errorf("没带文件却拼出了存储路径：%q", value.StorageKey)
+	}
+
+	withFile := request
+	withFile.FileExt = "mp4"
+	stored := buildExternalAsset("ext_2", withFile, "user_1", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	if got := stored.StorageKey; !strings.HasPrefix(got, externalStoragePrefix) {
 		t.Errorf("存储路径没加前缀：%q", got)
+	}
+	if got := stored.StorageKey; !strings.HasSuffix(got, ".mp4") {
+		t.Errorf("存储路径没带扩展名：%q", got)
 	}
 }

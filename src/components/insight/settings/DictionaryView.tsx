@@ -75,9 +75,11 @@ function GlossarySegment() {
           <div className="setting-head"><b>{item.label}</b></div>
           <p className="setting-effect">{item.value}</p>
           <p className="setting-recommended">{item.effect}</p>
+          {/* 源码路径不上屏。它是给改代码的人看的，而这一屏的读者是能力运营的
+              管理员；何况写死的行号在代码一动之后全是错的，指错比不指更糟。
+              依据（文档章节）留着——那是这条设定凭什么这么定，管理员看得懂也用得上。 */}
           <p className="setting-meta">
             <FileCode2 size={12}/>
-            <code>{item.source}</code>
             <span>依据：{item.basis}</span>
           </p>
         </div>)}

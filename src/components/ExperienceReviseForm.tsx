@@ -12,7 +12,7 @@ import { shortId } from '../data/shortId'
 /**
  * 补齐一条经验的依据。
  *
- * 报告中心把结论沉淀过来时只带得动结论本身——适用范围、数据依据、内容依据这三样是
+ * 复盘把结论留过来时只带得动结论本身——适用范围、数据依据、内容依据这三样是
  * 「凭什么这么说、在哪儿成立」，报告里没有对应字段，只能到这里由人补。补不了的话，
  * 经验库那句「没写数据依据」就永远是没写，而下游引用时看到的正是这句。
  *
@@ -81,7 +81,7 @@ export function ExperienceReviseForm({ experience, busy, onCancel, onSubmit }: {
     const dataBasis: ApiDataBasis = {
       asset_count: parseCount(assetCount),
       sample_size: parseCount(sampleSize),
-      // 统计窗口来自沉淀时那份报告，人不该在这里手改——改了就和来源报告对不上了。
+      // 统计窗口来自留下它的那份复盘，人不该在这里手改——改了就和来源报告对不上了。
       window_start: experience.data_basis.window_start,
       window_end: experience.data_basis.window_end,
       metrics: splitList(metrics),
@@ -163,7 +163,7 @@ export function ExperienceReviseForm({ experience, busy, onCancel, onSubmit }: {
       <input aria-label="搜索素材" value={assetQuery} onChange={event => setAssetQuery(event.target.value)} placeholder="按名字或 ID 搜素材"/>
       <div className="asset-picker-list" role="group" aria-label="样例素材">
         {assetsLoading ? <p className="revise-hint">正在读取当前 Project 的素材…</p> : null}
-        {!assetsLoading && !assets.length ? <p className="revise-hint">当前 Project 还没有登记素材，先去「分析素材库」登记，这里才挑得到。</p> : null}
+        {!assetsLoading && !assets.length ? <p className="revise-hint">当前 Project 还没有登记素材，先去「素材 · 总览」登记，这里才挑得到。</p> : null}
         {!assetsLoading && assets.length && !visibleAssets.length ? <p className="revise-hint">没有匹配的素材。</p> : null}
         {visibleAssets.map(asset => <label key={asset.id} className="asset-picker-item">
           <input type="checkbox" checked={examples.includes(asset.id)} onChange={() => toggleExample(asset.id)}/>
@@ -183,7 +183,10 @@ export function ExperienceReviseForm({ experience, busy, onCancel, onSubmit }: {
     <label className="experience-reason"><small>适用条件（一行一条）</small>
       <textarea value={conditions} onChange={event => setConditions(event.target.value)} rows={3} placeholder="例如：单条素材展示量达到 5 万以上才适用"/>
     </label>
-    <label className="experience-reason"><small>反例（一行一条）</small>
+    {/* 这一格的名字要和卡片上「还缺：风险与反例」那句、以及证据层的
+        「什么情况下不成立」对得上。只写「反例」的话，人是照着卡片的提示点进来补
+        格子的，在表单里找不到叫这个名字的格子，会以为补不了。 */}
+    <label className="experience-reason"><small>风险与反例 · 什么情况下不成立（一行一条）</small>
       <textarea value={counterexamples} onChange={event => setCounterexamples(event.target.value)} rows={2} placeholder="例如：品牌片上不成立"/>
     </label>
     <label className="experience-reason"><small>修订理由（必填，写进审计记录）</small>

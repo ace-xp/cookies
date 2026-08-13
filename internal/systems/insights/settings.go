@@ -343,9 +343,20 @@ func notificationSettings() SettingGroup {
 func confirmationSettings() SettingGroup {
 	return SettingGroup{
 		Key: "confirmation", Label: "确认权限", State: SettingInEffect, View: ViewPermission,
-		Summary: "谁能把一条结论从「机器说的」变成「我们认的」。这三个权限已经在每个接口上生效，但目前只能按账号授予，不能按角色配。",
+		Summary: "谁能把一条结论从「机器说的」变成「我们认的」。这三个权限已经在每个接口上生效，" +
+			"但目前只能按组织角色授予：角色定了，三个权限就跟着定了，没法单独给某个人多开或少开一档。",
 		Missing: []string{},
 		Items: []SettingItem{{
+			// 角色对照放在最前面。三条权限的说明再清楚，人还是会问「那我到底有没有」——
+			// 这一行就是答案，而且它是唯一一处能让人看出「member 没有确认权」的地方。
+			Key: "role_mapping", Label: "哪个角色拿到哪几档",
+			Value: "owner / admin：读取 + 编辑 + 确认；member：读取 + 编辑；auditor：只有读取",
+			Effect: "角色改在组织成员管理里，不在这一页。要让某个人能确认结论，把他的角色提到 admin——" +
+				"按人单授权还没有，所以「只给某个 member 开确认权」这件事现在做不到。",
+			Recommended: "确认这一档跟着 admin 走，人数宜少",
+			Source:      "internal/platform/identity/session.go ScopesForOrganizationRole",
+			Basis:       "doc22 §6.2 按角色控制治理入口",
+		}, {
 			Key: "insights.read", Label: "读取（insights.read）",
 			Value:       "所有查询接口",
 			Effect:      "没有它连页面都打不开。素材、指标、质量、洞察、经验的全部只读接口都要它。",

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { CircleAlert, ExternalLink, Layers3, Ruler, Sparkles } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
-import { api, type ApiFeatureField, type ApiInsightAsset, type ApiInsightAssetFeature } from '../../../data/api'
+import { api, type ApiAnalysisRun, type ApiFeatureField, type ApiInsightAsset, type ApiInsightAssetFeature } from '../../../data/api'
 import { admissibleForAttribution, featureSourceLabel } from '../../../data/featureSource'
+import { isModelSetupFailure, modelSetupHint, readableError } from '../../../data/readableError'
 import { shortId } from '../../../data/shortId'
 
 const statusLabels: Record<string, string> = {
@@ -36,6 +37,10 @@ export function AssetDetail({ asset, onOpenLibrary }: {
   // 特征体系。取它只为了两件事：把 duration 显示成「时长」，把 15 显示成「15 秒」。
   // 名字和单位的权威定义在后端 features.go，不在这儿写死一份。
   const [fields, setFields] = useState<Record<string, ApiFeatureField>>({})
+  // 最近一次分析跑成什么样。**只有它能说明「提取失败」**：素材状态机里没有失败分支
+  // （PRD §11.1），跑挂的素材原地停在「可分析」，不看留痕的话，界面上和「还没轮到它」
+  // 长得一模一样。
+  const [lastRun, setLastRun] = useState<ApiAnalysisRun | null>(null)
 
   useEffect(() => {
     setVersion(asset.version)
@@ -44,6 +49,9 @@ export function AssetDetail({ asset, onOpenLibrary }: {
     void api.listInsightAssetFeatures(currentProject.id, asset.id)
       .then(page => { if (active) setFeatures(page.items) })
       .catch(() => { if (active) setFeatures([]) })
+    void api.listInsightAssetAnalysisRuns(currentProject.id, asset.id, 1)
+      .then(page => { if (active) setLastRun(page.items[0] ?? null) })
+      .catch(() => { if (active) setLastRun(null) })
     return () => { active = false }
   }, [currentProject.id, asset.id, asset.version])
 
@@ -93,7 +101,10 @@ export function AssetDetail({ asset, onOpenLibrary }: {
       <p>预览与版本信息在素材库那边。洞察这边只记住它是哪一条，不复制一份元数据过来
         ——复制出来的那份第二天就和素材库对不上了。</p>
       <div className="prelaunch-fact"><Layers3 size={17}/><span><small>平台素材号</small><b>
-        {asset.platform_asset_id || '还没有。这条素材还没和平台上的对象对上号。'}
+        {/* 「平台对象」是数据接入那边的词（广告位、计划）。这里缺的是素材库里的
+            那个媒体文件——照原来那句话跑去数据接入，会发现对象早就认领好了，
+            文件还是没有，人在两个入口之间来回找一件根本不在那里的东西。 */}
+        {asset.platform_asset_id || '还没有。这条素材是手工登记的，素材库里没有对应的文件，看不了原件。'}
         {asset.platform_asset_version ? ` · 第 ${asset.platform_asset_version} 版` : ''}
       </b></span></div>
     </section>
@@ -104,6 +115,22 @@ export function AssetDetail({ asset, onOpenLibrary }: {
         {statusLabels[asset.analysis_status] ?? asset.analysis_status}
         {asset.analysis_status_reason ? ` · ${asset.analysis_status_reason}` : ''}
       </b></span></div>
+
+      {/* 失败要写在变量前面。写在后面的话，人已经先看到「还没有内容变量」并且据此
+          去点「提取」了，白跑一次才知道上一次就是这么挂的。 */}
+      {lastRun?.status === 'failed' ? <div className="prelaunch-boundary">
+        <CircleAlert size={16}/><span><small>上一次提取失败了</small>
+          {readableError(lastRun.error_message) || lastRun.error_code || '没有留下原因。'}
+          {/* 「一个变量都没有」不能无条件说。跑挂之后有人手工把变量填上了，这条素材
+              照样能进分析——这时候还说它一个变量都没有，人会跑去重跑一次并不需要
+              重跑的东西，或者反过来以为下面那几项变量是假的。 */}
+          {' '}{features.length
+            ? `它身上现在这 ${features.length} 项变量不是这一次提的（人工填的，或上一次成功那次留下的）。`
+            : '这条素材现在一个变量都没有。'}
+          原因没解决之前，重跑还会挂在同一处。
+          {/* 「还没配模型」是人自己能解决的，得说清楚在哪儿配。别的原因不加这句。 */}
+          {isModelSetupFailure(lastRun.error_message) ? ` ${modelSetupHint}` : ''}
+        </span></div> : null}
 
       <div className="feature-stack">
         <span>内容变量（{features.length} 项 · 其中 {admissible.length} 项能进归因）</span>
@@ -120,9 +147,14 @@ export function AssetDetail({ asset, onOpenLibrary }: {
         <button type="button" className="secondary-button" disabled={!hasFile || measuring} onClick={() => void measure()}>
           <Ruler size={14}/>{measuring ? '量着…' : derived.length ? '重新量一下' : '量一下'}
         </button>
+        {/* 「从创意导入的才带这个引用」这句以前挂在这里，它指的是一条走不通的路：
+            这条素材已经登记完了，再去创意导入只会多出一条新的。真正能做的是补一次
+            登记、把素材库文件号填上——登记表单现在有这一格了。 */}
         <small>{hasFile
           ? '从素材库那个文件本身量出时长和画幅。不调模型，直接能进归因。'
-          : '这条素材没指向素材库里的文件，量不到东西。从创意导入的才带这个引用。'}</small>
+          : '这条素材没填素材库文件号，所以没有文件可量。文件确实在素材库里的话，'
+            + '回「素材 · 总览 · 登记素材」把编号和版本填上重登一条；'
+            + '文件本来就不在平台上（外部剪的、代理商给的），那它只能靠人工填变量。'}</small>
         {measureNote ? <small className="feature-measure-note">{measureNote}</small> : null}
       </div>
 

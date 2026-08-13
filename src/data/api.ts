@@ -2009,6 +2009,10 @@ export type ApiExperience = {
   verdict_label: string
   upgrade: UpgradePath
   note: string
+  // 判这一档时生效的阈值版本。**缺失表示不知道**（人自己填的档位、老数据），
+  // 此时界面上一个阈值标注都不许出现——替一条来历不明的结论盖印，比不盖更糟。
+  // 0 是「按出厂设定判的」，是个确定答案，不是缺失。
+  threshold_version?: number
   recommended_action: string
   applicability: ApiApplicability
   data_basis: ApiDataBasis
@@ -2143,6 +2147,8 @@ export type ApiInsightCard = {
   content_basis: ApiContentBasis
   confidence: ApiConfidenceLevel
   confidence_hint: string
+  // 跟着经验投影过来的阈值版本，缺失表示不知道（见 ApiExperience.threshold_version）。
+  threshold_version?: number
   counterexamples: string[]
   recommended_action: string
   status: ApiExperienceStatus
@@ -2153,7 +2159,15 @@ export type ApiInsightCard = {
 }
 
 export type ApiFeaturePattern = {
+  // 分桶键，**不要显示给人看**。入表的是特征体系里的字段键（hook_type），
+  // 没入表的是原样文本。显示一律用 label。
   feature: string
+  label: string
+  // 这个名字有没有落在特征体系里。没入表的照样列出来（藏起来会丢掉真实的内容依据），
+  // 但得让人知道它的同义写法可能被拆成了好几个桶。
+  governed: boolean
+  // 够不够得上这一屏标题里的「反复」：入了表，且至少两条结论提到。
+  repeated: boolean
   card_count: number
   channels: string[]
   // 取最强置信而不是平均：一条充分证据和一条样本不足不该被平均成方向性。
@@ -2598,6 +2612,13 @@ export type ApiSourceHealth = {
   data_source_id: string
   platform: ApiPlatform
   label: string
+  /** 生命周期状态（草稿/已启用/已暂停/已吊销）。和 quality_status 是两件事。 */
+  status: ApiDataSourceStatus
+  /**
+   * 这一条有没有真的进新鲜度判定。false 有两种情形：源没启用，或者滞后还在容忍
+   * 范围内。有它，底表才解释得了「这里写着滞后 2 天，队列里却没有滞后问题」。
+   */
+  freshness_judged: boolean
   quality_status: ApiQualityStatus
   quality_note?: string
   data_through?: string
@@ -2769,10 +2790,18 @@ export type ApiPerformanceAnalysis = {
   /** 其中有内容特征的素材数。远小于 assets_in_window 时，对比和驱动因素都会大面积空着。 */
   assets_with_features: number
   /**
-   * 整屏的档位，取五类结论里最弱的那一档。这是唯一一处 judgement 以嵌套对象
-   * 出现的地方（后端那边它是具名字段而非 embedded），其余都平铺。
+   * **跨视图**档位，取五类结论里最弱的那一档。它回答「这次分析整体能信到什么
+   * 程度」，不回答「我现在看的这一屏能信到什么程度」。
+   *
+   * 不要拿它当屏级徽章：那样的话在「趋势」上会显示一个由「驱动因素」拉低的档位，
+   * 而这一屏自己每条都站得住。屏级徽章一律取 view_judgements。
    */
   judgement: Judgement
+  /**
+   * 每个视图只按自己那批结论算出来的档位，键是视图名。缺键时回落到 judgement
+   * ——后端老版本没有这个字段，回落比整屏不显示档位好。
+   */
+  view_judgements?: Record<string, Judgement>
   notes?: string[]
 }
 
@@ -3903,17 +3932,88 @@ async function request<T>(path: string, method = 'GET', body?: unknown, headers?
   }
   if (!response.ok) {
     const error = (payload ?? {}) as { error?: { message?: string; code?: string } }
-    throw new ApiRequestError(error.error?.message ?? `API 请求失败（HTTP ${response.status}）`, response.status, error.error?.code ?? '')
+    const code = error.error?.code ?? ''
+    throw new ApiRequestError(
+      permissionMessage(response.status, code, error.error?.message)
+        ?? error.error?.message
+        ?? `API 请求失败（HTTP ${response.status}）`,
+      response.status, code)
   }
   return payload as T
 }
 
-function authSessionFromActor(actor: PlatformActor, username?: string): ApiAuthSession {
+/**
+ * 权限不够时那句话，换成人话。
+ *
+ * 后端两层各自说各自的：HTTP 那层回「The required permission scope is missing.」，
+ * 服务层回「insights.confirm scope is required」——两句都是英文，而且都没说缺的是
+ * 哪一档、去哪儿看。人按下「确认」只会收到一串洋文，第一反应是系统坏了，接着去
+ * 重试、去刷新，而这件事重试一百次也不会变。
+ *
+ * 前端不做权限判断（那是后端的事），只负责把这一类回复翻译成「你缺哪一档、去哪儿看」。
+ */
+function permissionMessage(status: number, code: string, raw?: string): string | undefined {
+  const scoped = /([a-z_]+\.[a-z_.]+) scope is required/.exec(raw ?? '')
+  if (status !== 403 && code !== 'SCOPE_REQUIRED' && !scoped) return undefined
+  const label = { 'insights.confirm': '确认', 'insights.write': '编辑', 'insights.read': '读取' }[scoped?.[1] ?? '']
+  return label
+    ? `你没有「${label}」这一档权限，这一步做不了。权限跟着组织角色走，`
+      + '在「设置 · 确认权限」能看到自己有哪几档；要变得找组织管理员改角色。'
+    : '你没有做这一步所需要的权限。权限跟着组织角色走，'
+      + '在「设置 · 确认权限」能看到自己有哪几档；要变得找组织管理员改角色。'
+}
+
+type PlatformOrganizationMembership = {
+  organization: { id: string; name: string; status: string }
+  membership: {
+    organization_id: string
+    user_id: string
+    role: 'owner' | 'admin' | 'member' | 'auditor'
+    status: string
+    updated_at: string
+  }
+}
+
+/**
+ * 把平台的 actor 翻成前端这边的登录态。
+ *
+ * **scopes 一定要带上**。以前这里只留了 user 一项，organization / membership / scopes
+ * 全丢掉了，于是前端看到的每个人都「一个权限都没有」：设置页的判定阈值永远存不下去
+ * （按钮所在的那一段被锁死），确认权限那一屏写着「你现在是当前角色」——那不是角色名，
+ * 是兜底字符串。而后端明明给了 insights.confirm。权限是后端拦的，前端这一层只负责
+ * 「按下去之前就说清楚行不行」；它读错了，说的每一句都是错的。
+ *
+ * 组织名和角色多取一次 `/organizations`：那个接口一次就把当前用户在各组织里的
+ * 身份和角色都给了。取不到就留空（比如某个角色连 organization.read 都没有），
+ * 界面各自有兜底文案——但不能因为这一次取失败就让整个登录失败。
+ */
+async function authSessionFromActor(actor: PlatformActor, username?: string): Promise<ApiAuthSession> {
   const identity = username?.trim() || actor.principal.id
-  return {
+  const session: ApiAuthSession = {
     authenticated: true,
     user: { id: actor.principal.id, email: '', displayName: identity },
+    scopes: actor.scopes ?? [],
   }
+  try {
+    const page = await platformRequest<{ items: PlatformOrganizationMembership[] }>('/organizations')
+    const current = page.items.find(item => item.organization.id === actor.organization_id) ?? page.items[0]
+    if (current) {
+      session.organization = {
+        id: current.organization.id,
+        name: current.organization.name,
+        status: current.organization.status,
+      }
+      session.membership = {
+        role: current.membership.role,
+        status: current.membership.status,
+        updatedAt: current.membership.updated_at,
+      }
+    }
+  } catch {
+    // 读不到组织不影响登录：scopes 已经拿到了，权限判断照样准确，
+    // 只是顶栏那一行显示成「本地组织」而已。
+  }
+  return session
 }
 
 async function platformRequest<T>(path: string, method = 'GET', body?: unknown, headers?: Record<string, string>): Promise<T> {
@@ -6113,11 +6213,15 @@ export const api = {
     request<ApiInsightReport>(
       `${insightProjectPath(projectId)}/reports/${encodeURIComponent(reportId)}:drop-finding`, 'POST', body,
     ),
-  // 提交这一轮复盘：补上「算哪次投放」、把系统发现定格进去、置为已确认，后端一次做完。
-  // 和 confirmReport 的区别是它带 execution_id——草稿是记一笔时自动建的，那会儿
-  // 还没到「这算哪次投放」这个问题，提交才是全流程唯一必须回答它的地方。
+  // 提交这一轮复盘：写下这一轮的摘要、补上「算哪次投放」、把系统发现定格进去、
+  // 置为已确认，后端一次做完。和 confirmReport 的区别就是前两件事——草稿是记一笔时
+  // 自动建的，那会儿还没到「这一轮讲的是什么、算哪次投放」这两个问题，
+  // 提交是全流程唯一能回答它们的地方（提交后报告不可改）。
   submitReview: (projectId: string, reportId: string, body: {
-    execution_id: string
+    // 都可以留空。摘要留空沿用报告已有那句；执行留空表示这一轮没挂投放执行，
+    // 后端不会拿空串把报告原来挂着的那次清掉。
+    summary?: string
+    execution_id?: string
     expected_version: number
   }) => request<ApiInsightReport>(
     `${insightProjectPath(projectId)}/reports/${encodeURIComponent(reportId)}/submit`, 'POST', body,
@@ -6127,7 +6231,7 @@ export const api = {
       `${insightProjectPath(projectId)}/reports/${encodeURIComponent(reportId)}:confirm`, 'POST',
       { expected_version: expectedVersion },
     ),
-  // 从复盘沉淀经验。九字段能填多少填多少：复盘是最有依据的一次，
+  // 从复盘里留下一条经验。九字段能填多少填多少：复盘是最有依据的一次，
   // 这里少填一个字段，后面投前洞察里那张卡就永远缺一格。
   createExperienceFromReport: (
     projectId: string,
@@ -6143,6 +6247,12 @@ export const api = {
       applicability?: ApiApplicability
       data_basis?: ApiDataBasis
       content_basis?: ApiContentBasis
+      // 这条经验留的是复盘里哪一条发现。三格和 ApiReportFinding 的
+      // dimension/variable/source_ref 一一对应，后端按同一把尺去报告里找那条发现。
+      //
+      // 它是「按哪一版阈值判的」唯一的合法来源：发现是系统算出来的，身上带着当时
+      // 那一版阈值；人手敲的一句结论没有任何阈值参与，那种情况下不传这一格。
+      source_finding?: { dimension?: string; variable?: string; source_ref?: string }
     },
   ) => request<ApiExperience>(
     `${insightProjectPath(projectId)}/reports/${encodeURIComponent(reportId)}:create-experience`, 'POST', body,
@@ -6261,6 +6371,14 @@ export const api = {
   listInsightAssetAnalysisRuns: (projectId: string, assetId: string, limit = 20) =>
     request<{ items: ApiAnalysisRun[] }>(
       `${insightAssetPath(projectId, assetId)}/analysis-runs?limit=${limit}`,
+    ),
+  // 整个 Project 的分析历史，最近的排在前面。
+  //
+  // **不要只取 status=failed**：那样拿到的是「历史上失败过的素材」，其中一部分早已
+  // 重跑成功。要判断「现在还是坏的」，必须把成功和失败一起取回来，按素材看最新那一条。
+  listInsightAnalysisRuns: (projectId: string, limit = 200) =>
+    request<{ items: ApiAnalysisRun[] }>(
+      `${insightProjectPath(projectId)}/analysis-runs?limit=${limit}`,
     ),
   identifyInsightAssetType: (
     projectId: string,
