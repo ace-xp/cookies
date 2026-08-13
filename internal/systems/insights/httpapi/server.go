@@ -74,7 +74,9 @@ type Application interface {
 
 	// 分析素材库与内容分析（03 §9 AM-001~006）。
 	IndexAsset(context.Context, contract.ActorContext, contract.ProjectID, insights.IndexAssetRequest) (insights.Asset, error)
-	ListAssets(context.Context, contract.ActorContext, contract.ProjectID, insights.AssetFilter) ([]insights.Asset, error)
+	// ListAssetPage 是素材清单唯一的取数口。台账动辄几千条，一次取完的 ListAssets
+	// 只够分析对象那几十条用，不能挂在对外接口上。
+	ListAssetPage(context.Context, contract.ActorContext, contract.ProjectID, insights.AssetFilter) (insights.AssetPage, error)
 	GetAsset(context.Context, contract.ActorContext, contract.ProjectID, string) (insights.Asset, error)
 	ListAssetLineage(context.Context, contract.ActorContext, contract.ProjectID, string) ([]insights.Asset, error)
 	IdentifyAssetType(context.Context, contract.ActorContext, contract.ProjectID, string, insights.IdentifyAssetTypeRequest) (insights.Asset, error)
@@ -89,6 +91,9 @@ type Application interface {
 	ConfirmAssetAnalysis(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
 	RequestAssetReview(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
 	RetireAsset(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
+	// 台账与分析对象之间的两个显式动作：都要有人点，不会自动发生。
+	PromoteAssetToAnalysis(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
+	ReturnAssetToLedger(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
 	GetFeatureMatrix(context.Context, contract.ActorContext, contract.ProjectID, []string) (insights.FeatureMatrix, error)
 
 	// 找相似素材：某个变量在本轮样本不够时，从库里把同样取值的素材拉过来。

@@ -592,6 +592,26 @@ paths:
           in: query
           description: Restrict to one creative's revision chain.
           schema: { type: string }
+        - name: role
+          in: query
+          description: >-
+            Omitting this returns analysis assets only. The ledger holds every
+            asset the platform ever produced and would otherwise swamp the four
+            analysis queues.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/AssetRole'
+          style: form
+          explode: true
+        - name: cursor
+          in: query
+          description: Opaque `next_cursor` from the previous page.
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Case-sensitive substring match on the title.
+          schema: { type: string, maxLength: 255 }
       responses:
         '200':
           description: Matching assets, newest first.
@@ -605,6 +625,11 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/InsightAsset'
+                  next_cursor:
+                    type: string
+                    description: >-
+                      Absent when this is the last page. Pass it back as `cursor`
+                      to fetch the next one.
         default:
           $ref: '#/components/responses/Problem'
     post:
@@ -998,6 +1023,51 @@ paths:
       responses:
         '200':
           description: Asset moved to 待复审.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InsightAsset'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/insights/v1/projects/{project_id}/assets/{asset_id}:promote:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - $ref: '#/components/parameters/AssetID'
+    post:
+      summary: Pull a ledger asset into analysis
+      description: >-
+        The only way out of the ledger, and it always takes a person. Most
+        ledger assets never go live, so nothing promotes them automatically.
+        Analysis progress is untouched — role and analysis_status are separate
+        dimensions.
+      operationId: promoteInsightAssetToAnalysis
+      requestBody:
+        $ref: '#/components/requestBodies/AssetTransitionWithReason'
+      responses:
+        '200':
+          description: The asset, now an analysis object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InsightAsset'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/insights/v1/projects/{project_id}/assets/{asset_id}:return-to-ledger:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - $ref: '#/components/parameters/AssetID'
+    post:
+      summary: Send a wrongly promoted asset back to the ledger
+      description: >-
+        Only assets that never matched a platform object can go back. A matched
+        asset has spend and attribution behind it; hiding it from the queues
+        would hide data that already exists.
+      operationId: returnInsightAssetToLedger
+      requestBody:
+        $ref: '#/components/requestBodies/AssetTransitionWithReason'
+      responses:
+        '200':
+          description: The asset, back on the books.
           content:
             application/json:
               schema:
@@ -3409,6 +3479,14 @@ components:
       type: string
       description: Where an indexed asset came from (AM-001).
       enum: [creative, upload, external]
+    AssetRole:
+      type: string
+      description: >-
+        What an asset is here for, independent of how far its analysis got.
+        `ledger` assets are on the books only: they never enter the analysis
+        queues and carry no features. `analysis` assets are the ones actually
+        going live, so they get matched, extracted and attributed.
+      enum: [ledger, analysis]
     FeatureSource:
       type: string
       description: >-
@@ -3473,11 +3551,13 @@ components:
           $ref: '#/components/schemas/ReviewState'
     InsightAsset:
       type: object
-      required: [id, organization_id, project_id, lineage_id, revision, title, source_kind, analysis_status, version, created_by, created_at, updated_at]
+      required: [id, organization_id, project_id, role, lineage_id, revision, title, source_kind, analysis_status, version, created_by, created_at, updated_at]
       properties:
         id: { type: string }
         organization_id: { type: string }
         project_id: { type: string }
+        role:
+          $ref: '#/components/schemas/AssetRole'
         lineage_id:
           type: string
           description: Stable identity of one creative across its revisions (AM-001).
@@ -3809,6 +3889,12 @@ components:
         title: { type: string, minLength: 1, maxLength: 255 }
         source_kind:
           $ref: '#/components/schemas/AssetSourceKind'
+        role:
+          allOf:
+            - $ref: '#/components/schemas/AssetRole'
+          description: >-
+            Defaults to `analysis` — anything registered by hand is meant to go
+            live. Only the platform's own ledger intake passes `ledger`.
         source_ref: { type: string, maxLength: 512 }
         source_job_id: { type: string }
         lineage_id:

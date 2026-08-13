@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -637,6 +638,66 @@ func TestAssetQueriesForwardEveryFilterToTheService(t *testing.T) {
 	}
 }
 
+// 台账要能翻页、能搜、能只看台账那一堆，三个参数缺一个清单就查不动。
+func TestListAssetsForwardsRoleCursorAndQuery(t *testing.T) {
+	t.Parallel()
+	app := &applicationStub{assetNextCursor: "cursor_2"}
+	server := New(app)
+
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, authenticatedRequest(http.MethodGet,
+		"/api/insights/v1/projects/project_1/assets?role=ledger&cursor=cursor_1&q=%E6%98%A5%E5%AD%A3", ""))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	filter := app.assetFilter
+	if len(filter.Roles) != 1 || filter.Roles[0] != insights.AssetRoleLedger ||
+		filter.Cursor != "cursor_1" || filter.Query != "春季" {
+		t.Fatalf("filter=%#v", filter)
+	}
+
+	var body struct {
+		Items      []insights.Asset `json:"items"`
+		NextCursor string           `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.NextCursor != "cursor_2" {
+		t.Fatalf("next_cursor=%q", body.NextCursor)
+	}
+
+	// 到底了就不该再有 next_cursor：前端靠这个键在不在决定还显不显示「加载更多」。
+	app.assetNextCursor = ""
+	last := httptest.NewRecorder()
+	server.ServeHTTP(last, authenticatedRequest(http.MethodGet, "/api/insights/v1/projects/project_1/assets", ""))
+	if strings.Contains(last.Body.String(), "next_cursor") {
+		t.Fatalf("body=%s", last.Body.String())
+	}
+}
+
+// 拉进分析与退回台账各自要落到各自的服务方法上。两个动词走的是同一个
+// assetTransition，路由挂错时表现是「点了没反应」而不是报错，只能靠测试兜。
+func TestAssetLedgerActionsRouteToService(t *testing.T) {
+	t.Parallel()
+	app := &applicationStub{}
+	server := New(app)
+
+	promote := httptest.NewRecorder()
+	server.ServeHTTP(promote, authenticatedRequest(http.MethodPost,
+		"/api/insights/v1/projects/project_1/assets/insightasset_1:promote", `{"expected_version":3}`))
+	if promote.Code != http.StatusOK || app.promotedAssetID != "insightasset_1" {
+		t.Fatalf("status=%d promoted=%q", promote.Code, app.promotedAssetID)
+	}
+
+	back := httptest.NewRecorder()
+	server.ServeHTTP(back, authenticatedRequest(http.MethodPost,
+		"/api/insights/v1/projects/project_1/assets/insightasset_2:return-to-ledger", `{"expected_version":4}`))
+	if back.Code != http.StatusOK || app.returnedAssetID != "insightasset_2" {
+		t.Fatalf("status=%d returned=%q", back.Code, app.returnedAssetID)
+	}
+}
+
 func authenticatedRequest(method, target, body string) *http.Request {
 	request := httptest.NewRequest(method, target, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -668,7 +729,11 @@ type applicationStub struct {
 	lookup               insights.ExperienceLookup
 	preLaunchFilter      insights.PreLaunchFilter
 
-	asset          insights.Asset
+	asset           insights.Asset
+	assetNextCursor string
+	promotedAssetID string
+	returnedAssetID string
+
 	mapping        insights.AssetMapping
 	feature        insights.AssetFeature
 	assetFilter    insights.AssetFilter
@@ -900,9 +965,9 @@ func (s *applicationStub) GetPerformance(context.Context, contract.ActorContext,
 func (s *applicationStub) IndexAsset(context.Context, contract.ActorContext, contract.ProjectID, insights.IndexAssetRequest) (insights.Asset, error) {
 	return s.asset, nil
 }
-func (s *applicationStub) ListAssets(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, filter insights.AssetFilter) ([]insights.Asset, error) {
+func (s *applicationStub) ListAssetPage(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, filter insights.AssetFilter) (insights.AssetPage, error) {
 	s.assetFilter = filter
-	return []insights.Asset{s.asset}, nil
+	return insights.AssetPage{Items: []insights.Asset{s.asset}, NextCursor: s.assetNextCursor}, nil
 }
 func (s *applicationStub) GetAsset(context.Context, contract.ActorContext, contract.ProjectID, string) (insights.Asset, error) {
 	return s.asset, nil
@@ -942,6 +1007,14 @@ func (s *applicationStub) RequestAssetReview(context.Context, contract.ActorCont
 	return s.asset, nil
 }
 func (s *applicationStub) RetireAsset(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error) {
+	return s.asset, nil
+}
+func (s *applicationStub) PromoteAssetToAnalysis(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, assetID string, _ insights.AssetTransitionRequest) (insights.Asset, error) {
+	s.promotedAssetID = assetID
+	return s.asset, nil
+}
+func (s *applicationStub) ReturnAssetToLedger(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, assetID string, _ insights.AssetTransitionRequest) (insights.Asset, error) {
+	s.returnedAssetID = assetID
 	return s.asset, nil
 }
 func (s *applicationStub) AnalyzeAsset(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, assetID string, request insights.AnalyzeAssetRequest) (insights.AnalyzeAssetResult, error) {

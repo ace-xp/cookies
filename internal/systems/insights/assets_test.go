@@ -1066,3 +1066,19 @@ func TestListAssetPageSearchesTitle(t *testing.T) {
 		t.Fatalf("一页装得下时不该发游标，得到 %q", page.NextCursor)
 	}
 }
+
+// 两个取数口共用同一份校验。少校验一个，那个口就成了绕过身份的后门：
+// 拼错的 role 被当成空值，台账会整片漏进分析队列。
+func TestBothAssetListersRejectUnknownRole(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	ctx := context.Background()
+	filter := AssetFilter{Roles: []AssetRole{"leger"}}
+
+	if _, err := service.ListAssets(ctx, actor, "project_1", filter); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("ListAssets 应拒绝未知身份，得到：%v", err)
+	}
+	if _, err := service.ListAssetPage(ctx, actor, "project_1", filter); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("ListAssetPage 应拒绝未知身份，得到：%v", err)
+	}
+}
