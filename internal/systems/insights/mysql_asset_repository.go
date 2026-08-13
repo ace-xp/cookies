@@ -55,6 +55,12 @@ func (r MySQLRepository) ListAssets(ctx context.Context, organizationID contract
 			args = append(args, kind)
 		}
 	}
+	if len(filter.Roles) > 0 {
+		query += ` AND role IN (` + placeholders(len(filter.Roles)) + `)`
+		for _, role := range filter.Roles {
+			args = append(args, role)
+		}
+	}
 	if filter.LineageID != "" {
 		query += ` AND lineage_id = ?`
 		args = append(args, filter.LineageID)

@@ -372,8 +372,13 @@ func (in FeatureInput) validate(assetType AssetType) error {
 // An empty LineageID starts a new lineage; a known one appends a revision, so
 // the same creative keeps one identity across edits.
 type IndexAssetRequest struct {
-	Title       string          `json:"title"`
-	SourceKind  AssetSourceKind `json:"source_kind"`
+	Title      string          `json:"title"`
+	SourceKind AssetSourceKind `json:"source_kind"`
+
+	// Role 留空就是分析对象——手工登记的素材默认是要拿去投的。
+	// 后台自动收录的台账素材由 RecordLedgerAsset 显式填 ledger。
+	Role AssetRole `json:"role"`
+
 	SourceRef   string          `json:"source_ref"`
 	SourceJobID string          `json:"source_job_id"`
 	LineageID   string          `json:"lineage_id"`
@@ -395,6 +400,9 @@ func (r IndexAssetRequest) validate() error {
 	}
 	if !r.SourceKind.valid() {
 		return fmt.Errorf("%w: 素材来源必须是 creative、upload 或 external", ErrInvalidRequest)
+	}
+	if r.Role != "" && !r.Role.valid() {
+		return fmt.Errorf("%w: 素材身份必须是 ledger 或 analysis", ErrInvalidRequest)
 	}
 	if len(r.SourceRef) > 512 || len(r.LineageID) > 96 {
 		return ErrInvalidRequest
@@ -535,8 +543,13 @@ type AssetFilter struct {
 	Statuses    []AnalysisStatus  `json:"statuses,omitempty"`
 	AssetTypes  []AssetType       `json:"asset_types,omitempty"`
 	SourceKinds []AssetSourceKind `json:"source_kinds,omitempty"`
-	LineageID   string            `json:"lineage_id,omitempty"`
-	Limit       int               `json:"limit,omitempty"`
+
+	// Roles 留空等于「只看分析对象」。这条默认值是台账不淹没四个队列的唯一保证：
+	// 忘了传的调用方拿到的是分析对象，不是几千条台账。
+	Roles []AssetRole `json:"roles,omitempty"`
+
+	LineageID string `json:"lineage_id,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
 }
 
 // AssetMappingFilter drives the 待匹配 queue.
@@ -690,9 +703,14 @@ func (s Service) IndexAsset(ctx context.Context, actor contract.ActorContext, pr
 	if request.AssetType.valid() {
 		status, reason = AnalysisAnalysable, "登记时已知类型，可开始特征提取。"
 	}
+	// 手工登记默认是分析对象；台账收录由调用方显式声明 ledger。
+	role := request.Role
+	if role == "" {
+		role = AssetRoleAnalysis
+	}
 	return s.Assets.CreateAsset(ctx, Asset{
 		ID: id, OrganizationID: actor.OrganizationID, ProjectID: projectID,
-		Role:      AssetRoleAnalysis,
+		Role:      role,
 		LineageID: lineageID, Revision: revision, Title: strings.TrimSpace(request.Title),
 		SourceKind: request.SourceKind, SourceRef: strings.TrimSpace(request.SourceRef),
 		SourceJobID:     strings.TrimSpace(request.SourceJobID),
@@ -723,6 +741,15 @@ func (s Service) ListAssets(ctx context.Context, actor contract.ActorContext, pr
 		if !kind.valid() {
 			return nil, fmt.Errorf("%w: 未知的素材来源 %q", ErrInvalidRequest, string(kind))
 		}
+	}
+	for _, role := range filter.Roles {
+		if !role.valid() {
+			return nil, fmt.Errorf("%w: 未知的素材身份 %q", ErrInvalidRequest, string(role))
+		}
+	}
+	// 不传身份就是只看分析对象。台账动辄几千条，默认漏进四个队列会把它们淹掉。
+	if len(filter.Roles) == 0 {
+		filter.Roles = []AssetRole{AssetRoleAnalysis}
 	}
 	filter.Limit = normalizeLimit(filter.Limit)
 	return s.Assets.ListAssets(ctx, actor.OrganizationID, projectID, filter)

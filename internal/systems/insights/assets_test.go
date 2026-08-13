@@ -574,6 +574,9 @@ func (r *memoryAssetRepository) ListAssets(_ context.Context, organizationID con
 		if len(filter.SourceKinds) > 0 && !containsSourceKind(filter.SourceKinds, asset.SourceKind) {
 			continue
 		}
+		if len(filter.Roles) > 0 && !containsAssetRole(filter.Roles, asset.Role) {
+			continue
+		}
 		if filter.LineageID != "" && asset.LineageID != filter.LineageID {
 			continue
 		}
@@ -771,6 +774,15 @@ func containsAssetType(values []AssetType, value AssetType) bool {
 	return false
 }
 
+func containsAssetRole(values []AssetRole, value AssetRole) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
 func containsSourceKind(values []AssetSourceKind, value AssetSourceKind) bool {
 	for _, item := range values {
 		if item == value {
@@ -798,5 +810,65 @@ func TestAssetRoleValidAndLabel(t *testing.T) {
 	}
 	if AssetRoleLedger.Label() != "台账" || AssetRoleAnalysis.Label() != "分析对象" {
 		t.Fatalf("身份的中文名不对：%q / %q", AssetRoleLedger.Label(), AssetRoleAnalysis.Label())
+	}
+}
+
+func TestIndexAssetDefaultsToAnalysisRole(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	asset, err := service.IndexAsset(context.Background(), actor, "project_1", IndexAssetRequest{
+		Title: "投放成片 A", SourceKind: AssetSourceUpload,
+	})
+	if err != nil {
+		t.Fatalf("登记失败：%v", err)
+	}
+	if asset.Role != AssetRoleAnalysis {
+		t.Fatalf("不填 role 时应默认是分析对象，得到 %q", asset.Role)
+	}
+}
+
+func TestIndexAssetRejectsUnknownRole(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	_, err := service.IndexAsset(context.Background(), actor, "project_1", IndexAssetRequest{
+		Title: "投放成片 B", SourceKind: AssetSourceUpload, Role: AssetRole("archive"),
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("未知身份应被拒，得到 %v", err)
+	}
+}
+
+func TestListAssetsHidesLedgerByDefault(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	ctx := context.Background()
+	if _, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+		Title: "分析对象", SourceKind: AssetSourceUpload,
+	}); err != nil {
+		t.Fatalf("登记分析对象失败：%v", err)
+	}
+	if _, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+		Title: "台账素材", SourceKind: AssetSourceUpload, Role: AssetRoleLedger,
+	}); err != nil {
+		t.Fatalf("登记台账素材失败：%v", err)
+	}
+
+	// 不给 roles 就只看分析对象：四个队列和红点靠这条默认值，绝不能把几千条台账数进去。
+	values, err := service.ListAssets(ctx, actor, "project_1", AssetFilter{})
+	if err != nil {
+		t.Fatalf("列素材失败：%v", err)
+	}
+	for _, value := range values {
+		if value.Role != AssetRoleAnalysis {
+			t.Fatalf("默认列表混进了 %q：%s", value.Role, value.Title)
+		}
+	}
+
+	ledger, err := service.ListAssets(ctx, actor, "project_1", AssetFilter{Roles: []AssetRole{AssetRoleLedger}})
+	if err != nil {
+		t.Fatalf("列台账失败：%v", err)
+	}
+	if len(ledger) != 1 || ledger[0].Title != "台账素材" {
+		t.Fatalf("显式要台账时应只拿到台账，得到 %d 条", len(ledger))
 	}
 }
