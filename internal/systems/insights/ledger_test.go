@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestRecordLedgerAssetWritesLedgerRole(t *testing.T) {
@@ -79,5 +80,75 @@ func TestRecordedLedgerAssetStaysOutOfAnalysisQueues(t *testing.T) {
 	}
 	if len(ledger) != 1 || ledger[0].Title != "开屏 15s.mp4" {
 		t.Fatalf("台账里应有那一条，得到 %#v", ledger)
+	}
+}
+
+func TestBackfillLedgerRejectsBadBatch(t *testing.T) {
+	t.Parallel()
+	service := testAssetService()
+	if _, err := service.BackfillLedger(context.Background(), 0); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("批量必须是正数，得到 %v", err)
+	}
+	if _, err := service.BackfillLedger(context.Background(), 100000); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("批量过大应被拒——一次拉十万行会把库拖垮，得到 %v", err)
+	}
+}
+
+func TestBackfillLedgerRecordsPendingAssets(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	at := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	repository := service.Assets.(*memoryAssetRepository)
+	repository.unledgered = []UnledgeredPlatformAsset{
+		{OrganizationID: "org_1", ProjectID: "project_1", AssetID: "asset_1", Version: 1, SourceType: "upload", CreatedAt: at},
+		{OrganizationID: "org_1", ProjectID: "project_1", AssetID: "asset_2", Version: 3, SourceType: "rendered", CreatedAt: at},
+		// 同一个版本挂在第二个项目下。台账的唯一键是组织级的，只能进一个项目。
+		{OrganizationID: "org_1", ProjectID: "project_2", AssetID: "asset_2", Version: 3, SourceType: "rendered", CreatedAt: at},
+	}
+	ctx := context.Background()
+
+	recorded, err := service.BackfillLedger(ctx, 100)
+	if err != nil {
+		t.Fatalf("回填失败：%v", err)
+	}
+	if recorded != 2 {
+		t.Fatalf("三条里有两条是不同的素材版本，应补 2 条，得到 %d 条", recorded)
+	}
+
+	ledger, err := service.ListAssets(ctx, actor, "project_1", AssetFilter{Roles: []AssetRole{AssetRoleLedger}})
+	if err != nil {
+		t.Fatalf("查台账失败：%v", err)
+	}
+	if len(ledger) != 2 {
+		t.Fatalf("台账里应有 2 条，得到 %d 条", len(ledger))
+	}
+	// 回填拿不到当初的文件名，也拿不到是谁传的；标题按来源加日期兜底，操作人落 system。
+	titles := map[string]bool{}
+	for _, asset := range ledger {
+		titles[asset.Title] = true
+		if asset.CreatedBy != "system" {
+			t.Fatalf("回填的操作人应是 system，得到 %q", asset.CreatedBy)
+		}
+	}
+	if !titles["未命名素材 · 2026-08-01"] || !titles["渲染成片 · 2026-08-01"] {
+		t.Fatalf("兜底标题不对：%#v", titles)
+	}
+}
+
+// 派生物不进台账。它们是同一个素材的另一种形态（缩略图、转码档），
+// 收进来只会让素材数翻好几倍——SQL 已经滤掉一层，这里守住第二层。
+func TestBackfillLedgerSkipsUnknownSourceTypes(t *testing.T) {
+	t.Parallel()
+	service := testAssetService()
+	repository := service.Assets.(*memoryAssetRepository)
+	repository.unledgered = []UnledgeredPlatformAsset{
+		{OrganizationID: "org_1", ProjectID: "project_1", AssetID: "asset_1", Version: 1, SourceType: "derived"},
+	}
+	recorded, err := service.BackfillLedger(context.Background(), 100)
+	if err != nil {
+		t.Fatalf("回填失败：%v", err)
+	}
+	if recorded != 0 {
+		t.Fatalf("派生物不该进台账，得到 %d 条", recorded)
 	}
 }

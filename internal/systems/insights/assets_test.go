@@ -548,6 +548,16 @@ type memoryAssetRepository struct {
 	assets   map[string]Asset
 	mappings map[string]AssetMapping
 	features map[string]AssetFeature
+
+	// unledgered 是回填命令要补的那一批，由测试自己摆好。
+	unledgered []UnledgeredPlatformAsset
+}
+
+func (r *memoryAssetRepository) ListUnledgeredPlatformAssets(_ context.Context, limit int) ([]UnledgeredPlatformAsset, error) {
+	if limit > 0 && len(r.unledgered) > limit {
+		return r.unledgered[:limit], nil
+	}
+	return r.unledgered, nil
 }
 
 func featureLayerKey(assetID, key string, source FeatureSource) string {

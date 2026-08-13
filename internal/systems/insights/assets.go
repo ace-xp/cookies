@@ -567,6 +567,17 @@ type AssetPage struct {
 	NextCursor string  `json:"next_cursor,omitempty"`
 }
 
+// UnledgeredPlatformAsset 是平台素材库里有、但台账里还没有的一个素材版本。
+// 回填命令按它一条条补，直到查不出来为止。
+type UnledgeredPlatformAsset struct {
+	OrganizationID contract.OrganizationID
+	ProjectID      contract.ProjectID
+	AssetID        string
+	Version        int64
+	SourceType     string
+	CreatedAt      time.Time
+}
+
 // AssetMappingFilter drives the 待匹配 queue.
 type AssetMappingFilter struct {
 	Statuses []MappingStatus `json:"statuses,omitempty"`
@@ -682,6 +693,7 @@ type AssetRepository interface {
 	TransitionAsset(context.Context, TransitionAssetInput) (Asset, error)
 	UpdateAssetRole(context.Context, UpdateAssetRoleInput) (Asset, error)
 	ListAssetPage(context.Context, contract.OrganizationID, contract.ProjectID, AssetFilter) (AssetPage, error)
+	ListUnledgeredPlatformAssets(context.Context, int) ([]UnledgeredPlatformAsset, error)
 
 	CreateAssetMapping(context.Context, AssetMapping) (AssetMapping, error)
 	ListAssetMappings(context.Context, contract.OrganizationID, contract.ProjectID, AssetMappingFilter) ([]AssetMapping, error)

@@ -3,7 +3,9 @@ package insights
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
@@ -89,4 +91,82 @@ func (s Service) RecordLedgerAsset(ctx context.Context, request RecordLedgerAsse
 		AnalysisStatusChangedAt: &now,
 		Version:                 1, CreatedBy: createdBy, CreatedAt: now, UpdatedAt: now,
 	})
+}
+
+// BackfillLedger 把平台素材库里已有、台账里没有的素材版本补进来。
+//
+// 一次跑一批，跑完回报补了多少条。跑到回报 0 就是补完了——
+// 这个命令可以反复跑，重复的那些会被 uq_insight_assets_ledger_object 挡在库里。
+func (s Service) BackfillLedger(ctx context.Context, batch int) (int, error) {
+	if s.Assets == nil {
+		return 0, fmt.Errorf("insight asset repository is not configured")
+	}
+	if batch < 1 || batch > 5000 {
+		return 0, fmt.Errorf("%w: 单批数量应在 1..5000 之间", ErrInvalidRequest)
+	}
+	pending, err := s.Assets.ListUnledgeredPlatformAssets(ctx, batch)
+	if err != nil {
+		return 0, err
+	}
+	recorded := 0
+	seen := make(map[string]bool, len(pending))
+	for _, item := range pending {
+		kind := backfillSourceKind(item.SourceType)
+		if kind == "" {
+			continue
+		}
+		// 同一个素材版本可能挂在多个项目下。台账的唯一键是组织级的，
+		// 所以它只能进一个项目——先来的那个。批内先挡掉，省得让库去报错。
+		key := string(item.OrganizationID) + "|" + item.AssetID + "|" + fmt.Sprint(item.Version)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		_, recordErr := s.RecordLedgerAsset(ctx, RecordLedgerAssetRequest{
+			OrganizationID: item.OrganizationID, ProjectID: item.ProjectID,
+			// 不传 ActorID：素材库没有记「这个版本是谁传的」，
+			// 回填也就无从知道。落成 system，比编一个人名诚实。
+			//
+			// 回填也拿不到当初的文件名——那躺在上传会话里，早过期清掉了。
+			// 用入库日期，至少说得清它是哪天进来的。
+			Title:           backfillTitle(item.SourceType, item.CreatedAt),
+			SourceKind:      kind,
+			PlatformAssetID: item.AssetID, PlatformAssetVersion: item.Version,
+		})
+		if recordErr != nil {
+			// 一条补不上不该让整批停下：唯一键撞了、项目已归档，都可能。
+			// 报出来让人看见，接着补下一条。
+			log.Printf("回填台账失败 asset=%s version=%d: %v", item.AssetID, item.Version, recordErr)
+			continue
+		}
+		recorded++
+	}
+	return recorded, nil
+}
+
+func backfillSourceKind(sourceType string) AssetSourceKind {
+	switch sourceType {
+	case "upload":
+		return AssetSourceUpload
+	case "rendered", "provider_generated":
+		return AssetSourceCreative
+	case "imported", "captured":
+		return AssetSourceExternal
+	}
+	return ""
+}
+
+func backfillTitle(sourceType string, at time.Time) string {
+	date := at.Format("2006-01-02")
+	switch sourceType {
+	case "rendered":
+		return fmt.Sprintf("渲染成片 · %s", date)
+	case "provider_generated":
+		return fmt.Sprintf("模型产物 · %s", date)
+	case "imported":
+		return fmt.Sprintf("外部导入 · %s", date)
+	case "captured":
+		return fmt.Sprintf("采集素材 · %s", date)
+	}
+	return fmt.Sprintf("未命名素材 · %s", date)
 }
