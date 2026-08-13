@@ -651,6 +651,34 @@ func (r *memoryAssetRepository) TransitionAsset(ctx context.Context, input Trans
 	return asset, nil
 }
 
+func (r *memoryAssetRepository) ListAssetPage(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, filter AssetFilter) (AssetPage, error) {
+	values, err := r.ListAssets(ctx, organizationID, projectID, AssetFilter{
+		Statuses: filter.Statuses, AssetTypes: filter.AssetTypes, SourceKinds: filter.SourceKinds,
+		Roles: filter.Roles, LineageID: filter.LineageID,
+	})
+	if err != nil {
+		return AssetPage{}, err
+	}
+	matched := make([]Asset, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(filter.Query); trimmed != "" && !strings.Contains(value.Title, trimmed) {
+			continue
+		}
+		matched = append(matched, value)
+	}
+	limit := filter.Limit
+	if limit < 1 || limit > assetPageMaxLimit {
+		limit = assetPageDefaultLimit
+	}
+	if len(matched) > limit {
+		return AssetPage{
+			Items:      matched[:limit],
+			NextCursor: encodeAssetCursor(matched[limit-1].UpdatedAt, matched[limit-1].ID),
+		}, nil
+	}
+	return AssetPage{Items: matched}, nil
+}
+
 func (r *memoryAssetRepository) UpdateAssetRole(ctx context.Context, input UpdateAssetRoleInput) (Asset, error) {
 	asset, err := r.GetAsset(ctx, input.OrganizationID, input.ProjectID, input.ID)
 	if err != nil {
@@ -989,5 +1017,52 @@ func TestLedgerAssetRefusesFeatureWrite(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "拉进分析") {
 		t.Fatalf("错误得告诉人下一步怎么办，得到 %v", err)
+	}
+}
+
+func TestAssetCursorRoundTrip(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 10, 30, 0, 123456000, time.UTC)
+	encoded := encodeAssetCursor(at, "insightasset_7")
+	gotAt, gotID, err := decodeAssetCursor(encoded)
+	if err != nil {
+		t.Fatalf("游标解不开：%v", err)
+	}
+	if !gotAt.Equal(at) || gotID != "insightasset_7" {
+		t.Fatalf("游标来回一趟变了：%v / %q", gotAt, gotID)
+	}
+}
+
+func TestDecodeAssetCursorRejectsGarbage(t *testing.T) {
+	t.Parallel()
+	// 游标是我们自己发出去的不透明串。收到别的东西就是有人在手改 URL，
+	// 直接报错，不能悄悄退回第一页——那会让「加载更多」变成无限循环。
+	if _, _, err := decodeAssetCursor("not-a-cursor"); err == nil {
+		t.Fatal("乱七八糟的游标应该报错")
+	}
+}
+
+func TestListAssetPageSearchesTitle(t *testing.T) {
+	t.Parallel()
+	service, actor := testAssetService(), testActor()
+	ctx := context.Background()
+	for _, title := range []string{"春节主视觉 KV", "夏季促销短视频", "春节红包封面"} {
+		if _, err := service.IndexAsset(ctx, actor, "project_1", IndexAssetRequest{
+			Title: title, SourceKind: AssetSourceUpload, Role: AssetRoleLedger,
+		}); err != nil {
+			t.Fatalf("登记 %q 失败：%v", title, err)
+		}
+	}
+	page, err := service.ListAssetPage(ctx, actor, "project_1", AssetFilter{
+		Roles: []AssetRole{AssetRoleLedger}, Query: "春节",
+	})
+	if err != nil {
+		t.Fatalf("搜标题失败：%v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("「春节」应命中 2 条，得到 %d 条", len(page.Items))
+	}
+	if page.NextCursor != "" {
+		t.Fatalf("一页装得下时不该发游标，得到 %q", page.NextCursor)
 	}
 }

@@ -3,10 +3,12 @@ package insights
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
@@ -73,6 +75,103 @@ func (r MySQLRepository) ListAssets(ctx context.Context, organizationID contract
 		args = append(args, filter.Limit)
 	}
 	return r.queryAssets(ctx, query, args...)
+}
+
+// 游标编的是排序键本身 (updated_at, id)，不是行号。中间插进来一条新素材时，
+// 已经翻过的页不会因此错位重复——这是 offset 分页做不到的。
+func encodeAssetCursor(updatedAt time.Time, id string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(updatedAt.UTC().Format(time.RFC3339Nano) + "|" + id))
+}
+
+func decodeAssetCursor(value string) (time.Time, string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("%w: 游标格式不对", ErrInvalidRequest)
+	}
+	parts := strings.SplitN(string(raw), "|", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return time.Time{}, "", fmt.Errorf("%w: 游标格式不对", ErrInvalidRequest)
+	}
+	at, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("%w: 游标里的时间读不出来", ErrInvalidRequest)
+	}
+	return at, parts[1], nil
+}
+
+// ListAssetPage 按 (updated_at, id) 游标翻页。台账和平台素材库一样大，
+// 一次取完的 ListAssets 只适合分析对象那几十条。
+func (r MySQLRepository) ListAssetPage(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, filter AssetFilter) (AssetPage, error) {
+	query := insightAssetSelect + ` WHERE organization_id = ? AND project_id = ?`
+	args := []any{organizationID, projectID}
+
+	if len(filter.Roles) > 0 {
+		query += ` AND role IN (` + placeholders(len(filter.Roles)) + `)`
+		for _, role := range filter.Roles {
+			args = append(args, role)
+		}
+	}
+	if len(filter.Statuses) > 0 {
+		query += ` AND analysis_status IN (` + placeholders(len(filter.Statuses)) + `)`
+		for _, status := range filter.Statuses {
+			args = append(args, status)
+		}
+	}
+	if len(filter.AssetTypes) > 0 {
+		query += ` AND asset_type IN (` + placeholders(len(filter.AssetTypes)) + `)`
+		for _, assetType := range filter.AssetTypes {
+			args = append(args, assetType)
+		}
+	}
+	if len(filter.SourceKinds) > 0 {
+		query += ` AND source_kind IN (` + placeholders(len(filter.SourceKinds)) + `)`
+		for _, kind := range filter.SourceKinds {
+			args = append(args, kind)
+		}
+	}
+	if filter.LineageID != "" {
+		query += ` AND lineage_id = ?`
+		args = append(args, filter.LineageID)
+	}
+	if trimmed := strings.TrimSpace(filter.Query); trimmed != "" {
+		// 只搜标题。全文检索是另一件事，台账要的只是「我记得它叫什么」。
+		query += ` AND title LIKE ? ESCAPE '\\'`
+		args = append(args, "%"+escapeLike(trimmed)+"%")
+	}
+	if filter.Cursor != "" {
+		at, id, err := decodeAssetCursor(filter.Cursor)
+		if err != nil {
+			return AssetPage{}, err
+		}
+		query += ` AND (updated_at < ? OR (updated_at = ? AND id < ?))`
+		args = append(args, at, at, id)
+	}
+
+	limit := filter.Limit
+	if limit < 1 || limit > assetPageMaxLimit {
+		limit = assetPageDefaultLimit
+	}
+	// 多要一条：拿到了就说明还有下一页，用不着再数一次总数。
+	query += ` ORDER BY updated_at DESC, id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	items, err := r.queryAssets(ctx, query, args...)
+	if err != nil {
+		return AssetPage{}, err
+	}
+	page := AssetPage{Items: items}
+	if len(items) > limit {
+		page.Items = items[:limit]
+		last := page.Items[limit-1]
+		page.NextCursor = encodeAssetCursor(last.UpdatedAt, last.ID)
+	}
+	return page, nil
+}
+
+// escapeLike 把 LIKE 的三个元字符转义掉。不转义的话，搜「100%」会命中所有素材。
+func escapeLike(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
 }
 
 func (r MySQLRepository) GetAsset(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, id string) (Asset, error) {

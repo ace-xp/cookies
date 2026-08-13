@@ -549,7 +549,22 @@ type AssetFilter struct {
 	Roles []AssetRole `json:"roles,omitempty"`
 
 	LineageID string `json:"lineage_id,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
+
+	// Cursor 是上一页最后一条的位置，不透明串，由 ListAssetPage 发出。
+	// 台账几千条起，offset 分页翻到第 50 页要数过前面 4900 行；游标只比一次索引。
+	Cursor string `json:"cursor,omitempty"`
+	// Query 按标题模糊搜。台账里绝大多数素材人只记得个名字，
+	// 没有搜索的清单等于让人一页页翻——那就是查不动。
+	Query string `json:"q,omitempty"`
+
+	Limit int `json:"limit,omitempty"`
+}
+
+// AssetPage 是一页素材。NextCursor 为空表示到底了——
+// 前端靠这一个信号决定「加载更多」还显不显示，不必自己数条数。
+type AssetPage struct {
+	Items      []Asset `json:"items"`
+	NextCursor string  `json:"next_cursor,omitempty"`
 }
 
 // AssetMappingFilter drives the 待匹配 queue.
@@ -666,6 +681,7 @@ type AssetRepository interface {
 	UpdateAssetType(context.Context, UpdateAssetTypeInput) (Asset, error)
 	TransitionAsset(context.Context, TransitionAssetInput) (Asset, error)
 	UpdateAssetRole(context.Context, UpdateAssetRoleInput) (Asset, error)
+	ListAssetPage(context.Context, contract.OrganizationID, contract.ProjectID, AssetFilter) (AssetPage, error)
 
 	CreateAssetMapping(context.Context, AssetMapping) (AssetMapping, error)
 	ListAssetMappings(context.Context, contract.OrganizationID, contract.ProjectID, AssetMappingFilter) ([]AssetMapping, error)
@@ -739,32 +755,66 @@ func (s Service) ListAssets(ctx context.Context, actor contract.ActorContext, pr
 	if err := s.assetsReady(actor, projectID, ScopeRead); err != nil {
 		return nil, err
 	}
+	filter, err := normalizeAssetFilter(filter)
+	if err != nil {
+		return nil, err
+	}
+	filter.Limit = normalizeLimit(filter.Limit)
+	return s.Assets.ListAssets(ctx, actor.OrganizationID, projectID, filter)
+}
+
+// ListAssetPage 是台账清单的取数口。ListAssets 一次取完的做法留给分析对象那几十条，
+// 台账不能这么取——它和平台素材库一样大。
+func (s Service) ListAssetPage(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, filter AssetFilter) (AssetPage, error) {
+	if err := s.assetsReady(actor, projectID, ScopeRead); err != nil {
+		return AssetPage{}, err
+	}
+	filter, err := normalizeAssetFilter(filter)
+	if err != nil {
+		return AssetPage{}, err
+	}
+	if filter.Limit < 1 || filter.Limit > assetPageMaxLimit {
+		filter.Limit = assetPageDefaultLimit
+	}
+	return s.Assets.ListAssetPage(ctx, actor.OrganizationID, projectID, filter)
+}
+
+const (
+	assetPageDefaultLimit = 50
+	assetPageMaxLimit     = 100
+)
+
+// normalizeAssetFilter 校验筛选条件并补上默认身份。两个取数口共用一份，
+// 免得哪天只在其中一个上加了校验，另一个成了后门。
+func normalizeAssetFilter(filter AssetFilter) (AssetFilter, error) {
 	for _, status := range filter.Statuses {
 		if !status.valid() {
-			return nil, fmt.Errorf("%w: 未知的分析状态 %q", ErrInvalidRequest, string(status))
+			return filter, fmt.Errorf("%w: 未知的分析状态 %q", ErrInvalidRequest, string(status))
 		}
 	}
 	for _, assetType := range filter.AssetTypes {
 		if !assetType.valid() {
-			return nil, fmt.Errorf("%w: 未知的素材类型 %q", ErrInvalidRequest, string(assetType))
+			return filter, fmt.Errorf("%w: 未知的素材类型 %q", ErrInvalidRequest, string(assetType))
 		}
 	}
 	for _, kind := range filter.SourceKinds {
 		if !kind.valid() {
-			return nil, fmt.Errorf("%w: 未知的素材来源 %q", ErrInvalidRequest, string(kind))
+			return filter, fmt.Errorf("%w: 未知的素材来源 %q", ErrInvalidRequest, string(kind))
 		}
 	}
 	for _, role := range filter.Roles {
 		if !role.valid() {
-			return nil, fmt.Errorf("%w: 未知的素材身份 %q", ErrInvalidRequest, string(role))
+			return filter, fmt.Errorf("%w: 未知的素材身份 %q", ErrInvalidRequest, string(role))
 		}
 	}
 	// 不传身份就是只看分析对象。台账动辄几千条，默认漏进四个队列会把它们淹掉。
 	if len(filter.Roles) == 0 {
 		filter.Roles = []AssetRole{AssetRoleAnalysis}
 	}
-	filter.Limit = normalizeLimit(filter.Limit)
-	return s.Assets.ListAssets(ctx, actor.OrganizationID, projectID, filter)
+	if len(filter.Query) > 255 {
+		return filter, fmt.Errorf("%w: 搜索词过长", ErrInvalidRequest)
+	}
+	return filter, nil
 }
 
 func (s Service) GetAsset(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, assetID string) (Asset, error) {
