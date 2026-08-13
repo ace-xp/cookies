@@ -379,9 +379,9 @@ type IndexAssetRequest struct {
 	// 后台自动收录的台账素材由 RecordLedgerAsset 显式填 ledger。
 	Role AssetRole `json:"role"`
 
-	SourceRef   string          `json:"source_ref"`
-	SourceJobID string          `json:"source_job_id"`
-	LineageID   string          `json:"lineage_id"`
+	SourceRef   string `json:"source_ref"`
+	SourceJobID string `json:"source_job_id"`
+	LineageID   string `json:"lineage_id"`
 
 	PlatformAssetID      string `json:"platform_asset_id"`
 	PlatformAssetVersion int64  `json:"platform_asset_version"`

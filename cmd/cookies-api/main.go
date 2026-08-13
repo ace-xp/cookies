@@ -25,6 +25,7 @@ import (
 	"github.com/shikanon/cookies/internal/integrations/creativeprovider"
 	"github.com/shikanon/cookies/internal/integrations/deliveryinsights"
 	"github.com/shikanon/cookies/internal/integrations/gotenberg"
+	"github.com/shikanon/cookies/internal/integrations/insightsledger"
 	"github.com/shikanon/cookies/internal/integrations/lasdocument"
 	"github.com/shikanon/cookies/internal/integrations/productsource"
 	"github.com/shikanon/cookies/internal/integrations/projectdelivery"
@@ -129,7 +130,10 @@ func main() {
 	scanner := buildScanner(cfg)
 	projectService := &project.Service{Store: projectStore, Authorizer: projectStore}
 	assetRepository := assets.MySQLRepository{DB: db}
-	uploadService := &assets.UploadService{Repository: assetRepository, Projects: projectService, Blobs: blobs, Scanner: scanner, QuarantineBucket: cfg.ObjectStorage.QuarantineBucket, AssetsBucket: cfg.ObjectStorage.AssetsBucket, UsePolicy: assets.AssetUsePolicy{Rights: assetRepository}}
+	// 台账的收录钩子。insightsService 要到几百行之后才造得出来，
+	// 而中间有几处按值把 UploadService 拷走；拷的是这个指针，回填也回填这个指针。
+	ledgerRelay := &assets.LedgerRelay{}
+	uploadService := &assets.UploadService{Repository: assetRepository, Projects: projectService, Blobs: blobs, Scanner: scanner, QuarantineBucket: cfg.ObjectStorage.QuarantineBucket, AssetsBucket: cfg.ObjectStorage.AssetsBucket, UsePolicy: assets.AssetUsePolicy{Rights: assetRepository}, Ledger: ledgerRelay}
 	if ffprobePath != "" {
 		uploadService.VideoProbe = assets.FFprobeVideoProbe{Path: ffprobePath, WorkRoot: cfg.Media.VideoWorkRoot}
 		uploadService.AudioProbe = assets.FFprobeAudioProbe{Path: ffprobePath, WorkRoot: cfg.Media.VideoWorkRoot}
@@ -545,6 +549,9 @@ func main() {
 		MiyunVerifier:       miyunVerifier,
 		MiyunCooldown:       time.Duration(cfg.Miyun.CooldownSeconds) * time.Second,
 	}
+	// 回填台账钩子。必须在 insightsService 构造完之后——
+	// 在这之前，素材库那边每一次入库都从 relay 上读到 nil，什么都不做。
+	ledgerRelay.Recorder = insightsledger.Recorder{Service: insightsService}
 	// Text 为 nil 时提取会直接失败，不会退化成模板产出——
 	// 库里一条编造的特征，代价远大于一次失败的提取。
 	if textProvider != nil {
