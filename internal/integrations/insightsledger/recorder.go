@@ -21,6 +21,9 @@ func (r Recorder) Record(ctx context.Context, entry assets.LedgerEntry) error {
 	if r.Service == nil {
 		return nil
 	}
+	if !playable(entry.Kind) {
+		return nil
+	}
 	kind, ok := sourceKind(entry.SourceType)
 	if !ok {
 		return nil
@@ -31,6 +34,12 @@ func (r Recorder) Record(ctx context.Context, entry assets.LedgerEntry) error {
 		PlatformAssetID: string(entry.AssetID), PlatformAssetVersion: entry.Version,
 	})
 	return err
+}
+
+// playable 判断这东西投不投得出去。规则本身在 insights 那边——
+// 回填命令走的是另一条路，两条路必须同一份规则，不然哪天只改了一边。
+func playable(kind contract.AssetKind) bool {
+	return insights.LedgerAcceptsKind(string(kind))
 }
 
 // sourceKind 把平台的六种入库来源折成洞察的三种。

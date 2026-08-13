@@ -176,15 +176,24 @@ func (r MySQLRepository) ListAssetPage(ctx context.Context, organizationID contr
 // 从 project_assets 起手而不是 asset_versions，是因为版本表里根本没有项目：
 // 一个素材版本挂在哪个项目下，只有 project_assets 知道，而台账是按项目分的。
 // 派生物排除在外，理由和收录时一样——它们是同一个素材的另一种形态。
+//
+// 顺带把对象键取出来给台账起名：回填拿不到当初的上传文件名，对象键的最后一段
+// 往往就是它，见 ledgerObjectTitle。JOIN 而不是 LEFT JOIN——asset_versions.blob_id
+// 是 NOT NULL 且带外键，没有对应 blob 的版本行在库里不存在。
 func (r MySQLRepository) ListUnledgeredPlatformAssets(ctx context.Context, limit int) ([]UnledgeredPlatformAsset, error) {
 	rows, err := r.DB.QueryContext(ctx, `
 		SELECT pa.organization_id, pa.project_id, pa.asset_id, pa.asset_version,
-		       v.source_type, pa.created_at
+		       v.source_type, s.asset_kind, b.object_key, pa.created_at
 		FROM project_assets pa
 		JOIN asset_versions v
 		  ON v.organization_id = pa.organization_id
 		 AND v.asset_id = pa.asset_id
 		 AND v.version = pa.asset_version
+		JOIN assets s
+		  ON s.organization_id = pa.organization_id
+		 AND s.id = pa.asset_id
+		JOIN asset_blobs b
+		  ON b.id = v.blob_id
 		LEFT JOIN insight_assets a
 		  ON a.organization_id = pa.organization_id
 		 AND a.role = 'ledger'
@@ -192,6 +201,7 @@ func (r MySQLRepository) ListUnledgeredPlatformAssets(ctx context.Context, limit
 		 AND a.platform_asset_version = pa.asset_version
 		WHERE a.id IS NULL
 		  AND v.source_type <> 'derived'
+		  AND s.asset_kind NOT IN ('document', 'text')
 		  AND v.status = 'ready'
 		  AND pa.status <> 'removed'
 		ORDER BY pa.created_at ASC, pa.asset_id ASC, pa.asset_version ASC
@@ -205,12 +215,45 @@ func (r MySQLRepository) ListUnledgeredPlatformAssets(ctx context.Context, limit
 	for rows.Next() {
 		var value UnledgeredPlatformAsset
 		if err := rows.Scan(&value.OrganizationID, &value.ProjectID, &value.AssetID,
-			&value.Version, &value.SourceType, &value.CreatedAt); err != nil {
+			&value.Version, &value.SourceType, &value.Kind, &value.ObjectKey, &value.CreatedAt); err != nil {
 			return nil, err
 		}
 		values = append(values, value)
 	}
 	return values, rows.Err()
+}
+
+// DeleteLedgerAssetsByPlatformKind 删掉台账里指向某几类平台素材的行。
+//
+// 三道闸各挡一件事，少一道都会删错东西：
+//   - role = 'ledger' —— 已经被人拉进分析的不碰，那上面挂着人做过的判断。
+//   - platform_asset_id IS NOT NULL —— 手工登记的素材没有平台来源，
+//     JOIN 不上任何一行，它不该因为「查不到类型」被顺手删掉。
+//   - EXISTS 而不是 JOIN DELETE —— 一条台账行只该被自己那条平台素材决定去留。
+func (r MySQLRepository) DeleteLedgerAssetsByPlatformKind(ctx context.Context, kinds []string) (int, error) {
+	if len(kinds) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
+	arguments := make([]any, 0, len(kinds))
+	for _, kind := range kinds {
+		arguments = append(arguments, kind)
+	}
+	result, err := r.DB.ExecContext(ctx, `
+		DELETE FROM insight_assets
+		WHERE role = 'ledger'
+		  AND platform_asset_id IS NOT NULL
+		  AND EXISTS (
+		    SELECT 1 FROM assets s
+		    WHERE s.organization_id = insight_assets.organization_id
+		      AND s.id = insight_assets.platform_asset_id
+		      AND s.asset_kind IN (`+placeholders+`)
+		  )`, arguments...)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	return int(affected), err
 }
 
 // escapeLike 把 LIKE 的三个元字符转义掉。不转义的话，搜「100%」会命中所有素材。

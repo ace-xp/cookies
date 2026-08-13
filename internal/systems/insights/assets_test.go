@@ -528,9 +528,10 @@ func testAssetService() Service {
 	sequence := 0
 	return Service{
 		Assets: &memoryAssetRepository{
-			assets:   map[string]Asset{},
-			mappings: map[string]AssetMapping{},
-			features: map[string]AssetFeature{},
+			assets:        map[string]Asset{},
+			mappings:      map[string]AssetMapping{},
+			features:      map[string]AssetFeature{},
+			platformKinds: map[string]string{},
 		},
 		Projects: testProjects{},
 		Now:      func() time.Time { return time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC) },
@@ -551,6 +552,30 @@ type memoryAssetRepository struct {
 
 	// unledgered 是回填命令要补的那一批，由测试自己摆好。
 	unledgered []UnledgeredPlatformAsset
+	// platformKinds 是「这条平台素材是什么类型」，assetID -> kind。
+	// 真实实现靠 JOIN assets 拿，内存里只能由测试摆好。
+	platformKinds map[string]string
+	// prunedKinds 记下清理命令实际传下来的类型，让测试能守住它删的是哪几类。
+	prunedKinds []string
+}
+
+func (r *memoryAssetRepository) DeleteLedgerAssetsByPlatformKind(_ context.Context, kinds []string) (int, error) {
+	r.prunedKinds = append([]string{}, kinds...)
+	unwanted := make(map[string]bool, len(kinds))
+	for _, kind := range kinds {
+		unwanted[kind] = true
+	}
+	deleted := 0
+	for id, asset := range r.assets {
+		if asset.Role != AssetRoleLedger || asset.PlatformAssetID == "" {
+			continue
+		}
+		if unwanted[r.platformKinds[asset.PlatformAssetID]] {
+			delete(r.assets, id)
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 func (r *memoryAssetRepository) ListUnledgeredPlatformAssets(_ context.Context, limit int) ([]UnledgeredPlatformAsset, error) {

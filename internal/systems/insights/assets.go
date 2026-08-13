@@ -581,7 +581,13 @@ type UnledgeredPlatformAsset struct {
 	AssetID        string
 	Version        int64
 	SourceType     string
-	CreatedAt      time.Time
+	// Kind 是平台那边的 asset_kind：image / video / audio / document / text。
+	// 台账只收投得出去的那几种，见 LedgerAcceptsKind。
+	Kind string
+	// ObjectKey 是这份文件在对象存储里的路径。回填拿不到当初的上传文件名，
+	// 但对象键的最后一段往往就是它，用来给台账起名，见 ledgerObjectTitle。
+	ObjectKey string
+	CreatedAt time.Time
 }
 
 // AssetMappingFilter drives the 待匹配 queue.
@@ -700,6 +706,7 @@ type AssetRepository interface {
 	UpdateAssetRole(context.Context, UpdateAssetRoleInput) (Asset, error)
 	ListAssetPage(context.Context, contract.OrganizationID, contract.ProjectID, AssetFilter) (AssetPage, error)
 	ListUnledgeredPlatformAssets(context.Context, int) ([]UnledgeredPlatformAsset, error)
+	DeleteLedgerAssetsByPlatformKind(context.Context, []string) (int, error)
 
 	CreateAssetMapping(context.Context, AssetMapping) (AssetMapping, error)
 	ListAssetMappings(context.Context, contract.OrganizationID, contract.ProjectID, AssetMappingFilter) ([]AssetMapping, error)

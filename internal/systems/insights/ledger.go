@@ -111,6 +111,9 @@ func (s Service) BackfillLedger(ctx context.Context, batch int) (int, error) {
 	recorded := 0
 	seen := make(map[string]bool, len(pending))
 	for _, item := range pending {
+		if !LedgerAcceptsKind(item.Kind) {
+			continue
+		}
 		kind := backfillSourceKind(item.SourceType)
 		if kind == "" {
 			continue
@@ -127,9 +130,7 @@ func (s Service) BackfillLedger(ctx context.Context, batch int) (int, error) {
 			// 不传 ActorID：素材库没有记「这个版本是谁传的」，
 			// 回填也就无从知道。落成 system，比编一个人名诚实。
 			//
-			// 回填也拿不到当初的文件名——那躺在上传会话里，早过期清掉了。
-			// 用入库日期，至少说得清它是哪天进来的。
-			Title:           backfillTitle(item.SourceType, item.CreatedAt),
+			Title:           backfillTitle(item.ObjectKey, item.SourceType, item.CreatedAt),
 			SourceKind:      kind,
 			PlatformAssetID: item.AssetID, PlatformAssetVersion: item.Version,
 		})
@@ -144,6 +145,42 @@ func (s Service) BackfillLedger(ctx context.Context, batch int) (int, error) {
 	return recorded, nil
 }
 
+// ledgerRejectedKinds 是台账不收的那几种，一次性订正命令按它清库。
+var ledgerRejectedKinds = []string{"document", "text"}
+
+// PruneLedgerDocuments 把台账里早先收进来的文档清掉。
+//
+// 台账刚建起来的时候是照单全收的，回填命令把平台素材库里的策略、简报、洞察报告
+// 一并收了进来——它们投不出去，却在台账里各占一行，每行右边还挂着一个
+// 「拉进分析」。这个命令做一次性订正，跑完台账里就只剩投得出去的东西。
+//
+// 只删还躺在台账里的（role = ledger）。已经被人拉进分析的那些不碰：
+// 有人为它做过判断，还可能已经挂上了变量和映射，删了就是把人的活儿抹掉。
+func (s Service) PruneLedgerDocuments(ctx context.Context) (int, error) {
+	if s.Assets == nil {
+		return 0, fmt.Errorf("insight asset repository is not configured")
+	}
+	return s.Assets.DeleteLedgerAssetsByPlatformKind(ctx, ledgerRejectedKinds)
+}
+
+// LedgerAcceptsKind 判断这一类东西该不该进台账。
+//
+// 台账每一行右边都挂着一个「拉进分析」，按下去这条素材就进队列等投放数据回流。
+// 一份 .txt 的策略文档、一段文案永远不会被投放，也就永远等不到回流数据——
+// 给它一个「拉进分析」，是在邀请人做一件做完就卡住的事。这类产出留在平台素材库里，
+// 那边本来就管着所有东西。
+//
+// 认不出来的（包括空值）先收着：台账少一条素材人不会发现，多一条人一眼就看见，
+// 而且能自己判断。运行时那条通路（internal/integrations/insightsledger）也调这里，
+// 两条路共用一份规则，免得哪天只改了一边。
+func LedgerAcceptsKind(kind string) bool {
+	switch kind {
+	case "document", "text":
+		return false
+	}
+	return true
+}
+
 func backfillSourceKind(sourceType string) AssetSourceKind {
 	switch sourceType {
 	case "upload":
@@ -156,7 +193,32 @@ func backfillSourceKind(sourceType string) AssetSourceKind {
 	return ""
 }
 
-func backfillTitle(sourceType string, at time.Time) string {
+// ledgerObjectTitle 从对象存储的路径里取出一个像文件名的名字。
+//
+// 回填拿不到当初的上传文件名——那躺在上传会话里，早随会话过期清掉了。但对象键的
+// 最后一段常常就是它，比如 orgs/o/projects/p/creative-video.mp4。
+//
+// 认不出来就返回空串，让调用方退回按来源兜底那条路。宁可写「模型产物 · 8月1日」，
+// 也别把 9f2c1ab7d4e05c6839aa1b0e77c4f2d5 摆到台账上——那不是名字，是个编号。
+func ledgerObjectTitle(objectKey string) string {
+	name := strings.TrimSpace(objectKey)
+	if index := strings.LastIndex(name, "/"); index >= 0 {
+		name = name[index+1:]
+	}
+	// 认不认得出，就看有没有扩展名。最后一段要是连扩展名都没有，
+	// 剩下的只可能是一串对象 ID，摆在台账上读不出任何东西。
+	dot := strings.LastIndex(name, ".")
+	if dot <= 0 || dot == len(name)-1 || len(name) > 255 {
+		return ""
+	}
+	return name
+}
+
+func backfillTitle(objectKey, sourceType string, at time.Time) string {
+	if title := ledgerObjectTitle(objectKey); title != "" {
+		return title
+	}
+	// 没有名字可用时，至少说得清它是哪天、从哪条路进来的。
 	date := at.Format("2006-01-02")
 	switch sourceType {
 	case "rendered":
