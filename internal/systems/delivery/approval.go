@@ -57,6 +57,8 @@ type DeliveryApproval struct {
 
 type ApprovalView struct {
 	DeliveryApproval
+	RuntimeStatus string `json:"runtime_status,omitempty"`
+	ReadOnly      bool   `json:"read_only,omitempty"`
 	Valid         bool   `json:"valid"`
 	InvalidReason string `json:"invalid_reason,omitempty"`
 	HashSummary   string `json:"hash_summary"`

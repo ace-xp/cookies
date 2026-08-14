@@ -116,3 +116,39 @@ test('Strategy handoff includes an overlay only when the user created one', asyn
 
   assert.deepEqual(requestBody.task_overlay_ref, overlay)
 })
+
+test('Strategy brand acceptance binds its idempotency key and body to the frozen intake identity', async () => {
+  const originalFetch = globalThis.fetch
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  const intake = {
+    contract_version: 'creative-intake/v3' as const,
+    id: 'intake_1',
+    status: 'ready' as const,
+    selected_route_id: 'route_brand_video',
+    input_identity_hash: `sha256:${'b'.repeat(64)}`,
+  }
+  globalThis.fetch = async (input, init = {}) => {
+    calls.push({ url: String(input), init })
+    return new Response(JSON.stringify({ mode: 'direction_ready', next_action: 'generate_directions' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  try {
+    await strategyApi.prepareStrategyBrandWorkflow('project 1', intake)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.equal(calls[0].url, '/api/creative/v1/projects/project%201/creative-intakes/intake_1/brand-workflow:prepare')
+  assert.equal(calls[0].init.method, 'POST')
+  assert.equal(
+    new Headers(calls[0].init.headers).get('Idempotency-Key'),
+    `strategy-brand-prepare-sha256:${'b'.repeat(64)}`,
+  )
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+    expected_input_identity_hash: `sha256:${'b'.repeat(64)}`,
+    selected_route_id: 'route_brand_video',
+    accept_strategy_projection: true,
+  })
+})

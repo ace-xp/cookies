@@ -249,6 +249,22 @@ export const strategyApi = {
     )
   },
 
+  prepareStrategyBrandWorkflow: (
+    projectId: string,
+    intake: CreativeIntakeV3,
+  ) => apiRequest<{ mode: string; next_action: string }>(
+    `/api/creative/v1/projects/${encodeURIComponent(projectId)}/creative-intakes/${encodeURIComponent(intake.id)}/brand-workflow:prepare`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `strategy-brand-prepare-${intake.input_identity_hash}` },
+      body: JSON.stringify({
+        expected_input_identity_hash: intake.input_identity_hash,
+        selected_route_id: intake.selected_route_id,
+        accept_strategy_projection: true,
+      }),
+    },
+  ),
+
   createRequirementViralIntake: (
 	projectId: string,
 	brief: BriefVersion,

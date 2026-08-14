@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "delivery-observatory-run/v1",
+  "title": "Delivery Observatory Run v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "organization_id", "project_id", "runner_version", "source", "mode", "input_hash", "binding", "data_state", "data_state_reason", "observed_at", "data_through", "status", "outcome", "remote_write_enabled", "steps", "evidence_refs", "page_refs", "canonical_hash", "created_by", "created_at"],
+  "properties": {
+    "schema_version": { "const": "delivery-observatory-run/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "organization_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "runner_version": { "const": "mock-replay-observatory-runner/v1" },
+    "source": { "enum": ["mock", "replay"] },
+    "mode": { "enum": ["observe_existing", "prepare_new_local_form"] },
+    "input_hash": { "$ref": "#/$defs/hash" },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection_id", "decision_id", "decision_canonical_hash", "configuration_id", "configuration_version", "configuration_canonical_hash", "workflow_id", "workflow_canonical_hash", "decision_schema_version", "configuration_schema_version", "workflow_schema_version"],
+      "properties": {
+        "selection_id": { "type": "string", "minLength": 1 },
+        "decision_id": { "type": "string", "minLength": 1 },
+        "decision_canonical_hash": { "$ref": "#/$defs/hash" },
+        "configuration_id": { "type": "string", "minLength": 1 },
+        "configuration_version": { "type": "integer", "minimum": 1 },
+        "configuration_canonical_hash": { "$ref": "#/$defs/hash" },
+        "workflow_id": { "type": "string", "minLength": 1 },
+        "workflow_canonical_hash": { "$ref": "#/$defs/hash" },
+        "decision_schema_version": { "const": "delivery-decision/v1" },
+        "configuration_schema_version": { "type": "string", "minLength": 1 },
+        "workflow_schema_version": { "const": "compiled-delivery-workflow/v1" }
+      }
+    },
+    "data_state": { "enum": ["ready", "insufficient_data", "stale_data", "blocked_by_asset", "platform_pending"] },
+    "data_state_reason": { "type": "string" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "data_through": { "type": "string", "format": "date-time" },
+    "status": { "enum": ["completed", "blocked", "runner_failed"] },
+    "outcome": { "enum": ["in_sync", "drift_detected", "local_form_prepared", "insufficient_data", "stale_data", "blocked_by_asset", "platform_pending", "runner_failure"] },
+    "remote_write_enabled": { "const": false },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "sequence", "page", "workflow_action", "executed_action", "status", "selector_matches", "evidence_refs", "page_refs", "diffs"],
+        "properties": {
+          "step_id": { "type": "string" },
+          "sequence": { "type": "integer", "minimum": 1 },
+          "page": { "type": "string" },
+          "workflow_action": { "type": "string" },
+          "executed_action": { "enum": ["observe", "prepare_local_form"] },
+          "status": { "enum": ["observed", "prepared_locally", "blocked", "failed"] },
+          "selector_matches": { "type": "array", "items": { "type": "string" } },
+          "evidence_refs": { "type": "array", "items": { "type": "string" } },
+          "page_refs": { "type": "array", "items": { "type": "string" } },
+          "diffs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["key", "evidence_ref", "expected_value", "observed_value", "matches"],
+              "properties": { "key": { "type": "string" }, "evidence_ref": { "type": "string" }, "expected_value": {}, "observed_value": {}, "matches": { "type": "boolean" } }
+            }
+          },
+          "block_reason": { "enum": ["PHASE_C_REMOTE_WRITE_PROHIBITED", "insufficient_data", "stale_data", "blocked_by_asset", "platform_pending", "MOCK_REPLAY_RUNNER_FAILURE"] }
+        }
+      },
+      "contains": { "type": "object", "required": ["block_reason"], "properties": { "block_reason": { "const": "PHASE_C_REMOTE_WRITE_PROHIBITED" } } }
+    },
+    "evidence_refs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "page_refs": { "type": "array", "items": { "type": "string" } },
+    "canonical_hash": { "$ref": "#/$defs/hash" },
+    "created_by": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": { "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+}

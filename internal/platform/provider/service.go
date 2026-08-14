@@ -221,7 +221,7 @@ type Service struct {
 	// opened the Settings page still has a working pipeline.
 	VideoRouteOptional bool
 	NewID              func() (string, error)
-	Now           func() time.Time
+	Now                func() time.Time
 }
 
 // ProcessVideoJob uses the same Assets intake protocol as image generation.

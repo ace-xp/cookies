@@ -14,6 +14,10 @@ const canonicalHashTool = join(root, "test", "delivery-platform-configuration-ha
 const jcsVectorsPath = join(root, "docs", "delivery", "fixtures", "delivery-platform-configuration-v1-jcs-vectors.json");
 const intentSchemaPath = join(root, "docs", "delivery", "schemas", "delivery-intent-v1.json");
 const platformV2SchemaPath = join(root, "docs", "delivery", "schemas", "delivery-platform-configuration-v2.json");
+const decisionSchemaPath = join(root, "docs", "delivery", "schemas", "delivery-decision-v1.json");
+const workflowSchemaPath = join(root, "docs", "delivery", "schemas", "compiled-delivery-workflow-v1.json");
+const observatoryRunSchemaPath = join(root, "docs", "delivery", "schemas", "delivery-observatory-run-v1.json");
+const observatoryFeedbackSchemaPath = join(root, "docs", "delivery", "schemas", "delivery-observatory-feedback-v1.json");
 const intentFixturePath = join(root, "docs", "delivery", "fixtures", "delivery-intent-v1-valid.json");
 const oceanEngineFixturePath = join(root, "docs", "delivery", "fixtures", "delivery-platform-configuration-v2-oceanengine-valid.json");
 const magneticEngineFixturePath = join(root, "docs", "delivery", "fixtures", "delivery-platform-configuration-v2-magnetic-pending.json");
@@ -82,6 +86,16 @@ const intentSchema = readJSON(intentSchemaPath);
 ajv.addSchema(intentSchema);
 const validateIntent = ajv.getSchema(intentSchema.$id as string)!;
 const validatePlatformV2 = ajv.compile(readJSON(platformV2SchemaPath));
+
+test("Phase C decision and workflow schemas resolve their immutable configuration references", () => {
+  assert.doesNotThrow(() => ajv.compile(readJSON(decisionSchemaPath)));
+  assert.doesNotThrow(() => ajv.compile(readJSON(workflowSchemaPath)));
+});
+
+test("Phase C observatory schemas enforce the write-disabled run and append-only feedback shapes", () => {
+  assert.doesNotThrow(() => ajv.compile(readJSON(observatoryRunSchemaPath)));
+  assert.doesNotThrow(() => ajv.compile(readJSON(observatoryFeedbackSchemaPath)));
+});
 
 test("delivery configuration schema resolves internal refs and validates the v1 fixture", () => {
   const fixture = readJSON(fixturePath);

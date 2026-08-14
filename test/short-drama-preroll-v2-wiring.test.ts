@@ -15,6 +15,8 @@ test('short drama preroll V3 uses one selected frame reference and persistent wo
   assert.match(workspace, /api\.uploadProjectAsset/)
   assert.match(workspace, /requireAuthoritativeVideo/)
   assert.match(workspace, /findAuthoritativeVideo/)
+  assert.match(workspace, /resolveWorkspaceSource/)
+  assert.match(workspace, /api\.getProjectAssetPreview\(projectId, ref\)/)
   assert.doesNotMatch(workspace, /sourceType: 'upload' as const/)
   assert.match(workspace, /sourceUnavailableMessage/)
   assert.match(workspace, /api\.analyzeShortDramaV2Source/)

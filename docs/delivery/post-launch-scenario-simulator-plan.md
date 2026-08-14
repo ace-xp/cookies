@@ -1,5 +1,7 @@
 # 投放效果情景模拟器计划
 
+> 2026-08-11：本文中的 `ManualActionPackage` 链路已被当前运行时废弃，仅保留为历史规划背景。活动闭环止于第二次人工审批，详见 [`architecture-and-implementation.md`](./architecture-and-implementation.md)。
+
 | 属性 | 内容 |
 | --- | --- |
 | 状态 | 历史 mock 闭环的剩余验收能力；待实现 |

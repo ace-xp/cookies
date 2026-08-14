@@ -21,6 +21,7 @@ type ApiWorkspace = {
   hook_batch?: AsyncResource & { id: string; selected_hook_id?: string; items: Array<{ id: string; recipe_version?: string; name: string; mechanism?: string; concept: string; rationale: string; selling_point: string; primary_action: string; visual_signature?: string; suitable_for?: string[]; why_for_this_source?: string[]; opening_state?: string; result_state?: string; continuity_plan?: string; risk_notes?: string[]; match_score?: number; recommendation_level?: 'primary' | 'alternative' }> }
   prompt_draft?: { revision: number; prompt_summary: string; compiled_prompt: string; creative_prompt?: string; locked_constraints?: string[]; edit_mode?: 'storyboard_compiled' | 'manual_creative_override'; beats: Array<{ id: 'hook' | 'change' | 'lockup'; label: string; start_ms: number; end_ms: number; detail: string; visual_description?: string; subject_action?: string; camera?: string; scene_and_lighting?: string; product_state?: string; transition_in?: string; transition_out?: string; on_screen_text?: string; audio_instruction?: string }> }
   first_frame_batch?: AsyncResource & { id: string; selected_id?: string; candidates: Array<{ id: string; provider_job_id: string; status: string; asset?: AssetRef; variant_key: string; title: string; description: string }> }
+	generation_spec?: { draft_revision: number; spec_hash: string }
 	latest_video_attempt_id?: string
 	video_error?: { message?: string }
   output_asset?: AssetRef
@@ -28,7 +29,7 @@ type ApiWorkspace = {
 }
 type TaskDetail = { task: { id: string; display_name: string; version: number; status: string; updated_at: string }; video_draft: { revision: number; commerce_preroll_v2: ApiWorkspace } }
 
-const backendOrigin = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
+const backendOrigin = (import.meta.env?.VITE_API_BASE_URL as string | undefined) ?? ''
 const wait = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms))
 const key = (kind: string) => `commerce-v2-${kind}-${crypto.randomUUID()}`
 
@@ -53,6 +54,10 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
   const payload = text ? JSON.parse(text) as T | { error?: { message?: string } } : {}
   if (!response.ok) throw new Error((payload as { error?: { message?: string } }).error?.message ?? `请求失败（HTTP ${response.status}）`)
   return payload as T
+}
+
+function isCreativeRevisionConflict(cause: unknown) {
+  return cause instanceof Error && cause.message === 'The Creative draft changed. Refresh the task and try again.'
 }
 
 async function previewUrl(projectId: string, ref: AssetRef) {
@@ -175,7 +180,9 @@ export class HttpCommercePrerollGateway implements CommercePrerollGateway {
 	const base = createInitialCommercePrerollState()
 	let output = null
 	if (workspace.output_asset) output = { id: `${workspace.output_asset.asset_version.asset_id}:${workspace.output_asset.asset_version.version}`, videoUrl: await previewUrl(this.projectId, workspace.output_asset), posterUrl: '', duration: (workspace.prompt_draft?.beats.at(-1)?.end_ms ?? 8000) / 1000 as PrerollDuration, aspectRatio: workspaceAspectRatio(workspace), createdAt: new Date().toISOString(), assetId: workspace.output_asset.asset_version.asset_id, assetVersion: workspace.output_asset.asset_version.version }
-	return { ...base, clientTaskId: this.taskId, activeStep, source: { id: `${workspace.source_video.asset_version.asset_id}:${workspace.source_video.asset_version.version}`, name: this.taskName || '电商原视频', videoUrl: sourceUrl, posterUrl: '', durationSeconds: (workspace.source_metadata as { DurationMS?: number } | undefined)?.DurationMS ? (workspace.source_metadata as { DurationMS: number }).DurationMS / 1000 : 0, aspectRatio: workspaceAspectRatio(workspace), resolution: `${workspace.source_metadata?.WidthPixels ?? ''}×${workspace.source_metadata?.HeightPixels ?? ''}`, sizeLabel: '', version: `v${workspace.source_video.asset_version.version}`, sourceLabel: '当前 Project 素材', rightsStatus: 'confirmed', assetId: workspace.source_video.asset_version.asset_id, assetVersion: workspace.source_video.asset_version.version }, rightsConfirmed: true, analysisStatus: workspace.analysis.status === 'ready' ? 'ready' : 'idle', analysisStage: workspace.analysis.status === 'ready' ? 5 : 0, analysis: workspace.analysis.status === 'ready' ? { original: facts(workspace), visualStyle: workspace.analysis.content.visual_style, subtitleSummary: workspace.analysis.content.subtitle_summary, voiceSummary: workspace.analysis.content.voice_summary, audioMood: workspace.analysis.content.audio_mood, openingShot: workspace.analysis.content.opening_shot, evidenceCount: workspace.analysis.content.evidence.length } : null, productDraft: workspace.analysis.status === 'ready' ? facts(workspace) : null, productConfirmed: Boolean(workspace.hook_batch), productReference: reference, productReferences: referenceItems, riskFacts: [], hooksStatus: workspace.hook_batch ? 'ready' : 'idle', hooks: hookItems, selectedHookId: workspace.hook_batch?.selected_hook_id ?? '', duration: ((workspace.prompt_draft?.beats.at(-1)?.end_ms ?? 8000) / 1000) as PrerollDuration, generationDraft: workspace.prompt_draft ? generationDraft(workspace) : null, firstFramesStatus: workspace.first_frame_batch ? 'ready' : 'idle', firstFrames: frames, selectedFirstFrameId: workspace.first_frame_batch?.selected_id ?? '', videoStatus: output ? 'ready' : stage === 'video_generating' ? 'loading' : 'idle', output, savedAssetId: workspace.adopted_asset?.asset_version.asset_id ?? '' }
+	const frameBatchStatus = workspace.first_frame_batch?.status
+	const firstFramesStatus = frameBatchStatus === 'queued' || frameBatchStatus === 'running' ? 'loading' : workspace.first_frame_batch ? (frames.length ? 'ready' : 'error') : 'idle'
+	return { ...base, clientTaskId: this.taskId, activeStep, source: { id: `${workspace.source_video.asset_version.asset_id}:${workspace.source_video.asset_version.version}`, name: this.taskName || '电商原视频', videoUrl: sourceUrl, posterUrl: '', durationSeconds: (workspace.source_metadata as { DurationMS?: number } | undefined)?.DurationMS ? (workspace.source_metadata as { DurationMS: number }).DurationMS / 1000 : 0, aspectRatio: workspaceAspectRatio(workspace), resolution: `${workspace.source_metadata?.WidthPixels ?? ''}×${workspace.source_metadata?.HeightPixels ?? ''}`, sizeLabel: '', version: `v${workspace.source_video.asset_version.version}`, sourceLabel: '当前 Project 素材', rightsStatus: 'confirmed', assetId: workspace.source_video.asset_version.asset_id, assetVersion: workspace.source_video.asset_version.version }, rightsConfirmed: true, analysisStatus: workspace.analysis.status === 'ready' ? 'ready' : 'idle', analysisStage: workspace.analysis.status === 'ready' ? 5 : 0, analysis: workspace.analysis.status === 'ready' ? { original: facts(workspace), visualStyle: workspace.analysis.content.visual_style, subtitleSummary: workspace.analysis.content.subtitle_summary, voiceSummary: workspace.analysis.content.voice_summary, audioMood: workspace.analysis.content.audio_mood, openingShot: workspace.analysis.content.opening_shot, evidenceCount: workspace.analysis.content.evidence.length } : null, productDraft: workspace.analysis.status === 'ready' ? facts(workspace) : null, productConfirmed: Boolean(workspace.hook_batch), productReference: reference, productReferences: referenceItems, riskFacts: [], hooksStatus: workspace.hook_batch ? 'ready' : 'idle', hooks: hookItems, selectedHookId: workspace.hook_batch?.selected_hook_id ?? '', duration: ((workspace.prompt_draft?.beats.at(-1)?.end_ms ?? 8000) / 1000) as PrerollDuration, generationDraft: workspace.prompt_draft ? generationDraft(workspace) : null, firstFramesStatus, firstFrames: frames, selectedFirstFrameId: workspace.first_frame_batch?.selected_id ?? '', videoStatus: output ? 'ready' : stage === 'video_generating' ? 'loading' : 'idle', output, savedAssetId: workspace.adopted_asset?.asset_version.asset_id ?? '' }
   }
 
 	async openLatest(): Promise<CommercePrerollState | null> {
@@ -227,7 +234,19 @@ export class HttpCommercePrerollGateway implements CommercePrerollGateway {
 	  this.set(latest)
 	  if ('expected_revision' in body) body.expected_revision = this.revision
 	}
-    return this.set(await request<TaskDetail>(`/projects/${encodeURIComponent(this.projectId)}/creative-tasks/${encodeURIComponent(this.taskId)}/commerce-preroll-v2:${action}`, 'POST', body))
+    const path = `/projects/${encodeURIComponent(this.projectId)}/creative-tasks/${encodeURIComponent(this.taskId)}/commerce-preroll-v2:${action}`
+    try {
+      return this.set(await request<TaskDetail>(path, 'POST', body))
+    } catch (cause) {
+      if (!('expected_revision' in body) || !isCreativeRevisionConflict(cause)) throw cause
+      await this.refreshCurrentTask()
+      return this.set(await request<TaskDetail>(path, 'POST', { ...body, expected_revision: this.revision }))
+    }
+  }
+
+  private async refreshCurrentTask() {
+    if (!this.taskId) throw new Error('没有可刷新的电商前贴任务')
+    this.set(await request<TaskDetail>(`/projects/${encodeURIComponent(this.projectId)}/creative-tasks/${encodeURIComponent(this.taskId)}/commerce-preroll-v2`))
   }
 
 	private enqueueDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -257,6 +276,7 @@ export class HttpCommercePrerollGateway implements CommercePrerollGateway {
     const references = await Promise.all((prepared.product_reference_batch?.candidates ?? []).filter(item => item.frame.asset).map(async item => ({ id: item.id, imageUrl: await previewUrl(this.projectId, item.frame.asset!), label: item.label, sourceLabel: `来自原视频 ${(item.frame.timestamp_ms / 1000).toFixed(1)}s`, kind: item.source_kind === 'user_upload' ? 'uploaded' as const : 'extracted' as const, overallScore: item.scores.overall, qualitySummary: item.source_kind === 'user_upload' ? '用户上传' : `正面 ${Math.round((item.scores.frontality ?? 0) * 100)}% · 清晰 ${Math.round((item.scores.sharpness ?? 0) * 100)}%` })))
     const reference: ProductReference = references.find(item => item.id === prepared.product_reference_batch?.selected_id) ?? { id: `${ref.asset_version.asset_id}:${ref.asset_version.version}`, imageUrl: this.productReferenceUrl, label: '原视频商品清晰帧', sourceLabel: `来自原视频 ${((prepared.product_reference?.timestamp_ms ?? 0) / 1000).toFixed(1)}s`, kind: 'extracted' }
     return {
+      taskId: this.taskId,
       product,
       reference,
 	  references: references.length ? references : [reference],
@@ -314,12 +334,22 @@ export class HttpCommercePrerollGateway implements CommercePrerollGateway {
     return Promise.all(ready.map(async item => ({ id: item.id, imageUrl: await previewUrl(this.projectId, item.asset!), label: item.variant_key, title: item.title, description: item.description, providerJobId: item.provider_job_id, batchId: batch.id, assetId: item.asset!.asset_version.asset_id, assetVersion: item.asset!.asset_version.version })))
   }
 
+  async selectFirstFrame(frame: FirstFrameCandidate) {
+    if (!frame.batchId) throw new Error('所选首帧缺少服务端批次信息')
+    await this.command('select-first-frame', { expected_revision: this.revision, batch_id: frame.batchId, candidate_id: frame.id })
+  }
+
   async createVideo(input: { draft: GenerationDraft; frame: FirstFrameCandidate; duration: PrerollDuration }, onProgress: (stage: number) => void): Promise<GeneratedPreroll> {
     if (!input.frame.batchId) throw new Error('所选首帧缺少服务端批次信息')
-    await this.command('select-first-frame', { expected_revision: this.revision, batch_id: input.frame.batchId, candidate_id: input.frame.id })
     onProgress(1)
-    let workspace = await this.command('generate-video', { expected_revision: this.revision, model_alias: 'cookies.video.standard' })
-    const jobId = workspace.latest_video_attempt_id
+    let workspace = this.workspace
+    if (!workspace?.first_frame_batch?.selected_id || !workspace.generation_spec) {
+      workspace = await this.command('select-first-frame', { expected_revision: this.revision, batch_id: input.frame.batchId, candidate_id: input.frame.id })
+    }
+    const existingJobId = workspace.latest_video_attempt_id
+    const resumableJobId = existingJobId && !existingJobId.startsWith('pending:') && workspace.active_stage === 'video_generating' ? existingJobId : ''
+    if (!resumableJobId) workspace = await this.command('generate-video', { expected_revision: this.revision, model_alias: 'cookies.video.standard' })
+    const jobId = resumableJobId || workspace.latest_video_attempt_id
     if (!jobId) throw new Error('视频任务没有返回 Provider Job')
     for (let attempts = 0; attempts < 180; attempts += 1) {
       await wait(3000)

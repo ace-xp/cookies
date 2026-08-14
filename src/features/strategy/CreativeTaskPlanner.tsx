@@ -384,6 +384,15 @@ export function CreativeHandoffWorkspace({ briefVersion, draft, draftStorageKey,
         )
         destinationId = task.id
       }
+      if (capability.performance_mode === 'brand_video') {
+        const workflow = await strategyApi.prepareStrategyBrandWorkflow(projectId, intake)
+        if (workflow.mode === 'brief_review_required' || workflow.mode === 'legacy_task_upgrade_required') {
+          throw new Error(workflow.mode === 'brief_review_required'
+            ? '策略输入仍有品牌 Brief 阻断项，请补充后再开始创作。'
+            : '检测到包含用户工作的旧品牌任务，需要人工处理后再继续。')
+        }
+        destinationId = `intake:${intake.id}`
+      }
       onOpenCreative(
         capability.destination_area,
         capability.destination_view,

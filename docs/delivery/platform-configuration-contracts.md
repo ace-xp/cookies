@@ -37,7 +37,7 @@ DeliveryIntent (platform-neutral, immutable version)
 - [`delivery-platform-configuration-v2.json`](./schemas/delivery-platform-configuration-v2.json)以 `platform`、`profile_version` 和 payload discriminator 形成判别联合。平台/profile 不一致必须失败，未知 schema/profile 不得静默降级。
 - 巨量 profile 有且只有一个 Project，允许零个或多个 Promotions。Promotion 不携带冗余父 Project ID，也不引用尚未创建的平台 Project ID。
 - 磁力引擎 profile 当前只有可校验、可哈希的 `CAPABILITY_PENDING` 结构；在取得已验证表单/写入证据前，不增加 Project、Promotion、selector 或猜测字段。
-- 当前 API、数据库、前端和 ThreeTier 流程本 Goal 不切换。后续切换直接消费新契约；不新增 ThreeTier → 新模型兼容 projector。
+- 当前 API、数据库和前端已经直接消费新契约。历史 ThreeTier 只保留冻结读取；不新增 ThreeTier → 新模型兼容 projector。
 
 ## 2. 稳定引用
 

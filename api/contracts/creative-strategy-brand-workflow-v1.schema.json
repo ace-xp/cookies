@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cookies.example/contracts/creative-strategy-brand-workflow-v1.schema.json",
+  "title": "Creative Strategy Brand Workflow v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "mode", "intake_id", "input_identity_hash", "issues", "next_action"],
+  "properties": {
+    "contract_version": {"const": "creative-strategy-brand-workflow/v1"},
+    "mode": {
+      "enum": ["brief_review_required", "direction_ready", "direction_selection_required", "task_ready", "legacy_task_upgrade_required"]
+    },
+    "intake_id": {"type": "string", "minLength": 1},
+    "input_identity_hash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "brand_brief": {"$ref": "./creative-brand-brief-review-v1.schema.json"},
+    "latest_direction_batch": {"$ref": "./creative-direction-candidate-batch-v1.schema.json"},
+    "confirmed_direction": {"$ref": "./creative-direction-v1.schema.json"},
+    "task": {"type": "object"},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "stage", "message", "source"],
+        "properties": {
+          "code": {"type": "string", "minLength": 1},
+          "stage": {"type": "string", "minLength": 1},
+          "path": {"type": "string"},
+          "message": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "next_action": {
+      "enum": ["prepare_brief", "review_brief", "generate_directions", "wait_for_directions", "retry_directions", "select_direction", "create_task", "open_task", "review_legacy_task"]
+    }
+  }
+}

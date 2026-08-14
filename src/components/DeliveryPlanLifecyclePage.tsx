@@ -16,7 +16,7 @@ import { StateBoundary } from './StateBoundary'
 const planSections = ['目标与账户', '预算与排期', '追踪', '素材引用', '投前检查'] as const
 type PlanSection = typeof planSections[number]
 
-const scenarioLabels: Record<DeliveryScenario | 'unsaved_draft', string> = {
+const scenarioLabels: Partial<Record<DeliveryScenario | 'unsaved_draft', string>> = {
   golden_path: '黄金路径',
   budget_zero: '预算为 0',
   creative_unconfirmed: '素材待确认',
@@ -24,10 +24,6 @@ const scenarioLabels: Record<DeliveryScenario | 'unsaved_draft', string> = {
   incomplete_draft: '草稿不完整',
   project_plan_list: '计划列表',
   approval_queue: '审批队列',
-  missing_required_field: '三层配置必填项缺失',
-  orphan_dependency: '三层配置依赖缺失',
-  missing_confirmation: '三层配置待人工确认',
-  platform_fields_pending: '平台字段待人工填写',
   platform_configuration: '平台配置',
   capability_pending: '能力待补',
   preflight_failure: '预检失败演示',
@@ -40,18 +36,6 @@ const scenarioLabels: Record<DeliveryScenario | 'unsaved_draft', string> = {
 }
 
 const preflightCheckLabels: Record<DeliveryPreflightResult['checks'][number]['code'], string> = {
-  advertiser_available: '广告主可用',
-  budget_positive: '预算大于 0',
-  schedule_valid: '排期有效',
-  creative_present: '素材引用完整',
-  creative_confirmed: '素材已确认',
-  tracking_complete: '追踪配置完整',
-  three_tier_structure: '三层配置结构有效',
-  three_tier_required_fields: '三层配置必填项完整',
-  three_tier_dependencies: '三层配置依赖可解析',
-  three_tier_confirmation: '三层配置已人工确认',
-  three_tier_platform_pending: '平台字段待人工填写',
-  upstream_references_resolved: '策略任务与素材版本可追溯',
   delivery_intent_valid: '业务意图有效',
   platform_configuration_valid: '平台配置有效',
   INVALID_STABLE_REFERENCE: '稳定引用无效',
@@ -63,7 +47,7 @@ const preflightCheckLabels: Record<DeliveryPreflightResult['checks'][number]['co
 }
 
 function scenarioMetadata(scenario: DeliveryScenario | 'unsaved_draft') {
-  return `${scenarioLabels[scenario]} · scenario=${scenario}`
+  return `${scenarioLabels[scenario] ?? '历史记录'} · scenario=${scenario}`
 }
 
 export function DeliveryPlanLifecyclePage({ state }: { state: DataState }) {

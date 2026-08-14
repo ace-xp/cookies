@@ -954,6 +954,38 @@ paths:
               schema: {$ref: '../contracts/creative-brand-brief-review-v1.schema.json'}
         '400': {$ref: '#/components/responses/InvalidRequest'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/creative/v1/projects/{project_id}/creative-intakes/{intake_id}/brand-workflow:
+    get:
+      operationId: getCreativeStrategyBrandWorkflow
+      summary: Restore the Strategy-to-brand workflow without creating, confirming, generating, or upgrading resources.
+      parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/IntakeID'}]
+      responses:
+        '200':
+          description: Durable Strategy brand workflow state.
+          content:
+            application/json:
+              schema: {$ref: '../contracts/creative-strategy-brand-workflow-v1.schema.json'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/creative/v1/projects/{project_id}/creative-intakes/{intake_id}/brand-workflow:prepare:
+    post:
+      operationId: prepareCreativeStrategyBrandWorkflow
+      summary: Explicitly accept the deterministic Creative projection of one frozen Strategy brand-video intake.
+      description: This command is idempotent, does not invoke a model, does not generate directions, and does not create a Creative task.
+      parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/IntakeID'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PrepareStrategyBrandWorkflowRequest'}
+      responses:
+        '200':
+          description: Prepared or restored Strategy brand workflow state.
+          content:
+            application/json:
+              schema: {$ref: '../contracts/creative-strategy-brand-workflow-v1.schema.json'}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/creative/v1/projects/{project_id}/creative-intakes/{intake_id}/brand-brief:
     get:
       operationId: getCreativeBrandBrief
@@ -1115,7 +1147,7 @@ paths:
   /api/creative/v1/projects/{project_id}/creative-intakes/{intake_id}:create-video-task:
     post:
       operationId: createCreativePreRollVideoTask
-      summary: Confirm an approved video route and create or resume one CreativeTask, including a BrandFilm workspace for brand_video.
+      summary: Confirm an approved video route and create or resume one CreativeTask; Strategy brand_video intakes require a confirmed direction.
       parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/IntakeID'}]
       requestBody:
         required: true
@@ -1896,6 +1928,14 @@ components:
         mandatory_elements: {type: array, maxItems: 20, items: {type: string, maxLength: 200}}
         prohibited_claims: {type: array, maxItems: 20, items: {type: string, maxLength: 200}}
         confirm_route: {type: boolean, const: true}
+    PrepareStrategyBrandWorkflowRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_input_identity_hash, selected_route_id, accept_strategy_projection]
+      properties:
+        expected_input_identity_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        selected_route_id: {type: string, minLength: 1, maxLength: 128}
+        accept_strategy_projection: {type: boolean, const: true}
     CreativeVideoRoute:
       type: object
       additionalProperties: false

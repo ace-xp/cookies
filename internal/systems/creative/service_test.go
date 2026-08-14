@@ -721,7 +721,7 @@ func TestCreateBrandVideoTaskConsumesConfirmedDirectionWithoutReferenceVideo(t *
 	}
 }
 
-func TestCreateBrandVideoTaskMaterializesBrandFilmWithoutPreTaskDirection(t *testing.T) {
+func TestCreateBrandVideoTaskRejectsStrategyIntakeWithoutConfirmedDirection(t *testing.T) {
 	t.Parallel()
 	service := testService()
 	intake := CreativeIntake{
@@ -740,30 +740,12 @@ func TestCreateBrandVideoTaskMaterializesBrandFilmWithoutPreTaskDirection(t *tes
 		},
 	}
 	service.Repository.(*memoryRepository).intakes[intake.ID] = intake
-	task, err := service.CreateVideoTask(context.Background(), testRequestContext().Actor, "project_1", intake.ID, CreateVideoTaskRequest{
+	_, err := service.CreateVideoTask(context.Background(), testRequestContext().Actor, "project_1", intake.ID, CreateVideoTaskRequest{
 		SelectedRouteID: "route_brand_video", Channel: ChannelXiaohongshu,
 		Mandatory: []string{}, Prohibited: []string{}, ConfirmRoute: true,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	detail, err := service.GetTaskDetail(context.Background(), testRequestContext().Actor, "project_1", task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if task.Channel != ChannelXiaohongshu || task.Direction.DirectionVersionID != "" || task.Direction.InputIdentityHash != intake.InputIdentityHash ||
-		task.Direction.CallToAction != "" || detail.VideoDraft == nil || detail.VideoDraft.Resolution != "1080x1920" ||
-		detail.VideoDraft.BrandFilm == nil || detail.VideoDraft.BrandFilm.Stage != BrandFilmWaitingBrief ||
-		detail.VideoDraft.BrandFilm.SourceSnapshot.SourceKind != string(IntakeSourceStrategyPackage) ||
-		detail.VideoDraft.BrandFilm.SourceSnapshot.IntakeID != intake.ID {
-		t.Fatalf("brand task did not materialize the shared BrandFilm workspace: task=%+v detail=%+v", task, detail)
-	}
-	replayed, err := service.CreateVideoTask(context.Background(), testRequestContext().Actor, "project_1", intake.ID, CreateVideoTaskRequest{
-		SelectedRouteID: "route_brand_video", Channel: ChannelXiaohongshu,
-		Mandatory: []string{}, Prohibited: []string{}, ConfirmRoute: true,
-	})
-	if err != nil || replayed.ID != task.ID {
-		t.Fatalf("brand task replay should return the existing task: task=%+v err=%v", replayed, err)
+	if !errors.Is(err, ErrStrategyBrandDirectionRequired) {
+		t.Fatalf("strategy brand task without direction error=%v, want ErrStrategyBrandDirectionRequired", err)
 	}
 }
 
@@ -1313,6 +1295,33 @@ func (r *memoryRepository) RenameTask(_ context.Context, _ contract.Organization
 	value.Task.UpdatedAt = now
 	r.tasks[taskID] = value
 	return value.Task, nil
+}
+
+func (r *memoryRepository) ListActiveTasksForIntake(_ context.Context, _ contract.OrganizationID, _ contract.ProjectID, intakeID string) ([]CreativeTask, error) {
+	values := make([]CreativeTask, 0)
+	for _, detail := range r.tasks {
+		if detail.Task.IntakeID == intakeID && detail.Task.Status != TaskArchived {
+			values = append(values, detail.Task)
+		}
+	}
+	return values, nil
+}
+func (r *memoryRepository) ReplaceEmptyLegacyStrategyBrandTask(_ context.Context, legacy TaskDetail, task CreativeTask, draft VideoDraft, now time.Time) (CreativeTask, error) {
+	current, ok := r.tasks[legacy.Task.ID]
+	if !ok || !isEmptyLegacyStrategyBrandTask(current) {
+		return CreativeTask{}, ErrStrategyBrandLegacyTaskNeedsReview
+	}
+	for _, existing := range r.tasks {
+		if task.LineageKey != "" && existing.Task.LineageKey == task.LineageKey && existing.Task.Status != TaskArchived {
+			return existing.Task, nil
+		}
+	}
+	current.Task.Status = TaskArchived
+	current.Task.Version++
+	current.Task.UpdatedAt = now
+	r.tasks[legacy.Task.ID] = current
+	r.tasks[task.ID] = TaskDetail{Task: task, Intake: legacy.Intake, VideoDraft: &draft, ProductionJobs: []ProductionJob{}}
+	return task, nil
 }
 func (r *memoryRepository) GetTaskDetail(_ context.Context, _ contract.OrganizationID, _ contract.ProjectID, id string) (TaskDetail, error) {
 	value, ok := r.tasks[id]

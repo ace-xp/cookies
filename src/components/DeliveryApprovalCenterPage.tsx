@@ -6,7 +6,6 @@ import {
   type DeliveryControlChangeSet,
 } from '../api/delivery'
 import { useProject } from '../context/ProjectContext'
-import { projectPath } from '../lib/router'
 import type { DataState } from '../types'
 import { StateBoundary } from './StateBoundary'
 import { DeliveryExecutionPanel } from './DeliveryExecutionPanel'
@@ -86,7 +85,7 @@ export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selecte
         : await deliveryPlanApi.rejectChangeSet(projectId, selected.id, selected.version, rejectionReason.trim())
       setChangeSets(current => current.map(item => item.id === updated.id ? updated : item))
 	  if (action === 'reject') setRejectionReason('')
-      setNotice(action === 'approve' ? `已批准${updated.recommendationId ? '优化写入' : '平台操作演练'}；授权将在 24 小时后过期。` : '已打回变更申请，并保留修改原因。')
+      setNotice(action === 'approve' ? `已批准${updated.recommendationId ? '优化申请' : '平台操作演练'}；授权将在 24 小时后过期。` : '已打回变更申请，并保留修改原因。')
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '审批失败')
     } finally {
@@ -98,7 +97,6 @@ export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selecte
   const approvalValid = selected?.status === 'approved' && approval?.valid === true
   const preflightPassed = selected ? preflightPassedStatuses.has(selected.status) : false
   const optimizationApproval = Boolean(selected?.recommendationId)
-  const manualPackageURL = selected ? projectPath(projectId, 'delivery', 'configuration', undefined, '人工操作包', undefined, tourRunId, tourCase) : undefined
 
   return <StateBoundary
     state={state}
@@ -168,7 +166,7 @@ export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selecte
           {selected.status === 'preflight_passed' ? <section className="approval-decision-panel" aria-labelledby="approval-decision-title">
             <header className="approval-decision-heading">
               <div><span className="section-label">审批决定</span><h3 id="approval-decision-title">批准当前快照，或说明原因后打回</h3></div>
-              <small>{optimizationApproval ? '本次授权仅用于生成优化操作包。' : '本次授权仅用于启动平台操作演练。'}</small>
+              <small>{optimizationApproval ? '本次决定仅记录对优化配置快照的人工批准，不会生成行为工作流或写入广告平台。' : '本次授权仅用于启动平台操作演练。'}</small>
             </header>
             <label className="approval-rejection-reason" htmlFor="approval-rejection-reason">
               <span>打回修改说明 <em>打回时必填</em></span>
@@ -177,10 +175,10 @@ export function DeliveryApprovalCenterPage({ state, tourCase, tourRunId, selecte
             </label>
             <div className="approval-decision-actions">
               <button className="secondary-button approval-reject-button" onClick={() => void apply('reject')} disabled={busy || rejectionReason.trim().length < 3}><ThumbsDown size={15}/>打回修改</button>
-              <button className="primary-button" onClick={() => void apply('approve')} disabled={busy}><ThumbsUp size={15}/>{optimizationApproval ? '批准优化写入' : '批准平台操作演练'}</button>
+              <button className="primary-button" onClick={() => void apply('approve')} disabled={busy}><ThumbsUp size={15}/>{optimizationApproval ? '批准优化申请' : '批准平台操作演练'}</button>
             </div>
-          </section> : selected.status === 'approved' ? <div className="approval-decision-result" role="status"><CircleCheck size={18}/><span><b>{optimizationApproval ? '优化写入已批准' : '平台操作演练已批准'}</b><small>审批决定和不可变内容快照已保存。</small></span></div> : null}
-          {optimizationApproval ? <div className="approval-optimization-handoff"><span><b>优化申请不在这里执行</b><small>审批通过后返回配置编排，生成人工操作包并由授权人员操作平台。</small></span>{approvalValid && manualPackageURL ? <a className="primary-button" href={manualPackageURL}>返回生成操作包</a> : null}</div> : <DeliveryExecutionPanel
+          </section> : selected.status === 'approved' ? <div className="approval-decision-result" role="status"><CircleCheck size={18}/><span><b>{optimizationApproval ? '优化申请已批准' : '平台操作演练已批准'}</b><small>审批决定和不可变内容快照已保存。</small></span></div> : null}
+          {optimizationApproval ? <div className="approval-optimization-handoff"><span><b>当前仅完成配置审批留痕</b><small>行为工作流编译和真实平台写入尚未实现；这里不会生成后续操作包，也不会宣称平台已执行。</small></span></div> : <DeliveryExecutionPanel
             projectId={projectId}
             changeSet={selected}
             canExecute={approvalValid}

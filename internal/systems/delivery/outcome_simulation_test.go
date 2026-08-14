@@ -4,8 +4,6 @@ import (
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
 func TestOutcomeSimulationIsDeterministicAndCausallySensitive(t *testing.T) {
@@ -40,71 +38,6 @@ func TestOutcomeSimulationIsDeterministicAndCausallySensitive(t *testing.T) {
 	_, creativeMetrics, _ := simulateOutcome(betterCreative, request, "feedface12345678", completedAt)
 	if creativeMetrics[0].RawMetrics.Clicks <= metricsA[0].RawMetrics.Clicks {
 		t.Fatalf("higher creative feature must increase clicks: baseline=%d higher=%d", metricsA[0].RawMetrics.Clicks, creativeMetrics[0].RawMetrics.Clicks)
-	}
-}
-
-func TestApprovedRecommendationTargetBecomesANewPlanVersion(t *testing.T) {
-	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	version := DeliveryPlanVersion{
-		PlanID: "plan_1", OrganizationID: "org_1", ProjectID: "project_1", VersionNumber: 3, Name: "Plan", Objective: "conversion",
-		Advertiser: MockAdvertiser{ID: "advertiser_1", Name: "Advertiser", Platform: "ocean_engine"}, Budget: Budget{TotalMinor: 300000, Currency: "CNY"},
-		Schedule: Schedule{StartAt: now, EndAt: now.Add(10 * 24 * time.Hour), Timezone: "Asia/Shanghai"}, Platform: "ocean_engine_mock", Source: SourceMock,
-	}
-	configuration, err := compileThreeTierFixture(version, ThreeTierFixtureGoldenPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	version.ThreeTierConfiguration = configuration
-	version.CanonicalHash, err = PlanCanonicalHash(version)
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := cloneThreeTierConfiguration(configuration)
-	findThreeTierField(target, "budget").Effective.Value = int64(240000)
-	targetHash, err := snapshotHash(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := DeliveryPlan{ID: "plan_1", OrganizationID: "org_1", ProjectID: "project_1", CurrentVersionNumber: 3, Version: 3, CurrentVersion: version}
-	changeSet := ChangeSet{PlanID: plan.ID, PlanVersion: 3, LegacyTargetSnapshot: target, TargetSnapshotHash: targetHash}
-
-	optimized, replay, err := optimizedVersionFromChangeSet(plan, changeSet, contract.Principal{Kind: contract.PrincipalUser, ID: "user_1"}, now)
-	if err != nil || replay {
-		t.Fatalf("optimized=%#v replay=%v err=%v", optimized, replay, err)
-	}
-	if optimized.VersionNumber != 4 || optimized.Budget.TotalMinor != 240000 || optimized.CanonicalHash == version.CanonicalHash {
-		t.Fatalf("approved target must create a new internally materialized version: %#v", optimized)
-	}
-	plan.CurrentVersionNumber, plan.Version, plan.CurrentVersion = 4, 4, optimized
-	got, replay, err := optimizedVersionFromChangeSet(plan, changeSet, contract.Principal{Kind: contract.PrincipalUser, ID: "user_1"}, now.Add(time.Hour))
-	if err != nil || !replay || got.VersionNumber != 4 {
-		t.Fatalf("materialization must be idempotent: got=%#v replay=%v err=%v", got, replay, err)
-	}
-}
-
-func TestApprovedPlatformConfigurationTargetBecomesANewPlanVersion(t *testing.T) {
-	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	intent, configuration := readyOceanRuntimeInputs(t, 2)
-	version, err := newPlatformPlanVersion("plan_1", contract.ActorContext{OrganizationID: "org_a", Principal: contract.Principal{Kind: contract.PrincipalUser, ID: "user_1"}}, "project_a", 1, intent, configuration, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := cloneJSONPointer(version.PlatformConfiguration)
-	target.VersionNumber++
-	target.Payload.OceanEngine.Project.BudgetAndBidding.DailyBudgetMinor = 15000
-	target.CanonicalHash = ""
-	target, err = finalizeRecommendationConfiguration(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := DeliveryPlan{ID: "plan_1", OrganizationID: "org_a", ProjectID: "project_a", CurrentVersionNumber: 1, Version: 1, CurrentVersion: version}
-	changeSet := ChangeSet{PlanID: plan.ID, PlanVersion: 1, TargetSnapshot: target, TargetSnapshotHash: target.CanonicalHash}
-	optimized, replay, err := optimizedVersionFromChangeSet(plan, changeSet, contract.Principal{Kind: contract.PrincipalUser, ID: "user_1"}, now.Add(time.Hour))
-	if err != nil || replay {
-		t.Fatalf("optimized=%#v replay=%v err=%v", optimized, replay, err)
-	}
-	if optimized.VersionNumber != 2 || optimized.PlatformConfiguration.CanonicalHash != target.CanonicalHash || optimized.CanonicalHash != target.CanonicalHash {
-		t.Fatalf("typed target was not materialized exactly: %#v", optimized)
 	}
 }
 

@@ -225,6 +225,7 @@ export function CommercePrerollWorkspace({ onNotice, gateway: suppliedGateway }:
 	const [saveDialogError, setSaveDialogError] = useState('')
   const objectUrls = useRef<string[]>([])
   const runningAnalysis = useRef(false)
+  const runningFrames = useRef(false)
   const runningVideo = useRef(false)
 	const storyboardSaveTimer = useRef<number | null>(null)
 	const promptSaveTimer = useRef<number | null>(null)
@@ -351,7 +352,8 @@ export function CommercePrerollWorkspace({ onNotice, gateway: suppliedGateway }:
 	}
 
   const generateFrames = async () => {
-    if (!state.productReference || !selectedHook) return
+    if (!state.productReference || !selectedHook || runningFrames.current) return
+    runningFrames.current = true
     dispatch({ type: 'frames-started' })
     try {
 	  if (storyboardSaveTimer.current) window.clearTimeout(storyboardSaveTimer.current)
@@ -366,6 +368,15 @@ export function CommercePrerollWorkspace({ onNotice, gateway: suppliedGateway }:
       dispatch({ type: 'frames-ready', frames })
     } catch (cause) {
       dispatch({ type: 'operation-failed', scope: 'frames', message: cause instanceof Error ? cause.message : '参考首帧生成失败，请重试。' })
+    } finally { runningFrames.current = false }
+  }
+
+  const selectFirstFrame = async (frame: FirstFrameCandidate) => {
+    try {
+      await gateway.selectFirstFrame?.(frame)
+      dispatch({ type: 'frame-selected', id: frame.id })
+    } catch (cause) {
+      dispatch({ type: 'operation-failed', scope: 'frames', message: cause instanceof Error ? cause.message : '首帧选择保存失败，请重试。' })
     }
   }
 
@@ -437,7 +448,7 @@ export function CommercePrerollWorkspace({ onNotice, gateway: suppliedGateway }:
     try {
       const frame = gateway.uploadCustomFirstFrame ? await gateway.uploadCustomFirstFrame(file) : localFrame
       dispatch({ type: 'frames-ready', frames: [...state.firstFrames, frame] })
-      dispatch({ type: 'frame-selected', id: frame.id })
+      await selectFirstFrame(frame)
     } catch (cause) {
       dispatch({ type: 'operation-failed', scope: 'frames', message: cause instanceof Error ? cause.message : '自定义首帧上传失败，请重试。' })
     }
@@ -453,6 +464,12 @@ export function CommercePrerollWorkspace({ onNotice, gateway: suppliedGateway }:
   // Only resume an interrupted local task when its durable identity changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.analysisStatus, state.source?.id, state.clientTaskId])
+
+  useEffect(() => {
+    if (state.firstFramesStatus === 'loading' && state.generationDraft && state.productReference && selectedHook && !runningFrames.current) void generateFrames()
+  // Resume the durable first-frame batch instead of creating a new batch after refresh.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.firstFramesStatus, state.clientTaskId])
 
   useEffect(() => {
     if (state.videoStatus === 'loading' && state.generationDraft && selectedFrame && !runningVideo.current) void generateVideo()
@@ -475,7 +492,7 @@ export function CommercePrerollWorkspace({ onNotice, gateway: suppliedGateway }:
         : state.activeStep === 'understanding' ? <UnderstandingReady state={state} dispatch={dispatch} onConfirm={() => void confirmUnderstanding()} onReferenceFile={selectReferenceFile} onReferenceSelect={reference => void selectProductReference(reference)} onReextract={() => void reextractProductReferences()}/>
         : state.activeStep === 'direction' ? <DirectionStage state={state} dispatch={dispatch} onSelectHook={hook => void selectHook(hook)} onRefresh={() => void confirmUnderstanding()} onContinue={() => dispatch({ type: 'open-step', step: 'settings' })}/>
         : state.activeStep === 'settings' ? <SettingsStage state={state} dispatch={dispatch} onDuration={duration => void changeDuration(duration)} onInstruction={value => dispatch({ type: 'instruction-changed', value })} onStoryboard={updateStoryboard} onPrompt={updatePrompt} onFrames={() => void generateFrames()}/>
-        : state.activeStep === 'first-frame' ? <FirstFrameStage state={state} dispatch={dispatch} onRegenerate={() => void generateFrames()} onSelect={frame => dispatch({ type: 'frame-selected', id: frame.id })} onUpload={uploadFirstFrame} onPreview={setPreviewFrame}/>
+        : state.activeStep === 'first-frame' ? <FirstFrameStage state={state} dispatch={dispatch} onRegenerate={() => void generateFrames()} onSelect={frame => void selectFirstFrame(frame)} onUpload={uploadFirstFrame} onPreview={setPreviewFrame}/>
         : <VideoStage state={state} dispatch={dispatch} onGenerate={() => void generateVideo()} onSave={() => void saveOutput()} onReset={reset}/>} </main>
     {previewFrame ? <div className="commerce-preroll-v2-lightbox" role="dialog" aria-modal="true" aria-label={`${previewFrame.title}大图预览`}><div><button aria-label="关闭预览" onClick={() => setPreviewFrame(null)}><X size={18}/></button><img src={previewFrame.imageUrl} alt={previewFrame.title}/><footer><b>{previewFrame.title}</b><span>{previewFrame.description}</span></footer></div></div> : null}
   </section>{showSaveDialog ? <div className="commerce-preroll-v2-save-dialog" role="dialog" aria-modal="true" aria-label="保存当前电商前贴"><div><h3>先保存当前电商前贴</h3><p>当前流程尚未完成。命名保存后，可从任务和版本下拉框继续找回。</p><label>任务名称<input value={draftName} autoFocus onChange={event => { setDraftName(event.target.value); setSaveDialogError('') }}/></label>{saveDialogError ? <div className="commerce-preroll-v2-dialog-error" role="alert"><CircleAlert size={15}/><span>{saveDialogError}</span></div> : null}<footer><button className="commerce-preroll-v2-secondary" onClick={() => setShowSaveDialog(false)}>继续编辑</button><button className="commerce-preroll-v2-primary" disabled={!draftName.trim()} onClick={() => void saveAndCreate()}>保存并新建</button></footer></div></div> : null}</>

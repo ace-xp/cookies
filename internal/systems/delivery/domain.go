@@ -3,7 +3,6 @@ package delivery
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
@@ -130,8 +129,7 @@ func (v DeliveryPlanVersion) IsPlatformConfigurationV2() bool {
 func (v DeliveryPlanVersion) IsLegacy() bool { return !v.IsPlatformConfigurationV2() }
 
 type UpdatePlanRequest struct {
-	ExpectedVersion int `json:"expected_version"`
-	PlanDraft
+	ExpectedVersion       int                    `json:"expected_version"`
 	Intent                *DeliveryIntent        `json:"intent,omitempty"`
 	PlatformConfiguration *PlatformConfiguration `json:"platform_configuration,omitempty"`
 }
@@ -177,104 +175,10 @@ func (request UpdatePlanRequest) Validate() error {
 	if request.ExpectedVersion < 1 {
 		return fmt.Errorf("expected_version must be at least 1")
 	}
-	if request.Intent != nil || request.PlatformConfiguration != nil {
-		if request.Intent == nil || request.PlatformConfiguration == nil {
-			return fmt.Errorf("intent and platform_configuration are both required")
-		}
-		return nil
-	}
-	return request.PlanDraft.Validate()
-}
-
-func (draft PlanDraft) Validate() error {
-	if strings.TrimSpace(draft.Name) == "" || len(draft.Name) > 255 {
-		return fmt.Errorf("name must be between 1 and 255 characters")
-	}
-	if strings.TrimSpace(draft.Objective) == "" || len(draft.Objective) > 2000 {
-		return fmt.Errorf("objective must be between 1 and 2000 characters")
-	}
-	if draft.Budget.TotalMinor < 0 {
-		return fmt.Errorf("budget.total_minor must not be negative")
-	}
-	if draft.Budget.Currency != "CNY" {
-		return fmt.Errorf("budget.currency must be CNY")
-	}
-	if draft.Schedule.StartAt.IsZero() || draft.Schedule.EndAt.IsZero() || !draft.Schedule.EndAt.After(draft.Schedule.StartAt) {
-		return fmt.Errorf("schedule must have an end after its start")
-	}
-	if strings.TrimSpace(draft.Schedule.Timezone) == "" {
-		return fmt.Errorf("schedule.timezone is required")
-	}
-	if len(draft.CreativeReferences) > 50 {
-		return fmt.Errorf("creative_references must contain at most 50 items")
-	}
-	for _, reference := range draft.CreativeReferences {
-		if strings.TrimSpace(reference.AssetID) == "" || reference.Version < 1 {
-			return fmt.Errorf("creative reference asset_id and positive version are required")
-		}
+	if request.Intent == nil || request.PlatformConfiguration == nil {
+		return fmt.Errorf("intent and platform_configuration are both required")
 	}
 	return nil
-}
-
-func versionFromDraft(plan DeliveryPlan, versionNumber int, draft PlanDraft, actor contract.Principal, now time.Time) (DeliveryPlanVersion, error) {
-	scenario := scenarioFor(draft)
-	draft = normalizeDraft(draft, scenario)
-	version := DeliveryPlanVersion{
-		PlanID: plan.ID, OrganizationID: plan.OrganizationID, ProjectID: plan.ProjectID,
-		VersionNumber: versionNumber, Name: draft.Name, Objective: draft.Objective,
-		Advertiser: MockAdvertiser{
-			ID: draft.Advertiser.ID, Name: draft.Advertiser.Name, Platform: draft.Advertiser.Platform,
-			Source: SourceMock, Scenario: scenario,
-		},
-		Budget: draft.Budget, Schedule: draft.Schedule,
-		Tracking: draft.Tracking, CreativeReferences: draft.CreativeReferences,
-		StrategyReference:     draft.StrategyReference,
-		SourceStrategyVersion: draft.SourceStrategyVersion, Platform: plan.Platform,
-		Source: SourceMock, Scenario: scenario,
-		CreatedBy: actor, CreatedAt: now,
-	}
-	hash, err := PlanCanonicalHash(version)
-	if err != nil {
-		return DeliveryPlanVersion{}, err
-	}
-	version.CanonicalHash = hash
-	return version, nil
-}
-
-func normalizeDraft(draft PlanDraft, scenario Scenario) PlanDraft {
-	draft.Name = strings.TrimSpace(draft.Name)
-	draft.Objective = strings.TrimSpace(draft.Objective)
-	draft.Advertiser.ID = strings.TrimSpace(draft.Advertiser.ID)
-	draft.Advertiser.Name = strings.TrimSpace(draft.Advertiser.Name)
-	draft.Advertiser.Platform = strings.TrimSpace(draft.Advertiser.Platform)
-	draft.Schedule.Timezone = strings.TrimSpace(draft.Schedule.Timezone)
-	draft.Tracking.LandingPage = strings.TrimSpace(draft.Tracking.LandingPage)
-	draft.Tracking.PixelID = strings.TrimSpace(draft.Tracking.PixelID)
-	draft.Tracking.ConversionEvent = strings.TrimSpace(draft.Tracking.ConversionEvent)
-	draft.SourceStrategyVersion = strings.TrimSpace(draft.SourceStrategyVersion)
-	draft.StrategyReference.TaskID = strings.TrimSpace(draft.StrategyReference.TaskID)
-	draft.StrategyReference.ContentHash = strings.TrimSpace(draft.StrategyReference.ContentHash)
-	draft.StrategyReference.Route = strings.TrimSpace(draft.StrategyReference.Route)
-	for index := range draft.CreativeReferences {
-		draft.CreativeReferences[index].AssetID = strings.TrimSpace(draft.CreativeReferences[index].AssetID)
-		draft.CreativeReferences[index].ContentHash = strings.TrimSpace(draft.CreativeReferences[index].ContentHash)
-		draft.CreativeReferences[index].Route = strings.TrimSpace(draft.CreativeReferences[index].Route)
-	}
-	draft.CreativeReferences = append([]CreativeReference(nil), draft.CreativeReferences...)
-	return draft
-}
-
-func draftFromVersion(version DeliveryPlanVersion) PlanDraft {
-	return PlanDraft{
-		Name: version.Name, Objective: version.Objective,
-		Advertiser: AdvertiserInput{
-			ID: version.Advertiser.ID, Name: version.Advertiser.Name, Platform: version.Advertiser.Platform,
-		},
-		Budget: version.Budget, Schedule: version.Schedule, Tracking: version.Tracking,
-		CreativeReferences:    append([]CreativeReference(nil), version.CreativeReferences...),
-		StrategyReference:     version.StrategyReference,
-		SourceStrategyVersion: version.SourceStrategyVersion,
-	}
 }
 
 func cloneVersion(version DeliveryPlanVersion) DeliveryPlanVersion {

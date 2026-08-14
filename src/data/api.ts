@@ -642,6 +642,7 @@ export type ApiCreativeIntakeBootstrap = {
   id: string
   source: string
   status: string
+  input_identity_hash?: string
   selected_route_id?: string
   request?: {
     objective?: string
@@ -717,6 +718,19 @@ export type ApiCreativeTaskSummary = {
   version: number
   created_at: string
   updated_at: string
+}
+
+export type ApiStrategyBrandWorkflow = {
+  contract_version: 'creative-strategy-brand-workflow/v1'
+  mode: 'brief_review_required' | 'direction_ready' | 'direction_selection_required' | 'task_ready' | 'legacy_task_upgrade_required'
+  intake_id: string
+  input_identity_hash: string
+  brand_brief?: ApiBrandBriefReview
+  latest_direction_batch?: ApiCreativeDirectionBatch
+  confirmed_direction?: ApiCreativeDirection
+  task?: ApiCreativeTaskSummary
+  issues: Array<{ code: string; stage: string; path?: string; message: string; source: string }>
+  next_action: 'prepare_brief' | 'review_brief' | 'generate_directions' | 'wait_for_directions' | 'retry_directions' | 'select_direction' | 'create_task' | 'open_task' | 'review_legacy_task'
 }
 
 export type ApiCreateManualImageTextInput = {
@@ -4136,6 +4150,28 @@ function prepareBrandBriefReview(projectId: string, intakeId: string) {
   )
 }
 
+function getStrategyBrandWorkflow(projectId: string, intakeId: string) {
+  return creativeRequest<ApiStrategyBrandWorkflow>(
+    `/projects/${encodeURIComponent(projectId)}/creative-intakes/${encodeURIComponent(intakeId)}/brand-workflow`,
+  )
+}
+
+function prepareStrategyBrandWorkflow(projectId: string, intake: ApiCreativeIntakeBootstrap) {
+  const selectedRouteId = intake.selected_route_id || intake.request?.selected_route_id || ''
+  const inputIdentityHash = intake.input_identity_hash || ''
+  if (!selectedRouteId || !inputIdentityHash) throw new Error('品牌策略交接缺少冻结 Route 或输入身份。')
+  return creativeRequest<ApiStrategyBrandWorkflow>(
+    `/projects/${encodeURIComponent(projectId)}/creative-intakes/${encodeURIComponent(intake.id)}/brand-workflow:prepare`,
+    'POST',
+    {
+      expected_input_identity_hash: inputIdentityHash,
+      selected_route_id: selectedRouteId,
+      accept_strategy_projection: true,
+    },
+    { 'Idempotency-Key': `strategy-brand-prepare-${inputIdentityHash}` },
+  )
+}
+
 function updateBrandBriefReview(projectId: string, intakeId: string, review: ApiBrandBriefReview) {
   return creativeRequest<ApiBrandBriefReview>(
     `/projects/${encodeURIComponent(projectId)}/creative-intakes/${encodeURIComponent(intakeId)}/brand-brief`,
@@ -6128,6 +6164,8 @@ export const api = {
   getImageTextWorkspace,
   getCreativeIntake,
   prepareBrandBriefReview,
+  getStrategyBrandWorkflow,
+  prepareStrategyBrandWorkflow,
   updateBrandBriefReview,
   confirmBrandBriefReview,
   createManualImageTextIntake,

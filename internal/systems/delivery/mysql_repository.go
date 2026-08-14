@@ -206,7 +206,10 @@ type planVersionExecutor interface {
 }
 
 func insertPlanVersion(ctx context.Context, executor planVersionExecutor, version DeliveryPlanVersion) error {
-	if version.IsPlatformConfigurationV2() {
+	if !version.IsPlatformConfigurationV2() {
+		return ErrLegacyConfigurationUnsupported
+	}
+	{
 		intentJSON, err := json.Marshal(version.DeliveryIntent)
 		if err != nil {
 			return err
@@ -326,6 +329,9 @@ func firstCreativeHash(version DeliveryPlanVersion) string {
 }
 
 func (r MySQLRepository) CreateChangeSet(ctx context.Context, value ChangeSet) (ChangeSet, error) {
+	if value.TargetSnapshot == nil || value.LegacyTargetSnapshot != nil {
+		return ChangeSet{}, ErrLegacyConfigurationUnsupported
+	}
 	notes, err := json.Marshal(value.PreflightNotes)
 	if err != nil {
 		return ChangeSet{}, err
@@ -1145,10 +1151,7 @@ func decodeChangeSetOptional(value *ChangeSet, notes, target []byte, targetHash,
 }
 
 func changeSetSnapshotJSON(value ChangeSet) any {
-	if value.TargetSnapshot != nil {
-		return nullableJSON(value.TargetSnapshot)
-	}
-	return nullableJSON(value.LegacyTargetSnapshot)
+	return nullableJSON(value.TargetSnapshot)
 }
 
 func changeSetSnapshotSchema(value ChangeSet) string {

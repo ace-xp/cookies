@@ -1,7 +1,7 @@
 import { fixtureAnalysis, fixtureFirstFrames, fixtureHooks, fixtureOutput, fixtureProductFacts, fixtureProductReference, fixtureRiskFacts } from './fixtures'
 import type { CommercePrerollCreativeVersion, CommercePrerollState, CommercePrerollTaskSummary, CreativeBeat, FirstFrameCandidate, GeneratedPreroll, GenerationDraft, HookProposal, PrerollDuration, ProductFacts, ProductReference, RiskFact, SourceAnalysis, SourceVideo } from './types'
 
-export type AnalysisResult = { analysis: SourceAnalysis; product: ProductFacts; reference: ProductReference; references?: ProductReference[]; risks: RiskFact[] }
+export type AnalysisResult = { taskId?: string; analysis: SourceAnalysis; product: ProductFacts; reference: ProductReference; references?: ProductReference[]; risks: RiskFact[] }
 export type SaveResult = { assetId: string }
 
 export interface CommercePrerollGateway {
@@ -26,6 +26,7 @@ export interface CommercePrerollGateway {
 	updateStoryboard?(beats: CreativeBeat[]): Promise<GenerationDraft>
 	updatePrompt?(creativePrompt: string): Promise<GenerationDraft>
   generateFirstFrames(draft: GenerationDraft, reference: ProductReference, onProgress: (stage: number) => void): Promise<FirstFrameCandidate[]>
+  selectFirstFrame?(frame: FirstFrameCandidate): Promise<void>
   createVideo(input: { draft: GenerationDraft; frame: FirstFrameCandidate; duration: PrerollDuration }, onProgress: (stage: number) => void): Promise<GeneratedPreroll>
   saveOutputToLibrary(output: GeneratedPreroll): Promise<SaveResult>
 }

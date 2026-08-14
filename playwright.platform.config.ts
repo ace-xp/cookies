@@ -28,7 +28,7 @@ const localGoEnv = {
   COOKIES_ENV: 'local',
   COOKIES_PASSWORD_AUTH_ENABLED: 'false',
   COOKIES_HTTP_ADDR: `:${apiPort}`,
-  COOKIES_MYSQL_DSN: 'root:root_local_development_only@tcp(127.0.0.1:3307)/cookies_e2e?parseTime=true&multiStatements=true',
+  COOKIES_MYSQL_DSN: process.env.COOKIES_E2E_MYSQL_DSN ?? 'root:root_local_development_only@tcp(127.0.0.1:3307)/cookies_e2e?parseTime=true&multiStatements=true',
   COOKIES_LOCAL_ORGANIZATION_ID: 'org_local',
   COOKIES_LOCAL_PRINCIPAL_KIND: 'user',
   COOKIES_LOCAL_PRINCIPAL_ID: 'user_local',
@@ -71,7 +71,7 @@ const localGoEnv = {
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /(platform-go-demo|strategy-brand-video-foundation|strategy-workspace-rearchitecture|delivery-plan-preflight|delivery-approval-content-hash|delivery-execution-scenarios|delivery-monitoring-alerts|delivery-three-tier|delivery-mock-tour|video-editor-phase1)\.spec\.ts/,
+  testMatch: /(platform-go-demo|strategy-brand-video-foundation|strategy-workspace-rearchitecture|delivery-plan-preflight|delivery-approval-content-hash|delivery-decision-workflow|delivery-execution-scenarios|delivery-monitoring-alerts|delivery-platform-configuration|delivery-mock-tour|video-editor-phase1)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   use: {

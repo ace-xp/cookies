@@ -5,7 +5,7 @@ import { api, CreativeApiError, type ApiCreativeTaskSummary, type ApiProjectMedi
 import { editingApi } from '../video-editing/api'
 import { canOpenShortDramaStep, initialShortDramaPrerollState, shortDramaPrerollReducer } from './reducer'
 import { createAsyncActionGate } from './asyncActionGate'
-import { findAuthoritativeVideo, requireAuthoritativeVideo, sourceUnavailableMessage } from './sourceAuthority'
+import { findAuthoritativeVideo, requireAuthoritativeVideo, restorePersistedVideo, sourceUnavailableMessage } from './sourceAuthority'
 import type { FirstFrameCandidate, PrerollDuration, ShortDramaPrerollState, ShortDramaStep } from './types'
 import './short-drama-preroll-v2.css'
 
@@ -159,6 +159,26 @@ async function resumeWorkspaceJobs(projectId: string, detail: ApiShortDramaV2Tas
   return { detail: current }
 }
 
+async function resolveWorkspaceSource(projectId: string, videos: ApiProjectMediaAsset[], detail: ApiShortDramaV2TaskDetail) {
+  const workspace = detail.video_draft.short_drama_preroll_v2
+  const ref = workspace.source_video.asset_version
+  if (workspace.source_video.project_id !== projectId) throw new Error(sourceUnavailableMessage)
+  const listed = findAuthoritativeVideo(videos, ref)
+  if (listed) return listed
+
+  // Asset lists are bounded. Restore an older source directly from the durable
+  // reference frozen in the task instead of treating an omitted page item as deleted.
+  const contentUrl = await api.getProjectAssetPreview(projectId, ref)
+  return restorePersistedVideo(ref, {
+    projectId,
+    contentUrl,
+    width: workspace.source_canvas?.width_pixels,
+    height: workspace.source_canvas?.height_pixels,
+    durationSeconds: workspace.source_canvas ? workspace.source_canvas.duration_ms / 1000 : undefined,
+    createdAt: detail.task.created_at,
+  }) satisfies ApiProjectMediaAsset
+}
+
 function storyAnalysis(detail: ApiShortDramaV2TaskDetail) {
   const content = detail.video_draft.short_drama_preroll_v2.analysis.content
   return {
@@ -231,11 +251,10 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
         try {
           const restored = await api.getShortDramaPrerollV2Workspace(currentProject.id, session.taskId)
           if (cancelled) return
-          const sourceRef = restored.video_draft.short_drama_preroll_v2.source_video.asset_version
-          const source = findAuthoritativeVideo(videos, sourceRef)
-          if (!source) throw new Error(sourceUnavailableMessage)
+          const source = await resolveWorkspaceSource(currentProject.id, videos, restored)
           const restoredState = await restoreState(currentProject.id, restored, source, session)
           if (cancelled) return
+          setAssets(current => findAuthoritativeVideo(current, { asset_id: source.id, version: source.version }) ? current : [source, ...current])
           setWorkspace(restored)
           dispatch({ type: 'restore', state: restoredState })
           const restoredWorkspace = restored.video_draft.short_drama_preroll_v2
@@ -352,10 +371,9 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
         api.getShortDramaPrerollV2Workspace(currentProject.id, taskId),
         api.listProjectMediaAssets(currentProject.id).then(items => items.filter(item => item.kind === 'video')),
       ])
-      const sourceRef = detail.video_draft.short_drama_preroll_v2.source_video.asset_version
-      const source = requireAuthoritativeVideo(videos, sourceRef)
+      const source = await resolveWorkspaceSource(currentProject.id, videos, detail)
       const restored = await restoreState(currentProject.id, detail, source, readTaskSession(currentProject.id, taskId))
-      setAssets(videos)
+      setAssets(findAuthoritativeVideo(videos, { asset_id: source.id, version: source.version }) ? videos : [source, ...videos])
       setWorkspace(detail)
       dispatch({ type: 'restore', state: restored })
       onNotice(`已恢复“${detail.task.display_name || '未命名短剧前贴'}”。`)

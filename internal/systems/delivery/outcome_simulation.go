@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -252,50 +251,10 @@ func (s Service) GetLatestOutcomeSimulation(ctx context.Context, actor contract.
 }
 
 func outcomeInput(version DeliveryPlanVersion, execution ExecutionResult) (OutcomeSimulationInput, error) {
-	if version.IsPlatformConfigurationV2() {
-		return platformOutcomeInput(version, execution)
+	if !version.IsPlatformConfigurationV2() || version.ReadOnly || execution.ChangeSet.LegacyTargetSnapshot != nil {
+		return OutcomeSimulationInput{}, ErrLegacyConfigurationUnsupported
 	}
-	configuration := version.ThreeTierConfiguration
-	if execution.ChangeSet.LegacyTargetSnapshot != nil {
-		configuration = execution.ChangeSet.LegacyTargetSnapshot
-	}
-	configurationHash, err := snapshotHash(configuration)
-	if err != nil {
-		return OutcomeSimulationInput{}, err
-	}
-	optimization, audience := version.Objective, "all"
-	budget, bid := version.Budget.TotalMinor, maxInt64(1, version.Budget.TotalMinor/100)
-	if field := findThreeTierField(configuration, "optimization"); field != nil {
-		optimization = fmt.Sprint(field.Effective.Value)
-	}
-	if field := findThreeTierField(configuration, "audience"); field != nil {
-		audience = fmt.Sprint(field.Effective.Value)
-	}
-	if field := findThreeTierField(configuration, "budget"); field != nil {
-		budget = numericMinor(field.Effective.Value, budget)
-	}
-	if field := findThreeTierField(configuration, "bid"); field != nil {
-		bid = numericMinor(field.Effective.Value, bid)
-	}
-	features := make([]OutcomeCreativeFeature, 0, len(version.CreativeReferences))
-	for _, creative := range version.CreativeReferences {
-		hash := creative.ContentHash
-		if hash == "" {
-			hash, _ = contract.CanonicalJSONHash(creative)
-		}
-		features = append(features, OutcomeCreativeFeature{AssetID: creative.AssetID, Version: creative.Version, ContentHash: hash, QualityBP: stableRange(hash, 8500, 11500)})
-	}
-	if len(features) == 0 {
-		features = append(features, OutcomeCreativeFeature{AssetID: "mock-creative", Version: 1, ContentHash: configurationHash, QualityBP: stableRange(configurationHash, 8500, 11500)})
-	}
-	version.Budget.TotalMinor = budget
-	return OutcomeSimulationInput{
-		PlanID: version.PlanID, PlanVersion: version.VersionNumber, PlanCanonicalHash: version.CanonicalHash,
-		Budget: version.Budget, Schedule: version.Schedule, Objective: version.Objective, OptimizationGoal: optimization,
-		BidMinor: bid, Audience: audience, StrategyReference: version.StrategyReference, CreativeFeatures: features,
-		ConfigurationHash: configurationHash, PlatformExecutionID: execution.Execution.ID, PlatformExecutionMode: execution.Execution.Mode,
-		PlatformExecutionProof: execution.Evidence.ID,
-	}, nil
+	return platformOutcomeInput(version, execution)
 }
 
 func platformOutcomeInput(version DeliveryPlanVersion, execution ExecutionResult) (OutcomeSimulationInput, error) {

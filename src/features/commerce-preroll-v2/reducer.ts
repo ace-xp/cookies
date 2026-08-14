@@ -62,7 +62,7 @@ export type CommercePrerollAction =
   | { type: 'rights-changed'; confirmed: boolean }
   | { type: 'analysis-started' }
   | { type: 'analysis-progress'; stage: number }
-  | { type: 'analysis-ready'; analysis: SourceAnalysis; product: ProductFacts; reference: ProductReference; references?: ProductReference[]; risks: RiskFact[] }
+  | { type: 'analysis-ready'; taskId?: string; analysis: SourceAnalysis; product: ProductFacts; reference: ProductReference; references?: ProductReference[]; risks: RiskFact[] }
   | { type: 'product-field-changed'; field: ProductField; value: string }
   | { type: 'risk-resolved'; id: string; status: 'confirmed' | 'removed' }
   | { type: 'reference-changed'; reference: ProductReference }
@@ -94,7 +94,7 @@ export function commercePrerollReducer(state: CommercePrerollState, action: Comm
     case 'rights-changed': return { ...state, rightsConfirmed: action.confirmed }
     case 'analysis-started': return { ...state, activeStep: 'understanding', analysisStatus: 'loading', analysisStage: 0, analysis: null, productDraft: null, productConfirmed: false, productReference: null, productReferences: [], riskFacts: [], ...clearHooksDownstream, error: '', errorScope: null }
     case 'analysis-progress': return { ...state, analysisStage: action.stage }
-    case 'analysis-ready': return { ...state, analysisStatus: 'ready', analysisStage: 5, analysis: action.analysis, productDraft: action.product, productReference: action.reference, productReferences: action.references?.length ? action.references : [action.reference], riskFacts: action.risks, error: '', errorScope: null }
+    case 'analysis-ready': return { ...state, clientTaskId: action.taskId || state.clientTaskId, analysisStatus: 'ready', analysisStage: 5, analysis: action.analysis, productDraft: action.product, productReference: action.reference, productReferences: action.references?.length ? action.references : [action.reference], riskFacts: action.risks, error: '', errorScope: null }
     case 'product-field-changed': return state.productDraft ? { ...state, productDraft: { ...state.productDraft, [action.field]: action.value }, productConfirmed: false, ...clearHooksDownstream } : state
     case 'risk-resolved': return { ...state, riskFacts: state.riskFacts.map(item => item.id === action.id ? { ...item, status: action.status } : item) }
     case 'reference-changed': return { ...state, productReference: action.reference, productReferences: state.productReferences.some(item => item.id === action.reference.id) ? state.productReferences : [...state.productReferences, action.reference], ...clearFramesAndVideo }
