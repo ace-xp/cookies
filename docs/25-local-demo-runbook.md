@@ -100,6 +100,8 @@ git diff --check
 
 ### 5.1 生成 Provider 主密钥
 
+`.env.example` 已带一个仅供本地使用的默认主密钥，新克隆无需任何操作即可启动。**部署环境必须换成自己生成的值**，并且在本地 MySQL 数据存在期间不要更换 —— 换了以后已加密的凭据无法解密，需要在「系统设置」页重新填一次密钥。
+
 主密钥必须是 base64 编码的 32 字节，且只存在于本机未提交的 `.env`，不写入数据库。任何 `scripts/configure-*.ps1` 在它缺失时都会直接抛错。
 
 ```bash
@@ -128,6 +130,30 @@ $b = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]:
 | 联网研究（Seed 2.1 Pro） | `scripts/configure-seed-web-research.ps1` |
 
 随后把 `.env` 中对应的 `COOKIES_PROVIDER_*_ADAPTER` 从 `fake` 改成脚本文档标注的值，并重启 `cookies-api`。注意：只要有任一 adapter 不是 `fake`，缺少合法主密钥会让 API **拒绝启动**并提示 `COOKIES_PROVIDER_MASTER_KEY must be base64-encoded 32 bytes`。
+
+**例外：视频（Ark Seedance）不用脚本，也不用改 `.env`。** 首选做法是在浏览器里填：
+
+1. 确认 `.env` 里 `COOKIES_PROVIDER_VIDEO_ADAPTER=ark_video`（`.env.example` 已是这个默认值）。
+2. 以管理员身份登录前端，进入 **系统设置 → 视频生成模型**。只有组织角色为 `owner`/`admin` 的人能保存，`member` 和 `auditor` 只能看状态。
+3. 填服务地址（默认 `https://ark.cn-beijing.volces.com/api/v3`）、模型名、API Key，点「保存配置」。
+
+保存前系统会拿这把密钥向上游探一次连通性，**探不通就不写库**，页面直接显示拒绝原因。探通了才加密写进 MySQL，写完立即生效，不需要重启 `cookies-api`。想先看结果不落库就点「测试连接」。
+
+探测只验密钥，验不出模型名 —— 模型名填错要等真正出片时才会以上游报错的形式暴露。
+
+改配置时 API Key 留空即沿用已存的那把，只换服务地址或模型名不必重新粘贴密钥。页面任何时候都只显示密钥末四位，接口响应里也不含完整密钥。
+
+界面还没配过时，进程启动时的环境凭据仍然管用，作为兜底：
+
+```
+COOKIES_ARK_VIDEO_API_KEY=<你的 Ark API Key>
+COOKIES_ARK_VIDEO_MODEL=doubao-seedance-1-0-lite-t2v-250428
+COOKIES_ARK_VIDEO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 留空即用这个默认值
+```
+
+优先级是**界面配置 > 环境变量 > 未配置**，三行全部留空也不影响启动。
+
+两条路都没有库内路由那份「时长/比例/分辨率白名单」兜底：请求参数是否被接受完全由模型说了算，不合规会以上游报错的形式返回。需要按路线锁死生成参数时，改回 `scripts/configure-ark-video.ps1` 那条路即可，三种模式共用同一个适配器。
 
 ### 5.3 验证配置生效
 
