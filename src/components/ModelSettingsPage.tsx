@@ -1,7 +1,9 @@
-import { useState, type FormEvent } from 'react'
-import { Check, CircleAlert, KeyRound, LockKeyhole, RotateCcw, Save, ShieldCheck, Trash2 } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { Check, CircleAlert, KeyRound, LockKeyhole, PlugZap, RotateCcw, Save, ShieldCheck } from 'lucide-react'
 import { useModelConfig } from '../context/ModelConfigContext'
 import { MiyunConnectionSettings } from './MiyunConnectionSettings'
+
+const defaultVideoBaseUrl = 'https://ark.cn-beijing.volces.com/api/v3'
 
 function formatCheckedAt(value?: string) {
   if (!value) return '尚未检查'
@@ -10,13 +12,52 @@ function formatCheckedAt(value?: string) {
 }
 
 export function ModelSettingsPage() {
-  const { providers, configuredCount, isLoading, refresh, saveProvider, clearProvider } = useModelConfig()
-  const selected = providers[0]
+  const {
+    providers, configuredCount, isLoading, refresh,
+    videoConfig, isVideoLoading, refreshVideoConfig, saveVideoConfig, verifyVideoConfig,
+  } = useModelConfig()
+  const [baseUrl, setBaseUrl] = useState(defaultVideoBaseUrl)
+  const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
-  const [baseUrl, setBaseUrl] = useState('https://ark.cn-beijing.volces.com/api/v3')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const [isVerifying, setIsVerifying] = useState(false)
+
+  // 读回来的配置是这张表单的初始值；本地正在编辑的内容不被覆盖，
+  // 所以只在拿到一份新的服务端配置时同步。
+  useEffect(() => {
+    if (!videoConfig) return
+    setBaseUrl(videoConfig.base_url || videoConfig.environment_fallback.base_url || defaultVideoBaseUrl)
+    setModel(videoConfig.model || videoConfig.environment_fallback.model || '')
+  }, [videoConfig])
+
+  const configured = videoConfig?.configured ?? false
+  const fallback = videoConfig?.environment_fallback
+  const status = configured ? '已配置' : fallback?.configured ? '沿用部署配置' : '未配置'
+  const needsKey = !configured || !videoConfig?.credential_readable
+
+  const currentInput = () => ({
+    baseUrl,
+    model,
+    apiKey: apiKey || undefined,
+    expectedVersion: videoConfig?.configured ? videoConfig.version : undefined,
+  })
+
+  const verify = async () => {
+    setIsVerifying(true)
+    setNotice('')
+    setError('')
+    try {
+      const result = await verifyVideoConfig(currentInput())
+      if (result.ok) setNotice(`${result.message}（模型名要等真正出片时才验得出来）`)
+      else setError(result.message)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '测试失败')
+    } finally {
+      setIsVerifying(false)
+    }
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -24,24 +65,13 @@ export function ModelSettingsPage() {
     setNotice('')
     setError('')
     try {
-      await saveProvider({ apiKey, baseUrl })
+      await saveVideoConfig(currentInput())
       setApiKey('')
-      setNotice('模型密钥已保存到服务端，本页面只保留掩码状态。')
+      setNotice('已保存并立即生效，之后的视频生成都会走这套配置。')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '保存失败')
     } finally {
       setIsSaving(false)
-    }
-  }
-
-  const clear = async () => {
-    setNotice('')
-    setError('')
-    try {
-      await clearProvider()
-      setNotice('已清除页面配置的工作区密钥，服务端将回退到环境变量配置。')
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '清除失败')
     }
   }
 
@@ -64,20 +94,34 @@ export function ModelSettingsPage() {
       </aside>
 
       <section className="provider-form">
-        <div className="provider-form-title"><div><h2>{selected?.name ?? '正在读取能力'}</h2><p>{selected?.description ?? '等待服务端响应'}</p></div><span className={selected?.status === '已配置' ? 'config-status configured' : 'config-status'}>{selected?.status === '已配置' ? <Check size={14}/> : <CircleAlert size={14}/>} {selected?.status ?? '读取中'}</span></div>
-        <div className="secret-policy"><LockKeyhole size={18}/><div><b>密钥由服务端加密保存</b><p>保存后立即生效，页面只显示配置状态，不会读取或展示完整密钥。</p></div></div>
+        <div className="provider-form-title">
+          <div><h2>视频生成模型</h2><p>创意模块出视频时调用的模型服务。填好后立即生效，不需要重启。</p></div>
+          <span className={configured ? 'config-status configured' : 'config-status'}>
+            {configured ? <Check size={14}/> : <CircleAlert size={14}/>} {isVideoLoading ? '读取中' : status}
+          </span>
+        </div>
+        <div className="secret-policy"><LockKeyhole size={18}/><div><b>密钥由服务端加密保存</b><p>保存前会先探一次连通性，探不通就不写入。页面只显示密钥末四位。</p></div></div>
 
         <form className="provider-fields" onSubmit={submit}>
-          <label>模型服务密钥
-            <input value={apiKey} onChange={event => setApiKey(event.target.value)} type="password" placeholder={selected?.maskedApiKey ?? '输入新的访问密钥'} autoComplete="off" required/>
-          </label>
           <label>服务地址
-            <input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://ark.cn-beijing.volces.com/api/v3"/>
+            <input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder={defaultVideoBaseUrl} required/>
+          </label>
+          <label>模型名
+            <input value={model} onChange={event => setModel(event.target.value)} placeholder="doubao-seedance-1-0-lite-t2v-250428" required/>
+          </label>
+          <label>API Key
+            <input value={apiKey} onChange={event => setApiKey(event.target.value)} type="password"
+              placeholder={needsKey ? '输入访问密钥' : `留空则沿用已保存的 ${videoConfig?.masked_api_key ?? '密钥'}`}
+              autoComplete="off" required={needsKey}/>
           </label>
           <div className="provider-actions inline">
-            <button className="secondary-button danger-text" type="button" onClick={() => void clear()} disabled={isSaving}><Trash2 size={15}/>清除页面配置</button>
-            <button className="secondary-button" type="button" onClick={() => void refresh()} disabled={isLoading || isSaving}><RotateCcw size={15}/>{isLoading ? '检查中…' : '刷新状态'}</button>
-            <button className="primary-button" type="submit" disabled={isSaving}><Save size={15}/>{isSaving ? '保存中…' : '保存密钥'}</button>
+            <button className="secondary-button" type="button" onClick={() => { void refreshVideoConfig(); void refresh() }} disabled={isLoading || isVideoLoading || isSaving}>
+              <RotateCcw size={15}/>{isVideoLoading ? '读取中…' : '刷新状态'}
+            </button>
+            <button className="secondary-button" type="button" onClick={() => void verify()} disabled={isVerifying || isSaving}>
+              <PlugZap size={15}/>{isVerifying ? '测试中…' : '测试连接'}
+            </button>
+            <button className="primary-button" type="submit" disabled={isSaving || isVerifying}><Save size={15}/>{isSaving ? '保存中…' : '保存配置'}</button>
           </div>
         </form>
 
@@ -86,10 +130,10 @@ export function ModelSettingsPage() {
 
         <div className="provider-metadata">
           <div><span>生效范围</span><b>服务端全部项目</b></div>
-          <div><span>配置来源</span><b>{selected?.source === 'workspace' ? '服务端加密配置' : selected?.source === 'environment' ? '部署环境配置' : selected?.status === '已配置' ? '服务端路由配置' : '尚未配置'}</b></div>
-          <div><span>密钥状态</span><b>{selected?.maskedApiKey ?? (selected?.status === '已配置' ? '已加密保存' : '未保存')}</b></div>
-          <div><span>最近检查</span><b>{formatCheckedAt(selected?.lastVerifiedAt)}</b></div>
-          <div><span>异常处理</span><b>调用失败时显示可操作的诊断信息</b></div>
+          <div><span>模型别名</span><b>{videoConfig?.model_alias ?? 'cookies.video.standard'}</b></div>
+          <div><span>密钥状态</span><b>{configured ? (videoConfig?.credential_readable ? videoConfig.masked_api_key : '主密钥已更换，请重填') : fallback?.configured ? '沿用部署环境密钥' : '未保存'}</b></div>
+          <div><span>最近检查</span><b>{formatCheckedAt(videoConfig?.last_verification.verified_at)}</b></div>
+          <div><span>检查结果</span><b>{videoConfig?.last_verification.message || '尚未检查'}</b></div>
         </div>
       </section>
 

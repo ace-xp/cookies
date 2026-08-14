@@ -3816,14 +3816,39 @@ type PlatformLoginResult = PlatformRequestContext & {
   session_id: string
 }
 
-export type ApiProviderConfiguration = {
-  provider: 'ark'
-  status: 'configured' | 'not_configured'
+export type ApiVideoModelConfiguration = {
+  configured: boolean
+  base_url: string
+  model: string
+  masked_api_key: string
+  credential_readable: boolean
+  version: number
+  model_alias: string
+  updated_at?: string
+  last_verification: { ok?: boolean; message: string; verified_at?: string }
+  environment_fallback: { configured: boolean; model: string; base_url: string }
+}
+
+export type ApiVideoModelVerification = {
+  ok: boolean
+  outcome: string
+  message: string
+}
+
+export type ApiVideoModelConfigurationInput = {
   baseUrl: string
-  source?: 'environment' | 'workspace'
-  maskedApiKey?: string
-  updatedAt?: string
-  capabilities: ApiProviderCapabilities
+  model: string
+  apiKey?: string
+  expectedVersion?: number
+}
+
+function videoModelConfigurationBody(input: ApiVideoModelConfigurationInput) {
+  return {
+    base_url: input.baseUrl,
+    model: input.model,
+    api_key: input.apiKey ?? '',
+    expected_version: input.expectedVersion ?? null,
+  }
 }
 
 const viteEnv = (import.meta as unknown as { env?: { VITE_API_BASE_URL?: string } }).env
@@ -5701,7 +5726,7 @@ export type ApiMiyunConnection = {
   id: string; organization_id: string; project_id: string
   status: 'unverified' | 'ready' | 'auth_required' | 'disabled'
   session_expires_at?: string; last_verified_at?: string; last_successful_request_at?: string; cooldown_until?: string
-  last_error_kind?: string; last_error_code?: string; last_error_at?: string; version: number; created_by: string; created_at: string; updated_at: string
+  last_error_kind?: string; last_error_code?: string; last_error_message?: string; last_error_at?: string; version: number; created_by: string; created_at: string; updated_at: string
 }
 export type ApiMiyunAssetVersionRef = { asset_id: string; version: number }
 export type ApiMediaUnderstandingArtifact = {
@@ -5778,10 +5803,12 @@ export const api = {
     return { authenticated: false }
   },
   getCapabilities: getKanonCapabilities,
-  getProviderConfiguration: () => request<ApiProviderConfiguration>('/provider/configuration'),
-  updateProviderConfiguration: (input: { apiKey: string; baseUrl?: string }) =>
-    request<ApiProviderConfiguration>('/provider/configuration', 'PUT', input),
-  deleteProviderConfiguration: () => request<ApiProviderConfiguration>('/provider/configuration', 'DELETE'),
+  getVideoModelConfiguration: () =>
+    platformRequest<ApiVideoModelConfiguration>('/provider/video-configuration'),
+  saveVideoModelConfiguration: (input: ApiVideoModelConfigurationInput) =>
+    platformRequest<ApiVideoModelConfiguration>('/provider/video-configuration', 'PUT', videoModelConfigurationBody(input)),
+  verifyVideoModelConfiguration: (input: ApiVideoModelConfigurationInput) =>
+    platformRequest<ApiVideoModelVerification>('/provider/video-configuration/verification', 'POST', videoModelConfigurationBody(input)),
   getPublicInsightOverview: () => request<ApiPublicInsightOverview>('/public-insights/overview'),
   getPublicInsightFilters: () => request<ApiPublicInsightFilters>('/public-insights/filters'),
   listPublicInsightVideos: (input: {
