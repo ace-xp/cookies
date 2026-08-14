@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -232,10 +233,16 @@ func (s Service) CreateVideoJob(ctx context.Context, request CreateVideoJobReque
 	var route *VideoRouteSnapshot
 	if s.VideoRoutes != nil {
 		resolved, resolveErr := s.VideoRoutes.ResolveVideoRoute(ctx, request.Actor.OrganizationID, request.ModelAlias)
-		if resolveErr != nil {
+		switch {
+		case resolveErr == nil:
+			route = &resolved
+		case errors.Is(resolveErr, ErrGatewayRouteNotFound) && s.VideoRouteOptional:
+			// Nothing configured in the Settings page yet: leave the route nil so
+			// the adapter uses the credential it was built with.
+			route = nil
+		default:
 			return contract.ProviderJob{}, false, fmt.Errorf("resolve provider video route: %w", resolveErr)
 		}
-		route = &resolved
 	}
 	job := contract.ProviderJob{
 		ID:               providerJobID,

@@ -215,7 +215,12 @@ type Service struct {
 	OutputHandles OutputHandleStore
 	Routes        ImageRouteResolver
 	VideoRoutes   VideoRouteResolver
-	NewID         func() (string, error)
+	// VideoRouteOptional lets video generation fall back to the adapter's own
+	// environment credential when MySQL holds no enabled route. It is set when
+	// COOKIES_ARK_VIDEO_API_KEY is present, so a deployment that has never
+	// opened the Settings page still has a working pipeline.
+	VideoRouteOptional bool
+	NewID              func() (string, error)
 	Now           func() time.Time
 }
 
