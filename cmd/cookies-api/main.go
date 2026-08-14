@@ -749,6 +749,10 @@ func main() {
 			}
 			providerService.Routes = provider.MySQLGatewayConfigStore{DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP}
 		}
+		// The stored route is always resolved, so a configuration saved in the
+		// Settings page takes effect without a restart. When the environment also
+		// carries a key, a missing route is not an error: the adapter falls back
+		// to that key, which keeps deployments working that never opened the page.
 		if cfg.Provider.VideoAdapter == "adapter_gateway" || cfg.Provider.VideoAdapter == "ark_video" {
 			cipher, cipherErr := provider.NewAESGCMCredentialCipher(cfg.Provider.MasterKey, cfg.Provider.MasterKeyVersion)
 			if cipherErr != nil {
@@ -758,9 +762,17 @@ func main() {
 			if cfg.Provider.VideoAdapter == "adapter_gateway" {
 				connectionType = "adapter_gateway"
 			}
-			providerService.VideoRoutes = provider.MySQLGatewayConfigStore{
+			videoConfigStore := provider.MySQLGatewayConfigStore{
 				DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP,
 				VideoConnectionType: connectionType,
+			}
+			providerService.VideoRoutes = videoConfigStore
+			providerService.VideoRouteOptional = cfg.Provider.VideoAdapter == "ark_video" && cfg.Provider.ArkVideoDirect()
+			dependencies.ProviderVideoConfiguration = videoConfigStore
+			dependencies.ProviderVideoEnvironment = httpserver.ProviderVideoEnvironment{
+				Configured: cfg.Provider.ArkVideoDirect(),
+				Model:      cfg.Provider.ArkVideo.Model,
+				BaseURL:    cfg.Provider.ArkVideo.BaseURL,
 			}
 		}
 		dependencies.ProviderJobs = providerService
@@ -890,8 +902,15 @@ func buildVideoAdapter(cfg config.Config, db *sql.DB, handles provider.OutputHan
 		if err != nil {
 			return nil, err
 		}
-		store := provider.MySQLGatewayConfigStore{DB: db, Cipher: cipher}
-		return provider.NewRoutedArkVideoAdapter(store, handles)
+		store := provider.MySQLGatewayConfigStore{DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP}
+		// Both credential sources stay live for the process lifetime: a job that
+		// carries a route saved in the Settings page uses it, and one that does
+		// not falls back to the environment key this process started with.
+		return provider.NewArkVideoAdapterWithRoutes(provider.ArkVideoConfig{
+			APIKey:  cfg.Provider.ArkVideo.APIKey,
+			Model:   cfg.Provider.ArkVideo.Model,
+			BaseURL: cfg.Provider.ArkVideo.BaseURL,
+		}, store, handles)
 	default:
 		return nil, fmt.Errorf("unsupported Provider video adapter %q", cfg.Provider.VideoAdapter)
 	}
