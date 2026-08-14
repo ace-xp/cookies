@@ -330,6 +330,8 @@ func adminScopes() []contract.Scope {
 		"delivery.read", "delivery.write", "delivery.approve", "delivery.execute",
 		"insights.read", "insights.write", "insights.confirm",
 		"knowledge.document_vision.reconcile",
+		// 只有 admin 能改模型服务配置：那是一份组织级凭据，改错了全组织都出不了片。
+		"provider.configuration.write",
 	}
 	return contract.ScopesFromStrings(values)
 }
