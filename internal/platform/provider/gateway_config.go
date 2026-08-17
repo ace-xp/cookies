@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
+	"github.com/shikanon/cookies/internal/platform/servicecatalog"
 )
 
 var ErrGatewayRouteNotFound = errors.New("adapter gateway route not found")
@@ -266,6 +267,10 @@ type MySQLGatewayConfigStore struct {
 	Cipher              CredentialCipher
 	AllowInsecureHTTP   bool
 	VideoConnectionType string
+	// ServiceProber overrides how the settings page probes a candidate
+	// configuration. Nil means the real per-service probe; tests inject a stub
+	// so they do not depend on the network.
+	ServiceProber func(ctx context.Context, code, address, secret string) servicecatalog.Result
 }
 
 type CapabilityStatus struct {

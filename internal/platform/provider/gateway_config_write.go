@@ -288,7 +288,7 @@ func (s MySQLGatewayConfigStore) SaveVideoConfiguration(ctx context.Context, org
 		}
 	}
 
-	connectionRevision, err := nextVideoRevision(ctx, transaction,
+	connectionRevision, err := nextRevision(ctx, transaction,
 		`SELECT COALESCE(MAX(revision_number), 0) FROM provider_connection_revisions WHERE connection_id = ?`,
 		VideoConnectionID, "connection_ark_seedance_r")
 	if err != nil {
@@ -319,7 +319,7 @@ func (s MySQLGatewayConfigStore) SaveVideoConfiguration(ctx context.Context, org
 			WHERE connection_id = ? AND status = 'active'`, VideoConnectionID); err != nil {
 			return VideoConfiguration{}, err
 		}
-		credential, credentialErr := nextVideoRevision(ctx, transaction,
+		credential, credentialErr := nextRevision(ctx, transaction,
 			`SELECT COALESCE(MAX(credential_version), 0) FROM provider_credentials WHERE connection_id = ?`,
 			VideoConnectionID, "credential_ark_seedance_v")
 		if credentialErr != nil {
@@ -340,7 +340,7 @@ func (s MySQLGatewayConfigStore) SaveVideoConfiguration(ctx context.Context, org
 		VideoRouteID, videoCapability, VideoModelAlias); err != nil {
 		return VideoConfiguration{}, err
 	}
-	routeRevision, err := nextVideoRevision(ctx, transaction,
+	routeRevision, err := nextRevision(ctx, transaction,
 		`SELECT COALESCE(MAX(revision_number), 0) FROM provider_model_route_revisions WHERE route_id = ?`,
 		VideoRouteID, "route_ark_seedance_video_r")
 	if err != nil {
@@ -363,16 +363,19 @@ func (s MySQLGatewayConfigStore) SaveVideoConfiguration(ctx context.Context, org
 	return s.GetVideoConfiguration(ctx, organizationID)
 }
 
-type videoRevisionID struct {
+type revisionID struct {
 	id     string
 	number int64
 }
 
-func nextVideoRevision(ctx context.Context, transaction *sql.Tx, query, parent, prefix string) (videoRevisionID, error) {
+// nextRevision allocates the next revision number for an append-only table.
+// Shared by the video configuration and the general service configuration, so
+// both number their revisions the same way.
+func nextRevision(ctx context.Context, transaction *sql.Tx, query, parent, prefix string) (revisionID, error) {
 	var current int64
 	if err := transaction.QueryRowContext(ctx, query, parent).Scan(&current); err != nil {
-		return videoRevisionID{}, err
+		return revisionID{}, err
 	}
 	next := current + 1
-	return videoRevisionID{id: fmt.Sprintf("%s%d", prefix, next), number: next}, nil
+	return revisionID{id: fmt.Sprintf("%s%d", prefix, next), number: next}, nil
 }
