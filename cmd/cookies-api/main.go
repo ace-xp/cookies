@@ -983,7 +983,16 @@ func buildImageAdapter(cfg config.Config, db *sql.DB, blobs assets.BlobStore) (p
 	case "fake":
 		return provider.NewFakeImageAdapter(nil), handles, nil
 	case "ark_image":
-		adapter, err := provider.NewArkImageAdapter(provider.ArkImageConfig{APIKey: cfg.Provider.ArkImage.APIKey, Model: cfg.Provider.ArkImage.Model, BaseURL: cfg.Provider.ArkImage.BaseURL}, handles)
+		// Prefer what the settings page saved. Without this the page and .env
+		// would be two sources for one capability, and a local save would look
+		// like it did nothing.
+		route := lookupStoredRoute(cfg, db, "image.generate", "cookies.image.standard")
+		imageConfig := arkImageAdapterConfig(route, envArkImage{
+			BaseURL: cfg.Provider.ArkImage.BaseURL,
+			Model:   cfg.Provider.ArkImage.Model,
+			APIKey:  cfg.Provider.ArkImage.APIKey,
+		})
+		adapter, err := provider.NewArkImageAdapter(imageConfig, handles)
 		return adapter, handles, err
 	case "openai_image":
 		adapter, err := provider.NewOpenAIImageAdapter(provider.OpenAIImageConfig{APIKey: cfg.Provider.OpenAIImage.APIKey, Model: cfg.Provider.OpenAIImage.Model, BaseURL: cfg.Provider.OpenAIImage.BaseURL}, handles)
@@ -1013,11 +1022,14 @@ func buildTextAdapter(cfg config.Config, db *sql.DB) (provider.TextProviderAdapt
 		store := provider.MySQLGatewayConfigStore{DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP}
 		return provider.NewAdapterGatewayTextAdapter(store, store, cfg.Provider.AllowInsecureHTTP)
 	case "ark_text":
-		return provider.NewArkTextAdapter(provider.ArkTextConfig{
-			APIKey:  cfg.Provider.ArkText.APIKey,
-			Model:   cfg.Provider.ArkText.Model,
+		// Same reason as the image branch: the settings page is the one place
+		// text configuration is meant to live.
+		route := lookupStoredRoute(cfg, db, "text.generate", "cookies.text.standard")
+		return provider.NewArkTextAdapter(arkTextAdapterConfig(route, envArkText{
 			BaseURL: cfg.Provider.ArkText.BaseURL,
-		})
+			Model:   cfg.Provider.ArkText.Model,
+			APIKey:  cfg.Provider.ArkText.APIKey,
+		}))
 	default:
 		return nil, fmt.Errorf("unsupported Provider text adapter %q", cfg.Provider.TextAdapter)
 	}

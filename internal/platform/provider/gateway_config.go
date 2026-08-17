@@ -326,7 +326,14 @@ func (s MySQLGatewayConfigStore) ListCapabilities(ctx context.Context, organizat
 }
 
 func (s MySQLGatewayConfigStore) ResolveImageRoute(ctx context.Context, organizationID contract.OrganizationID, modelAlias string) (ImageRouteSnapshot, error) {
-	return s.resolveRoute(ctx, organizationID, "image.generate", modelAlias, "adapter_gateway")
+	snapshot, err := s.resolveRoute(ctx, organizationID, "image.generate", modelAlias, "adapter_gateway")
+	if err == nil || !errors.Is(err, ErrGatewayRouteNotFound) {
+		return snapshot, err
+	}
+	// The settings page saves image configuration on an Ark connection, the
+	// same way it saves text. Mirror ResolveTextRoute so a page save resolves
+	// here too; without this fallback the saved route would be unreachable.
+	return s.resolveRoute(ctx, organizationID, "image.generate", modelAlias, "ark")
 }
 
 func (s MySQLGatewayConfigStore) ResolveTextRoute(ctx context.Context, organizationID contract.OrganizationID, modelAlias string) (GatewayRouteSnapshot, error) {
