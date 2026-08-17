@@ -18,6 +18,21 @@ import {
   prepareKanonCommercePreroll,
   unsupportedKanonWrite,
 } from '../backend/kanon-api.js'
+import { serviceSubmitBody } from './serviceCatalog'
+import type {
+  ApiServiceConfiguration,
+  ApiServiceField,
+  ApiServiceProbe,
+  ProbeOutcome,
+  ServiceFieldKind,
+  ServiceSubmitBody,
+} from './serviceCatalog'
+
+// Re-exported so src/data/api.ts stays the single import point for the
+// frontend; the pure helpers live in their own module only so the Node test
+// runner can load them without pulling in React.
+export { serviceSubmitBody }
+export type { ApiServiceConfiguration, ApiServiceField, ApiServiceProbe, ProbeOutcome, ServiceFieldKind, ServiceSubmitBody }
 import type { CreativeIntakeStatus, CreativeTaskStatus } from '../contracts/creative'
 // 纯类型的循环引用：verdict.ts 反过来从这里取 ApiConfidenceLevel。
 // import type 会被 TS 完全擦除，运行时不成环。
@@ -5993,6 +6008,11 @@ export const api = {
     platformRequest<ApiVideoModelConfiguration>('/provider/video-configuration', 'PUT', videoModelConfigurationBody(input)),
   verifyVideoModelConfiguration: (input: ApiVideoModelConfigurationInput) =>
     platformRequest<ApiVideoModelVerification>('/provider/video-configuration/verification', 'POST', videoModelConfigurationBody(input)),
+  listServices: () => platformRequest<{ services: ApiServiceConfiguration[] }>('/provider/services'),
+  saveService: (code: string, body: ServiceSubmitBody) =>
+    platformRequest<ApiServiceConfiguration>(`/provider/services/${encodeURIComponent(code)}`, 'PUT', body),
+  verifyService: (code: string, body: ServiceSubmitBody) =>
+    platformRequest<ApiServiceProbe>(`/provider/services/${encodeURIComponent(code)}/verification`, 'POST', body),
   getPublicInsightOverview: () => request<ApiPublicInsightOverview>('/public-insights/overview'),
   getPublicInsightFilters: () => request<ApiPublicInsightFilters>('/public-insights/filters'),
   listPublicInsightVideos: (input: {
@@ -6639,6 +6659,17 @@ export const api = {
     assetId: string,
     body: { expected_version: number; asset_type: ApiInsightAssetType; source: ApiFeatureSource; confidence?: ApiConfidence; reason: string },
   ) => request<ApiInsightAsset>(`${insightAssetPath(projectId, assetId)}:identify-type`, 'POST', body),
+  // 复核完的最后一脚：把素材封成「已确认」。
+  //
+  // 写人工层只是把变量填齐，状态机不会自己往前走——认可完不调这一下，素材原地
+  // 停在「待确认」，人认可了一屏东西却看不到任何变化。后端会先数一遍还有没有
+  // 没人认过的 AI 变量，有就拒掉，所以「已确认」永远意味着每一项都有人看过
+  // （03 AM-006）。只有「待确认」和「等人复审」这两种状态收得下。
+  confirmInsightAssetAnalysis: (
+    projectId: string,
+    assetId: string,
+    body: { expected_version: number; reason: string },
+  ) => request<ApiInsightAsset>(`${insightAssetPath(projectId, assetId)}:confirm`, 'POST', body),
   listInsightAssetMappings: (projectId: string, status?: ApiMappingStatus, limit = 100) => {
     const search = new URLSearchParams({ limit: String(limit) })
     if (status) search.set('status', status)
