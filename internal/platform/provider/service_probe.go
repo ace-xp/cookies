@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,19 +18,33 @@ const probeTimeout = 15 * time.Second
 // probeMaxBodyBytes caps how much of an error body is read before classifying.
 const probeMaxBodyBytes = 64 * 1024
 
-// probePath is the lightest read-only endpoint per service. Probes may cost
+// versionSegment matches a trailing API version element such as "/v1" or
+// "/api/v3".
+var versionSegment = regexp.MustCompile(`/v[0-9]+$`)
+
+// probeEndpoint is the lightest read-only endpoint per service. Probes may cost
 // money on metered upstreams, so nothing here generates content. The paths are
 // verified against the real upstreams during the acceptance run; a wrong one
 // shows up as "地址填错了" on a configuration that is actually fine, so fix it
 // here rather than loosening the classifier.
-func probePath(code string) string {
+func probeEndpoint(code, baseURL string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	switch code {
 	case "miyun":
-		return ""
+		return base
 	case "volcengine_speech":
-		return "/api/v1/tts/voices"
+		return base + "/api/v1/tts/voices"
 	default:
-		return "/models"
+		// Every OpenAI-compatible adapter in this package appends its path to a
+		// base that already carries a version element — ark bases end in
+		// "/api/v3", gateway bases in "/v1". When the operator leaves the
+		// version off, those adapters add "/v1" (see gateway_config.go and
+		// minimax_speech_adapter.go); the probe has to add it the same way, or
+		// it reports a bad address for a base the platform can actually call.
+		if versionSegment.MatchString(base) {
+			return base + "/models"
+		}
+		return base + "/v1/models"
 	}
 }
 
@@ -39,8 +54,7 @@ func ProbeService(ctx context.Context, code, baseURL, secret string) servicecata
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	endpoint := strings.TrimRight(baseURL, "/") + probePath(code)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, probeEndpoint(code, baseURL), nil)
 	if err != nil {
 		return servicecatalog.ClassifyTransport(err)
 	}

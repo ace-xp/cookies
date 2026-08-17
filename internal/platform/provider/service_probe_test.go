@@ -81,3 +81,21 @@ func TestProbeServiceSendsMiyunSessionAsCookie(t *testing.T) {
 		t.Fatalf("the session cookie must not be sent as a bearer token: %q", authorization)
 	}
 }
+
+// 上游只认带版本段的路径。地址填成网关根（不带 /v1）时，这里必须像
+// gateway_config.go 那样自己补上，否则一份能正常调用的配置会被报成
+// 「地址填错了」。
+func TestProbeEndpointAddsVersionSegmentWhenBaseHasNone(t *testing.T) {
+	for _, testCase := range []struct{ name, base, want string }{
+		{"网关根", "https://gateway.example.com", "https://gateway.example.com/v1/models"},
+		{"带尾斜杠的网关根", "https://gateway.example.com/", "https://gateway.example.com/v1/models"},
+		{"已带 v1", "https://gateway.example.com/v1", "https://gateway.example.com/v1/models"},
+		{"火山方舟的 api/v3", "https://ark.cn-beijing.volces.com/api/v3", "https://ark.cn-beijing.volces.com/api/v3/models"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := probeEndpoint("model.text", testCase.base); got != testCase.want {
+				t.Fatalf("probeEndpoint(%q) = %q, want %q", testCase.base, got, testCase.want)
+			}
+		})
+	}
+}
