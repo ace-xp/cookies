@@ -917,11 +917,27 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 5: 服务配置的库读写
+### Task 5: 服务配置的库读写（已完成，与原计划有出入）
+
+> **实现时的修正**：原计划让 `serviceIDs(code)` 从目录编码推导出连接与路由的主键。
+> 这条在真实库上是错的——视频配置早就占着 `connection_code = 'ark-seedance'`
+> 和 `(video.generate, cookies.video.standard)` 这个唯一键，线上其余连接又是
+> `scripts/configure-*.ps1` 用自己的主键建的。推导出来的 id 要么在插入时撞
+> `connection_code` 唯一键，要么写出一条平台根本不读的孤儿路由，表现为
+> 「保存成功但什么都没变」。
+>
+> 实际做法：按自然键查（连接查 `connection_code`，路由查 `(capability, model_alias)`
+> 且 `organization_scope = '*'`），查不到才生成 id。
+> 由 `TestSaveServiceConfigurationAdoptsRowsSeededByScripts` 看住。
+>
+> 另外两处：`NewAESGCMCredentialCipher` 收的是 base64 **字符串**不是 `[]byte`；
+> 探针通过 store 上新增的 `ServiceProber` 字段注入，测试不再依赖网络和别人的有效密钥。
 
 **Files:**
-- Modify: `internal/platform/provider/service_configuration.go`（追加 store 方法）
-- Modify: `internal/platform/provider/service_configuration_test.go`（追加集成测试）
+- Create: `internal/platform/provider/service_configuration_store.go`
+- Create: `internal/platform/provider/service_configuration_store_test.go`
+- Modify: `internal/platform/provider/gateway_config.go`（`MySQLGatewayConfigStore` 加 `ServiceProber` 字段）
+- Modify: `internal/platform/provider/gateway_config_write.go`（`nextVideoRevision` 改名 `nextRevision` 共用）
 - Reference: `internal/platform/provider/gateway_config_write.go:258-365`（照抄事务结构与 append-only 语义）
 
 **Interfaces:**
@@ -1262,7 +1278,12 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 6: 各服务的探针
+### Task 6: 各服务的探针（已完成）
+
+> **待 Task 12 验证的一点**：`probePath` 里除秘蕴、火山语音外一律探 `/models`，
+> 这是照 OpenAI 兼容惯例来的，没有对着真实上游核过。MiniMax、LAS 若没有这个路径，
+> 会回 404 → `rejected`「地址填错了」，把一份本来正确的配置挡在保存之外。
+> Task 12 实跑时逐个确认，错的就改 `probePath`——不要去放宽分类器。
 
 **Files:**
 - Create: `internal/platform/provider/service_probe.go`
