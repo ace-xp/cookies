@@ -24,6 +24,7 @@ import (
 	"github.com/shikanon/cookies/internal/platform/project"
 	"github.com/shikanon/cookies/internal/platform/provider"
 	"github.com/shikanon/cookies/internal/platform/remix"
+	"github.com/shikanon/cookies/internal/platform/servicecatalog"
 	"github.com/shikanon/cookies/internal/systems/creative"
 )
 
@@ -50,8 +51,11 @@ type Server struct {
 	providerConfig    ProviderConfigurationReader
 	providerVideo     ProviderVideoConfigurationStore
 	providerVideoEnv  ProviderVideoEnvironment
-	mux               *http.ServeMux
-	newID             func() (string, error)
+
+	serviceConfigurations ServiceConfigurationStore
+
+	mux   *http.ServeMux
+	newID func() (string, error)
 }
 
 // ProviderVideoEnvironment describes the credential the process was started
@@ -92,6 +96,8 @@ type Dependencies struct {
 	// video model card in the Settings page.
 	ProviderVideoConfiguration ProviderVideoConfigurationStore
 	ProviderVideoEnvironment   ProviderVideoEnvironment
+	// ServiceConfigurations backs the external service list in Settings.
+	ServiceConfigurations ServiceConfigurationStore
 	// AuthenticatedDomainMounts allow vertical systems to share the platform
 	// listener and identity context without making this package import them.
 	// Mount handlers remain responsible for project authorization and scopes.
@@ -347,6 +353,15 @@ type ProviderVideoConfigurationStore interface {
 	SaveVideoConfiguration(context.Context, contract.OrganizationID, provider.VideoConfigurationInput) (provider.VideoConfiguration, error)
 }
 
+// ServiceConfigurationStore is the settings page's seam into provider storage.
+// Saves carry the principal who made the change, because the revision the store
+// writes is the only audit record of who last touched a live credential.
+type ServiceConfigurationStore interface {
+	GetServiceConfiguration(context.Context, contract.OrganizationID, string) (provider.ServiceConfiguration, error)
+	SaveServiceConfiguration(context.Context, contract.OrganizationID, string, provider.ServiceConfigurationInput) (provider.ServiceConfiguration, error)
+	VerifyServiceConfiguration(context.Context, contract.OrganizationID, provider.ServiceConfigurationInput) (servicecatalog.Result, error)
+}
+
 // New retains the bootstrap construction path for focused HTTP tests. The
 // application uses NewWithDependencies so readiness and project checks are real.
 func New(resolver identity.Resolver) *Server {
@@ -370,6 +385,7 @@ func NewWithDependencies(dependencies Dependencies) *Server {
 		remixPlans: dependencies.RemixPlans, evals: dependencies.Evals, agentRuns: dependencies.AgentRuns,
 		providerConfig: dependencies.ProviderConfig,
 		providerVideo:  dependencies.ProviderVideoConfiguration, providerVideoEnv: dependencies.ProviderVideoEnvironment,
+		serviceConfigurations: dependencies.ServiceConfigurations,
 	}
 	server.mux = http.NewServeMux()
 	server.mux.HandleFunc("GET /healthz", server.health)
@@ -388,6 +404,9 @@ func NewWithDependencies(dependencies Dependencies) *Server {
 	server.mux.Handle("GET /platform/v1/provider/video-configuration", server.requireAuthentication(http.HandlerFunc(server.readVideoConfiguration)))
 	server.mux.Handle("PUT /platform/v1/provider/video-configuration", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.saveVideoConfiguration))))
 	server.mux.Handle("POST /platform/v1/provider/video-configuration/verification", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.verifyVideoConfiguration))))
+	server.mux.Handle("GET /platform/v1/provider/services", server.requireAuthentication(http.HandlerFunc(server.listServiceConfigurations)))
+	server.mux.Handle("PUT /platform/v1/provider/services/{code}", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.saveServiceConfiguration))))
+	server.mux.Handle("POST /platform/v1/provider/services/{code}/verification", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.verifyServiceConfiguration))))
 	server.mux.Handle("POST /platform/v1/brands", server.requireAuthentication(server.requireScope("project.write", http.HandlerFunc(server.createBrand))))
 	server.mux.Handle("POST /platform/v1/projects", server.requireAuthentication(server.requireScope("project.write", http.HandlerFunc(server.createProject))))
 	server.mux.Handle("GET /platform/v1/projects", server.requireAuthentication(server.requireScope("project.read", http.HandlerFunc(server.listProjects))))

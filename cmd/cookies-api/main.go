@@ -805,6 +805,18 @@ func main() {
 				}
 			}
 		}
+		// The external service list is wired independently of the video adapter:
+		// it manages every editable service, and most deployments never set
+		// VideoAdapter at all.
+		if serviceCipher, cipherErr := provider.NewAESGCMCredentialCipher(cfg.Provider.MasterKey, cfg.Provider.MasterKeyVersion); cipherErr == nil {
+			dependencies.ServiceConfigurations = provider.MySQLGatewayConfigStore{
+				DB: db, Cipher: serviceCipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP,
+			}
+		} else {
+			// Without a master key the page cannot store credentials safely, so
+			// it reports itself unavailable rather than writing them in the clear.
+			log.Printf("external service configuration page disabled: %v", cipherErr)
+		}
 		dependencies.ProviderJobs = providerService
 		productionCenter.Sources = append(productionCenter.Sources, creative.ProviderRunAdapter{Jobs: &providerService})
 		imageRetryAdapter := creativeprovider.ImageSlotProductionRetryAdapter{Creative: creativeService, Attempts: creativeRepository, Provider: &providerService, Projects: projectService}
