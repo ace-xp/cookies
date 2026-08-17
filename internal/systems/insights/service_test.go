@@ -720,25 +720,26 @@ func (r *memoryRepository) PurgeEmptyDrafts(_ context.Context, before time.Time)
 	}
 	return purged, nil
 }
-func (r *memoryRepository) SubmitReport(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, id string, expectedVersion int64, executionID string, digest []ReportFinding, actorID string, at time.Time) (InsightReport, error) {
-	value, err := r.GetReport(context.Background(), organizationID, projectID, id)
+func (r *memoryRepository) SubmitReport(_ context.Context, input SubmitReportInput) (InsightReport, error) {
+	value, err := r.GetReport(context.Background(), input.OrganizationID, input.ProjectID, input.ReportID)
 	if err != nil {
 		return InsightReport{}, err
 	}
 	if value.Status != ReportDraft {
 		return InsightReport{}, ErrInvalidState
 	}
-	if value.Version != expectedVersion {
+	if value.Version != input.ExpectedVersion {
 		return InsightReport{}, ErrVersionConflict
 	}
-	value.ExecutionID = executionID
-	value.Digest = digest
+	value.ExecutionID = input.ExecutionID
+	value.Summary = input.Summary
+	value.Digest = input.Digest
 	value.Status = ReportConfirmed
 	value.Version++
-	value.ConfirmedBy = actorID
-	value.ConfirmedAt = &at
-	value.UpdatedAt = at
-	r.reports[id] = value
+	value.ConfirmedBy = input.ActorID
+	value.ConfirmedAt = &input.At
+	value.UpdatedAt = input.At
+	r.reports[input.ReportID] = value
 	return value, nil
 }
 func (r *memoryRepository) UpdateReportDigest(_ context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, id string, expectedVersion int64, digest []ReportFinding, now time.Time) (InsightReport, error) {

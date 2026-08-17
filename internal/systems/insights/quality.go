@@ -342,7 +342,7 @@ func buildQualityReport(window MetricWindow, sources []DataSource, facts []Metri
 		byFingerprint[item.Fingerprint] = item
 	}
 
-	issues := append(detectFreshness(sources, now), detectMissing(window, sources, facts, batches, now)...)
+	issues := append(detectFreshness(window, sources, now), detectMissing(window, sources, facts, batches, now)...)
 	issues = append(issues, detectAnomaly(sources, facts, now)...)
 	issues = append(issues, detectCaliber(facts, now)...)
 	issues = append(issues, detectReconciliation(facts, now)...)
@@ -422,19 +422,33 @@ func buildQualityReport(window MetricWindow, sources []DataSource, facts []Metri
 func sourceHealthOf(source DataSource, now time.Time) SourceHealth {
 	health := SourceHealth{
 		DataSourceID: source.ID, Platform: source.Platform, Label: sourceLabel(source),
+		Status:        source.Status,
 		QualityStatus: source.QualityStatus, QualityNote: source.QualityNote, DataThrough: source.DataThrough,
 	}
 	if source.DataThrough != nil {
 		health.FreshnessDays = int(now.Sub(*source.DataThrough).Hours() / 24)
 	}
+	// 和 detectFreshness 用同一组条件。写成一个字段而不是让前端自己按天数猜，是因为
+	// 「几天算滞后」是这边的口径：前端复制一份阈值，改了 Go 忘了改那边，底表就会开始
+	// 说一件和队列相反的事。
+	health.FreshnessJudged = source.Status == DataSourceActive &&
+		(source.DataThrough == nil || health.FreshnessDays > freshnessDelayedAfterDays)
 	return health
 }
 
-// detectFreshness：数据够不够新。只看已启用的数据源——停用的源本来就不该有新数据。
-func detectFreshness(sources []DataSource, now time.Time) []QualityIssue {
+// detectFreshness：数据够不够新。
+//
+// 滞后判定只对**已启用**的源做——停用的源本来就不该有新数据，天天报它滞后是噪音。
+// 但「不判滞后」不等于「不用管」：一个在窗口中途被暂停或吊销的源，它那部分投放的
+// 数据只到暂停那天为止，这个窗口的花费和转化因此是不全的，而据此算出来的对比结论
+// 会把「后半段没有数据」读成「后半段表现差」。所以停用的源另走一条检查：只要它的
+// 数据止于窗口内部，就报一条覆盖不全（PRD §10.3 说的「延迟数据不产生强洞察」，
+// 说的正是这种情况）。
+func detectFreshness(window MetricWindow, sources []DataSource, now time.Time) []QualityIssue {
 	var issues []QualityIssue
 	for _, source := range sources {
 		if source.Status != DataSourceActive {
+			issues = append(issues, detectStoppedSourceCoverage(window, source, now)...)
 			continue
 		}
 		label := sourceLabel(source)
@@ -478,6 +492,42 @@ func detectFreshness(sources []DataSource, now time.Time) []QualityIssue {
 		})
 	}
 	return issues
+}
+
+// detectStoppedSourceCoverage：一个停用的源把这个窗口切了一半。
+//
+// 只在数据止于窗口**内部**时报——止于窗口开始之前的，说明这个源在这一轮里压根没投，
+// 它不该出现在这一轮的账上，也就谈不上覆盖不全；止于窗口结束之后的，说明整个窗口都
+// 有数据，暂停发生在窗口之后，不影响这一轮。
+//
+// 严重度是警告不是阻断：数据本身没错，只是只覆盖了一段。是不是接受这个口径要人来判
+// ——把它做成阻断，等于每次停一个旧账号就把整轮结论锁死。
+func detectStoppedSourceCoverage(window MetricWindow, source DataSource, now time.Time) []QualityIssue {
+	if source.Status == DataSourceDraft || source.DataThrough == nil {
+		// 草稿源从来没有产出过数据，谈不上覆盖不全。
+		return nil
+	}
+	through := *source.DataThrough
+	if !through.After(window.Start) || !through.Before(window.End) {
+		return nil
+	}
+	label := sourceLabel(source)
+	missing := int(window.End.Sub(through).Hours() / 24)
+	return []QualityIssue{{
+		Fingerprint: fingerprint(QualityFreshness, "stopped", source.ID),
+		Kind:        QualityFreshness,
+		Severity:    SeverityWarning,
+		Title:       fmt.Sprintf("%s 已%s，这个窗口只覆盖到 %s", label, source.Status.Label(), through.Format("2006-01-02")),
+		Detail: fmt.Sprintf("窗口是 %s 到 %s，这个源的数据只到 %s，后面 %d 天它没有任何数据。",
+			window.Start.Format("2006-01-02"), window.End.Format("2006-01-02"), through.Format("2006-01-02"), missing),
+		Suggestion: "这一轮的花费和转化少了这个源的后半段。要么把窗口收到 " +
+			through.Format("2006-01-02") + " 之前，要么在结论里写明这个源只投了前半段。",
+		ScopeLabel:     label,
+		DataSourceID:   source.ID,
+		Platform:       source.Platform,
+		AffectedDays:   missing,
+		LastObservedAt: now,
+	}}
 }
 
 // detectMissing：该有的数据没有。两个来源——窗口内的日期空洞，和导入时被拒的行。

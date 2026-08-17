@@ -312,3 +312,128 @@ func testJobRecord(now time.Time, id string) JobRecord {
 		Input:                 ImageGenerationInput{Prompt: "test", Width: 512, Height: 512},
 	}
 }
+
+func TestVideoConfigurationRoundTrip(t *testing.T) {
+	dsn := os.Getenv("COOKIES_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("COOKIES_TEST_MYSQL_DSN is not configured")
+	}
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatalf("open MySQL: %v", err)
+	}
+	defer db.Close()
+	cipher, err := NewAESGCMCredentialCipher("Y29va2llcy1sb2NhbC1wcm92aWRlci1rZXktMzJiISE=", "test-v1")
+	if err != nil {
+		t.Fatalf("build cipher: %v", err)
+	}
+	store := MySQLGatewayConfigStore{DB: db, Cipher: cipher, VideoConnectionType: "ark"}
+	clearVideoConfiguration(t, db)
+	// Registered after defer db.Close() so it runs first: cleanup needs the
+	// connection to still be open.
+	defer clearVideoConfiguration(t, db)
+
+	saved, err := store.SaveVideoConfiguration(t.Context(), "org_local", VideoConfigurationInput{
+		BaseURL:      "https://ark.cn-beijing.volces.com/api/v3",
+		Model:        "doubao-seedance-1-0-lite-t2v-250428",
+		APIKey:       "first-secret-key",
+		Verification: VideoProbeResult{Outcome: VideoProbeOK, Message: "连接正常"},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if !saved.Configured || saved.MaskedAPIKey != "****-key" {
+		t.Fatalf("saved = %+v", saved)
+	}
+	if saved.LastVerificationOK == nil || !*saved.LastVerificationOK {
+		t.Fatal("verification result was not persisted")
+	}
+
+	// Changing only the model must keep the stored credential usable.
+	if _, err = store.SaveVideoConfiguration(t.Context(), "org_local", VideoConfigurationInput{
+		BaseURL:      "https://ark.cn-beijing.volces.com/api/v3",
+		Model:        "doubao-seedance-1-0-pro-250528",
+		Verification: VideoProbeResult{Outcome: VideoProbeOK, Message: "连接正常"},
+	}); err != nil {
+		t.Fatalf("save without key: %v", err)
+	}
+	key, err := store.ResolveVideoAPIKey(t.Context(), "org_local")
+	if err != nil || key != "first-secret-key" {
+		t.Fatalf("ResolveVideoAPIKey err = %v", err)
+	}
+
+	// Replacing the key retires the old credential instead of deleting it.
+	if _, err = store.SaveVideoConfiguration(t.Context(), "org_local", VideoConfigurationInput{
+		BaseURL:      "https://ark.cn-beijing.volces.com/api/v3",
+		Model:        "doubao-seedance-1-0-pro-250528",
+		APIKey:       "second-secret-key",
+		Verification: VideoProbeResult{Outcome: VideoProbeOK, Message: "连接正常"},
+	}); err != nil {
+		t.Fatalf("replace key: %v", err)
+	}
+	var retired int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM provider_credentials WHERE connection_id = ? AND status = 'retired'`, VideoConnectionID).Scan(&retired); err != nil {
+		t.Fatalf("count retired: %v", err)
+	}
+	if retired == 0 {
+		t.Fatal("the replaced credential must be retired, not deleted")
+	}
+
+	// A stale expected version must not overwrite a newer configuration.
+	stale := int64(1)
+	if _, err = store.SaveVideoConfiguration(t.Context(), "org_local", VideoConfigurationInput{
+		BaseURL:         "https://ark.cn-beijing.volces.com/api/v3",
+		Model:           "doubao-seedance-1-0-lite-t2v-250428",
+		ExpectedVersion: &stale,
+		Verification:    VideoProbeResult{Outcome: VideoProbeOK, Message: "连接正常"},
+	}); !errors.Is(err, ErrVideoConfigurationConflict) {
+		t.Fatalf("stale write error = %v, want ErrVideoConfigurationConflict", err)
+	}
+
+	// The saved route must be resolvable through the adapter's own path.
+	snapshot, err := store.ResolveVideoRoute(t.Context(), "org_local", VideoModelAlias)
+	if err != nil {
+		t.Fatalf("ResolveVideoRoute: %v", err)
+	}
+	if snapshot.UpstreamModel != "doubao-seedance-1-0-pro-250528" {
+		t.Fatalf("snapshot model = %q", snapshot.UpstreamModel)
+	}
+
+	// A rotated master key must degrade to "please re-enter", not to an error.
+	rotated, err := NewAESGCMCredentialCipher("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", "test-v2")
+	if err != nil {
+		t.Fatalf("build rotated cipher: %v", err)
+	}
+	config, err := (MySQLGatewayConfigStore{DB: db, Cipher: rotated, VideoConnectionType: "ark"}).GetVideoConfiguration(t.Context(), "org_local")
+	if err != nil {
+		t.Fatalf("read with rotated key: %v", err)
+	}
+	if !config.Configured || config.CredentialReadable {
+		t.Fatalf("rotated read = %+v, want configured but unreadable", config)
+	}
+}
+
+func clearVideoConfiguration(t *testing.T, db *sql.DB) {
+	t.Helper()
+	statements := []string{
+		`UPDATE provider_model_routes SET current_revision_id = NULL WHERE id = ?`,
+		`DELETE FROM provider_model_route_revisions WHERE route_id = ?`,
+		`DELETE FROM provider_model_routes WHERE id = ?`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement, VideoRouteID); err != nil {
+			t.Fatalf("clear route: %v", err)
+		}
+	}
+	connectionStatements := []string{
+		`DELETE FROM provider_credentials WHERE connection_id = ?`,
+		`UPDATE provider_connections SET current_revision_id = NULL WHERE id = ?`,
+		`DELETE FROM provider_connection_revisions WHERE connection_id = ?`,
+		`DELETE FROM provider_connections WHERE id = ?`,
+	}
+	for _, statement := range connectionStatements {
+		if _, err := db.Exec(statement, VideoConnectionID); err != nil {
+			t.Fatalf("clear connection: %v", err)
+		}
+	}
+}

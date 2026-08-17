@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CircleAlert, CircleCheck, Database, Layers3, Lightbulb, TrendingUp } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
 import { api, type ApiMetricOverview, type ApiMetricRates, type ApiQualityStatus } from '../../../data/api'
@@ -28,7 +28,7 @@ const qualityLabels: Record<ApiQualityStatus, string> = {
   blocked: '已阻断',
 }
 
-export function OverviewView({ window, onPin, pinned, pinning }: ViewProps) {
+export function OverviewView({ window, onPin, pinned, pinning, onJudgement }: ViewProps) {
   const { currentProject } = useProject()
   const [overview, setOverview] = useState<ApiMetricOverview | null>(null)
   const [selectedId, setSelectedId] = useState('')
@@ -55,6 +55,14 @@ export function OverviewView({ window, onPin, pinned, pinning }: ViewProps) {
     return () => { alive = false }
   }, [currentProject.id, window.start, window.end])
 
+  // 把这一屏自己的档位报给壳，让顶上的徽章说的是总览的话。
+  // 用 ref 存回调：它由壳每次渲染新建，进依赖数组会把这个 effect 变成每帧都跑。
+  const report = useRef(onJudgement)
+  report.current = onJudgement
+  // ApiMetricOverview 本身就 `& Judgement`，整个传上去即可——挑字段重组的话，
+  // 后端哪天给 Judgement 加一个字段，这里会静默漏掉。
+  useEffect(() => { report.current?.(overview) }, [overview])
+
   // 花得多的排前面：先看清钱去哪了，再谈哪一版更好。
   const assets = useMemo(() => [...(overview?.assets ?? [])]
     .sort((left, right) => right.counts.spend_cents - left.counts.spend_cents), [overview])
@@ -78,7 +86,7 @@ export function OverviewView({ window, onPin, pinned, pinning }: ViewProps) {
       ? [overview.comparable_reason || '这些数字口径不一致，不能直接放在一起比。']
       : []),
     ...(overview && overview.unmatched_objects > 0
-      ? [`有 ${overview.unmatched_objects} 个平台对象还没认领，${formatMoney(overview.unmatched_spend_cents)} 花费计入了总盘但算不到任何素材头上。去「分析素材库 · 待匹配」认领。`]
+      ? [`有 ${overview.unmatched_objects} 个平台对象还没认领，${formatMoney(overview.unmatched_spend_cents)} 花费计入了总盘但算不到任何素材头上。去「素材 · 数据接入」认领。`]
       : []),
   ]
 

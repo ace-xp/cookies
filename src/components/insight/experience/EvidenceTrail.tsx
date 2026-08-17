@@ -4,6 +4,7 @@ import { api, type ApiExperience, type ApiExperienceReference } from '../../../d
 import { formatCount, formatDate } from '../analysis/format'
 import { projectPath } from '../../../lib/router'
 import { shortId } from '../../../data/shortId'
+import { ThresholdStamp } from '../shared'
 
 /**
  * 「凭什么」展开层：从一句结论一路走回原始数据。
@@ -63,6 +64,15 @@ export function EvidenceTrail({ experience, citation }: {
       {!window && !basis.sample_size && !basis.asset_count
         ? <p className="panel-empty">这条经验没记数据依据，它的档位没有数据支撑。</p>
         : null}
+      {/* 「这一档是按哪一版标准判的」。只在这一层说一次——卡面上每条都挂一句，
+          真正要读的结论会被淹掉（见 ThresholdStamp 的用法说明）。
+          没有号码时不留白：空着的话，人会默认它和屏幕上其他标了版本的结论
+          是同一套标准算出来的。 */}
+      <p className="evidence-threshold">
+        {experience.threshold_version === undefined || experience.threshold_version === null
+          ? '判定标准：没留下版本号（这一档是人自己填的，或是早期数据），说不清它按哪一版算的。'
+          : <>判定标准：<ThresholdStamp version={experience.threshold_version}/></>}
+      </p>
     </section>
 
     <section>
@@ -96,9 +106,11 @@ export function EvidenceTrail({ experience, citation }: {
         混在依据里的话，最能说明一条结论边界在哪的东西会被当成补充说明扫过去。 */}
     <section className="evidence-counterexamples">
       <h5>什么情况下不成立</h5>
+      {/* 空态原来写「还没人试过推翻它」——那是把「这一格没人填」说成了「试过了、
+          推不翻」，后者是对这条结论的一次背书，而系统并不知道有没有人试过。 */}
       {experience.counterexamples.length
         ? <ul>{experience.counterexamples.map(item => <li key={item}>{item}</li>)}</ul>
-        : <p className="panel-empty">还没人给它找到反例。这不代表没有——只代表还没人试过推翻它。</p>}
+        : <p className="panel-empty">这一格没人填过。空着不代表这条经验没有边界，只代表还没人把边界写下来。</p>}
     </section>
 
     {/* 抄走的时候把边界一起抄走。只复制结论的话，落到别处就是一句没有边界的

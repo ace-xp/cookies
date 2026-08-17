@@ -605,11 +605,16 @@ func (s Service) HandleMiyunMaterialImportJob(ctx context.Context, claim jobrunt
 	}
 	now := s.now()
 	insightAsset := Asset{
-		ID: insightID, OrganizationID: payload.OrganizationID, ProjectID: payload.ProjectID, LineageID: insightID, Revision: 1,
-		Title: material.Title, SourceKind: AssetSourceExternal, SourceRef: miyunTraceableSourceRef(material),
+		// 米云采回来的素材现在就是分析对象——它们进队列、跑特征提取。
+		// 台账那一套是给平台自己产的素材用的，米云不走那条路。
+		Role: AssetRoleAnalysis,
+		ID:   insightID, OrganizationID: payload.OrganizationID, ProjectID: payload.ProjectID, LineageID: insightID, Revision: 1,
+		Title: material.Title, SourceKind: AssetSourceMiyun, SourceRef: miyunTraceableSourceRef(material),
 		SourceJobID:     material.FirstSeenCrawlJobID,
 		PlatformAssetID: string(result.AssetRef.AssetID), PlatformAssetVersion: result.AssetRef.Version,
-		AnalysisStatus: AnalysisAwaitingData, AnalysisStatusReason: "Authorized Miyun import; awaiting analysis.",
+		// 这句直接显示在界面上，所以用中文，并说清下一步该谁做什么：
+		// 采回来的素材已经是分析对象，只差有人认出它是哪类广告。
+		AnalysisStatus: AnalysisAwaitingData, AnalysisStatusReason: "米云采集已入库，等待识别广告类型后即可提取变量。",
 		AnalysisStatusChangedAt: &now, Version: 1, CreatedBy: payload.ActorID, CreatedAt: now, UpdatedAt: now,
 	}
 	material, err = s.MiyunCrawl.CompleteMiyunMaterialImport(ctx, MiyunMaterialImportCompletion{Material: material, ExpectedVersion: material.Version, Result: result, InsightAsset: insightAsset})

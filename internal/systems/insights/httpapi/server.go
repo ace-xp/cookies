@@ -74,9 +74,14 @@ type Application interface {
 
 	// 分析素材库与内容分析（03 §9 AM-001~006）。
 	IndexAsset(context.Context, contract.ActorContext, contract.ProjectID, insights.IndexAssetRequest) (insights.Asset, error)
-	ListAssets(context.Context, contract.ActorContext, contract.ProjectID, insights.AssetFilter) ([]insights.Asset, error)
+	// ListAssetPage 是素材清单唯一的取数口。台账动辄几千条，一次取完的 ListAssets
+	// 只够分析对象那几十条用，不能挂在对外接口上。
+	ListAssetPage(context.Context, contract.ActorContext, contract.ProjectID, insights.AssetFilter) (insights.AssetPage, error)
 	GetAsset(context.Context, contract.ActorContext, contract.ProjectID, string) (insights.Asset, error)
 	ListAssetLineage(context.Context, contract.ActorContext, contract.ProjectID, string) ([]insights.Asset, error)
+	// ReadAssetPoster 返回封面的地址，不返回图片本身。取不到时报 ErrNotFound，
+	// 前端退回类型图标。
+	ReadAssetPoster(context.Context, contract.ActorContext, contract.ProjectID, string) (string, error)
 	IdentifyAssetType(context.Context, contract.ActorContext, contract.ProjectID, string, insights.IdentifyAssetTypeRequest) (insights.Asset, error)
 	RegisterAssetMapping(context.Context, contract.ActorContext, contract.ProjectID, insights.RegisterAssetMappingRequest) (insights.AssetMapping, error)
 	ListAssetMappings(context.Context, contract.ActorContext, contract.ProjectID, insights.AssetMappingFilter) ([]insights.AssetMapping, error)
@@ -89,6 +94,9 @@ type Application interface {
 	ConfirmAssetAnalysis(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
 	RequestAssetReview(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
 	RetireAsset(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
+	// 台账与分析对象之间的两个显式动作：都要有人点，不会自动发生。
+	PromoteAssetToAnalysis(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
+	ReturnAssetToLedger(context.Context, contract.ActorContext, contract.ProjectID, string, insights.AssetTransitionRequest) (insights.Asset, error)
 	GetFeatureMatrix(context.Context, contract.ActorContext, contract.ProjectID, []string) (insights.FeatureMatrix, error)
 
 	// 找相似素材：某个变量在本轮样本不够时，从库里把同样取值的素材拉过来。
@@ -279,7 +287,7 @@ func (s *Server) listReports(writer http.ResponseWriter, request *http.Request) 
 // submitReview 提交复盘。
 //
 // 单独一条路径，不走 reportAction 的 `{id}:submit` 后缀：提交要带请求体
-// （投放执行 + 版本号），和那一串只带版本号的动作不是一回事，挤在同一个
+// （摘要 + 投放执行 + 版本号），和那一串只带版本号的动作不是一回事，挤在同一个
 // switch 里会让「哪些动作要填什么」变成读代码才知道的事。
 func (s *Server) submitReview(writer http.ResponseWriter, request *http.Request) {
 	var body insights.SubmitReviewRequest

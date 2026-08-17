@@ -67,6 +67,37 @@ paths:
                 $ref: '#/components/schemas/InsightReport'
         default:
           $ref: '#/components/responses/Problem'
+  /api/insights/v1/projects/{project_id}/reports/{report_id}/submit:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - $ref: '#/components/parameters/ReportID'
+    post:
+      summary: 提交这一轮复盘——写摘要、挂投放执行、定格系统发现、置为已确认
+      description: |
+        一条 UPDATE 里做四件事：写下这一轮的一句话摘要、记下算哪次投放、把系统发现
+        定格进 `digest`（和人一路记的那几笔合并去重）、状态改成 `confirmed`。
+        拆开做会留下「已确认但没有系统发现」的报告，而它看起来和正常的一模一样。
+
+        系统发现在**提交这一刻**才算，不是草稿一建就补：草稿是活的，一建就补的话，
+        人记第一笔时那批数字到提交时早就不是那个数了，而报告上不会写它是哪天算的。
+
+        和 `:confirm` 的区别就在这四件事——`:confirm` 只改状态。已提交的报告不能再提交。
+      operationId: submitInsightReview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitReview'
+      responses:
+        '200':
+          description: 定格之后的复盘全文
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InsightReport'
+        default:
+          $ref: '#/components/responses/Problem'
   /api/insights/v1/projects/{project_id}/findings:
     parameters:
       - $ref: '#/components/parameters/ProjectID'
@@ -561,6 +592,26 @@ paths:
           in: query
           description: Restrict to one creative's revision chain.
           schema: { type: string }
+        - name: role
+          in: query
+          description: >-
+            Omitting this returns analysis assets only. The ledger holds every
+            asset the platform ever produced and would otherwise swamp the four
+            analysis queues.
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/AssetRole'
+          style: form
+          explode: true
+        - name: cursor
+          in: query
+          description: Opaque `next_cursor` from the previous page.
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Case-sensitive substring match on the title.
+          schema: { type: string, maxLength: 255 }
       responses:
         '200':
           description: Matching assets, newest first.
@@ -574,6 +625,11 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/InsightAsset'
+                  next_cursor:
+                    type: string
+                    description: >-
+                      Absent when this is the last page. Pass it back as `cursor`
+                      to fetch the next one.
         default:
           $ref: '#/components/responses/Problem'
     post:
@@ -633,6 +689,29 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/InsightAsset'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/insights/v1/projects/{project_id}/assets/{asset_id}/poster:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - $ref: '#/components/parameters/AssetID'
+    get:
+      summary: Fetch the asset poster
+      description: >-
+        Redirects to a signed, expiring image URL. Returns 404 whenever there is
+        no poster right now — still being extracted, extraction failed, or the
+        asset has no platform file at all. Clients should fall back to a type
+        icon rather than treating 404 as an error.
+      operationId: getInsightAssetPoster
+      responses:
+        '302':
+          description: Redirect to the poster image.
+          headers:
+            Location:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/Problem'
         default:
           $ref: '#/components/responses/Problem'
   /api/insights/v1/projects/{project_id}/assets/similar:
@@ -967,6 +1046,51 @@ paths:
       responses:
         '200':
           description: Asset moved to 待复审.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InsightAsset'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/insights/v1/projects/{project_id}/assets/{asset_id}:promote:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - $ref: '#/components/parameters/AssetID'
+    post:
+      summary: Pull a ledger asset into analysis
+      description: >-
+        The only way out of the ledger, and it always takes a person. Most
+        ledger assets never go live, so nothing promotes them automatically.
+        Analysis progress is untouched — role and analysis_status are separate
+        dimensions.
+      operationId: promoteInsightAssetToAnalysis
+      requestBody:
+        $ref: '#/components/requestBodies/AssetTransitionWithReason'
+      responses:
+        '200':
+          description: The asset, now an analysis object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InsightAsset'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/insights/v1/projects/{project_id}/assets/{asset_id}:return-to-ledger:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - $ref: '#/components/parameters/AssetID'
+    post:
+      summary: Send a wrongly promoted asset back to the ledger
+      description: >-
+        Only assets that never matched a platform object can go back. A matched
+        asset has spend and attribution behind it; hiding it from the queues
+        would hide data that already exists.
+      operationId: returnInsightAssetToLedger
+      requestBody:
+        $ref: '#/components/requestBodies/AssetTransitionWithReason'
+      responses:
+        '200':
+          description: The asset, back on the books.
           content:
             application/json:
               schema:
@@ -2737,6 +2861,30 @@ components:
         snapshot: {$ref: '#/components/schemas/MiyunMaterialSnapshot'}
         insight_asset: {$ref: '#/components/schemas/InsightAsset'}
         replayed: {type: boolean}
+    SubmitReview:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        summary:
+          type: string
+          maxLength: 200
+          description: >-
+            这一轮的一句话摘要，比如「7 月中旬短视频三版时长对比」。它是复盘列表主列上
+            唯一能把几份复盘区分开的东西；提交之后报告不可改，所以这是全流程唯一能写它的
+            时刻，界面上必须说清这一点。留空是允许的（逼人写一句话换来的多半是「复盘」
+            两个字），留空时沿用报告已有的摘要，不会把已有的抹成空。
+        execution_id:
+          type: string
+          description: >-
+            这份复盘算哪次投放。**可以为空**——「还没跑过投放」的人要复盘的恰恰是那批
+            还没投出去的素材分析，把执行设成必填等于把他们整个挡在提交那一步。
+            空着不是含糊：报告详情会明写「没挂投放执行」。留空同样不会清掉报告原来挂着
+            的那次执行（那是拿「没填」当「要删」）。
+        expected_version:
+          type: integer
+          minimum: 1
+          description: 防并发覆盖。两个人同时开着这份草稿，后提交的会把先提交的删改抹掉，而两边都不会看到提示。
     CreateReport:
       type: object
       additionalProperties: false
@@ -2890,6 +3038,28 @@ components:
           description: Required when card_type is fact or statistic — those two are quotable as evidence.
         content_basis:
           $ref: '#/components/schemas/ContentBasis'
+        source_finding:
+          allOf:
+            - $ref: '#/components/schemas/FindingRef'
+          description: >-
+            这条经验留的是这份报告里的哪一条发现。它是 Experience.threshold_version 唯一的
+            合法来源：发现是系统按当时那一版阈值算出来的，号码是真的；人手敲的一句结论没有任何
+            阈值参与，那种情况下不要传这一格。指的那条发现找不到（被删了、三格对不上）时不报错，
+            按「没挑发现」处理——宁可空着，不猜。另填了一个与该发现不同的 confidence 时，
+            档位听人的，但阈值印同样不盖：拿阈值给一个人工判断背书比不标更糟。
+            指到一条 verdict = unclear（❓算不出来）的发现时整个请求返回 400：那一档连差异
+            存不存在都没判出来，留成经验等于凭空造一个从来没算出来过的结论，而它在经验库里
+            长得和真结论一模一样。先按它去找相似素材把样本做厚，重算成 explained 之后再留。
+    FindingRef:
+      type: object
+      additionalProperties: false
+      description: >-
+        一条发现的身份：哪个维度上的哪个变量、出自哪个对象。三格与 ReportFinding 的
+        dimension / variable / source_ref 一一对应，是前端点亮「记一笔」按钮用的同一把尺。
+      properties:
+        dimension: { type: string, maxLength: 100 }
+        variable: { type: string, maxLength: 200 }
+        source_ref: { type: string, maxLength: 200 }
     DeliveryExecutionSnapshot:
       type: object
       required: [id, change_set_id, plan_id, creative_package_id, mode, evidence_id, evidence_summary]
@@ -3027,14 +3197,16 @@ components:
         conclusion: { type: string }
         card_type:
           $ref: '#/components/schemas/InsightCardType'
-        # 以下四格是内嵌的 Judgement（见 schemas/Judgement），在 JSON 里平铺。
-        # 它们不落库，每次读出来由后端唯一收敛点从 confidence 重算。
+        # 以下几格是内嵌的 Judgement（见 schemas/Judgement），在 JSON 里平铺。
+        # verdict / verdict_label / upgrade 不落库，每次读出来由后端唯一收敛点从
+        # confidence 重算；threshold_version 例外——它是历史事实（当初判这一档时生效的
+        # 那一版号码），重算不出来，所以单独落一列。
         confidence:
           $ref: '#/components/schemas/ConfidenceLevel'
         verdict:
           $ref: '#/components/schemas/Verdict'
         verdict_label: { type: string }
-        threshold_version: { type: integer, format: int64, description: '判出这条结论时生效的阈值版本。0 = 按出厂设定判的；**字段缺失表示不知道**（例如从库里按 confidence 重建出来的判定），此时前端不得显示任何阈值标注。' }
+        threshold_version: { type: integer, format: int64, description: '判出这条结论时生效的阈值版本。只有当这条经验留的是复盘里某一条系统算出来的发现、且人没有另填档位时才有；人手填的档位一律缺失。0 = 按出厂设定判的；**字段缺失表示不知道**，此时前端不得显示任何阈值标注。' }
         upgrade:
           $ref: '#/components/schemas/UpgradePath'
         note: { type: string }
@@ -3218,6 +3390,7 @@ components:
         confidence:
           $ref: '#/components/schemas/ConfidenceLevel'
         confidence_hint: { type: string }
+        threshold_version: { type: integer, format: int64, description: '跟着经验投影过来的阈值版本，口径与 Experience.threshold_version 相同。**字段缺失表示不知道**，此时前端不得显示任何阈值标注——这一页是拿经验去指导下一轮投放的地方，替一条来历不明的结论盖印比不盖更糟。' }
         counterexamples: { type: array, items: { type: string } }
         recommended_action: { type: string }
         status:
@@ -3231,9 +3404,12 @@ components:
         How often one creative feature shows up across confirmed conclusions.
         Deliberately a count, not a ranking — appearing often can just mean it
         was tried often.
-      required: [feature, card_count, channels, best_confidence, conclusions]
+      required: [feature, label, governed, card_count, channels, best_confidence, conclusions, repeated]
       properties:
-        feature: { type: string }
+        feature: { type: string, description: '分桶键。入表的是特征体系里的字段键（hook_type），没入表的是原样文本。不要显示给人看，显示用 label。' }
+        label: { type: string, description: '人话名。入表的取字段中文名（hook_type → 钩子类型），没入表的原样显示。' }
+        governed: { type: boolean, description: '这个名字有没有落在特征体系里（03 §5 末：受控词表由管理员维护，避免同义词碎片化）。false 的不算「反复」——名字没入表，就没人担保同义写法已经合成一个桶。' }
+        repeated: { type: boolean, description: '够不够得上「反复」：governed 且至少被两条结论提到。整屏标题写着「反复有效」，不设门槛的话每条都是「1 条结论提到」。' }
         card_count: { type: integer, minimum: 1 }
         channels: { type: array, items: { type: string } }
         best_confidence:
@@ -3324,8 +3500,21 @@ components:
       enum: [xiaohongshu_note, wechat_article, brand_ad, digital_human_ad, preroll_ad, hit_replica_ad]
     AssetSourceKind:
       type: string
-      description: Where an indexed asset came from (AM-001).
-      enum: [creative, upload, external]
+      description: >-
+        Where an indexed asset came from (AM-001). `external` means reference
+        evidence from outside the platform — competitor material that is never
+        run as an ad. `miyun` assets come from the Miyun pipeline and do go
+        live, so they are attributed like any other creative; the two used to
+        share the `external` label and reading it was a coin toss.
+      enum: [creative, upload, external, miyun]
+    AssetRole:
+      type: string
+      description: >-
+        What an asset is here for, independent of how far its analysis got.
+        `ledger` assets are on the books only: they never enter the analysis
+        queues and carry no features. `analysis` assets are the ones actually
+        going live, so they get matched, extracted and attributed.
+      enum: [ledger, analysis]
     FeatureSource:
       type: string
       description: >-
@@ -3390,11 +3579,13 @@ components:
           $ref: '#/components/schemas/ReviewState'
     InsightAsset:
       type: object
-      required: [id, organization_id, project_id, lineage_id, revision, title, source_kind, analysis_status, version, created_by, created_at, updated_at]
+      required: [id, organization_id, project_id, role, lineage_id, revision, title, source_kind, analysis_status, version, created_by, created_at, updated_at]
       properties:
         id: { type: string }
         organization_id: { type: string }
         project_id: { type: string }
+        role:
+          $ref: '#/components/schemas/AssetRole'
         lineage_id:
           type: string
           description: Stable identity of one creative across its revisions (AM-001).
@@ -3726,6 +3917,12 @@ components:
         title: { type: string, minLength: 1, maxLength: 255 }
         source_kind:
           $ref: '#/components/schemas/AssetSourceKind'
+        role:
+          allOf:
+            - $ref: '#/components/schemas/AssetRole'
+          description: >-
+            Defaults to `analysis` — anything registered by hand is meant to go
+            live. Only the platform's own ledger intake passes `ledger`.
         source_ref: { type: string, maxLength: 512 }
         source_job_id: { type: string }
         lineage_id:
@@ -4163,12 +4360,24 @@ components:
     SourceHealth:
       type: object
       description: 每个参与本窗口的数据源的新鲜度与质量，必须与图表同屏 (doc10 §11)。
-      required: [data_source_id, platform, label, quality_status, freshness_days]
+      required: [data_source_id, platform, label, status, freshness_judged, quality_status, freshness_days]
       properties:
         data_source_id: { type: string }
         platform:
           $ref: '#/components/schemas/Platform'
         label: { type: string }
+        status:
+          allOf:
+            - $ref: '#/components/schemas/DataSourceStatus'
+          description: |
+            生命周期状态（通路开着没有）。和 quality_status（收进来的数对不对）是两件事，
+            两者同名叫「状态」但说的不是一回事，界面上必须分开措辞。
+        freshness_judged:
+          type: boolean
+          description: |
+            这一条有没有真的进新鲜度队列。false 有两种情形：源没启用，或者滞后还在
+            容忍范围内。给出来是为了让界面解释得了「表里写着落后 2 天，队列里却没有问题」
+            ——阈值是服务端的口径，前端不复制一份。
         quality_status:
           $ref: '#/components/schemas/QualityStatus'
         quality_note: { type: string }

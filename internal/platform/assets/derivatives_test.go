@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
+	"github.com/shikanon/cookies/internal/platform/jobruntime"
 )
 
 type derivativeRepoStub struct {
@@ -33,6 +34,26 @@ func (r *derivativeRepoStub) FailDerivativeScheduling(_ context.Context, id, cod
 	r.value.Status, r.value.ErrorCode, r.value.UpdatedAt = DerivativeFailed, code, now
 	r.job.Status, r.job.ErrorCode, r.job.UpdatedAt = ProcessingFailed, code, now
 	return r.value, r.job, nil
+}
+func (r *derivativeRepoStub) GetDerivative(_ context.Context, org contract.OrganizationID, project contract.ProjectID, source contract.AssetVersionRef, profile DerivativeProfile) (AssetDerivative, error) {
+	if r.value.ID == "" || r.value.OrganizationID != org || r.value.ProjectID != project ||
+		r.value.Source != source || r.value.Profile != profile {
+		return AssetDerivative{}, ErrNotFound
+	}
+	return r.value, nil
+}
+func (r *derivativeRepoStub) GetDerivativeByID(_ context.Context, id string) (AssetDerivative, error) {
+	if r.value.ID != id {
+		return AssetDerivative{}, ErrNotFound
+	}
+	return r.value, nil
+}
+func (r *derivativeRepoStub) CompleteDerivative(_ context.Context, id string, output contract.AssetVersionRef, now time.Time) (AssetDerivative, error) {
+	if r.value.ID != id {
+		return AssetDerivative{}, ErrNotFound
+	}
+	r.value.Status, r.value.Output, r.value.ErrorCode, r.value.UpdatedAt = DerivativeReady, &output, "", now
+	return r.value, nil
 }
 
 type derivativeSchedulerStub struct {
@@ -72,5 +93,66 @@ func TestDerivativeSchedulingFailureIsTerminalAndRetryable(t *testing.T) {
 	value, job, err = service.RetryDerivative(context.Background(), "org_1", "project_1", value.ID)
 	if err != nil || value.Status != DerivativeQueued || job.Status != ProcessingQueued || scheduler.calls != 2 {
 		t.Fatalf("retry failed: %#v %#v %v", value, job, err)
+	}
+}
+
+func TestFindDerivativeRequiresConfiguredRepository(t *testing.T) {
+	service := DerivativeService{}
+	_, err := service.FindDerivative(context.Background(), "k_org_1", "k_project_1",
+		contract.AssetVersionRef{AssetID: "asset_1", Version: 1}, DerivativePoster)
+	if err == nil {
+		t.Fatal("没有仓储时应当报错")
+	}
+}
+
+func TestDerivativeSchedulerRequiresStore(t *testing.T) {
+	scheduler := JobRuntimeDerivativeScheduler{}
+	if err := scheduler.ScheduleAssetDerivative(context.Background(), ProcessingJob{ID: "assetjob_1"}); err == nil {
+		t.Fatal("没有 job store 时应当报错")
+	}
+}
+
+func TestDerivativeHandlerRejectsWrongKind(t *testing.T) {
+	handler := DerivativeRuntimeHandler(DerivativeRunner{})
+	_, err := handler(context.Background(), jobruntime.Claim{
+		Job:     contract.Job{Kind: "creative.video.render"},
+		Payload: []byte(`{"derivative_id":"derivative_1"}`),
+	})
+	if err == nil {
+		t.Fatal("别人的任务类型不该被这个 handler 接下来")
+	}
+}
+
+func TestDerivativeHandlerRejectsEmptyPayload(t *testing.T) {
+	handler := DerivativeRuntimeHandler(DerivativeRunner{})
+	_, err := handler(context.Background(), jobruntime.Claim{
+		Job: contract.Job{Kind: DerivativeJobKind}, Payload: []byte(`{}`),
+	})
+	if err == nil {
+		t.Fatal("载荷里没有派生物 ID 时应当报不可重试的错")
+	}
+	var executionErr jobruntime.ExecutionError
+	if !errors.As(err, &executionErr) {
+		t.Fatalf("应当是 ExecutionError，得到 %T", err)
+	}
+	// 载荷坏了重试多少次都还是坏的，重试只是在浪费 worker。
+	if executionErr.JobError.Retryable {
+		t.Fatal("载荷错误不该标成可重试")
+	}
+}
+
+func TestDerivativeRunnerNeedsConfigurationAndID(t *testing.T) {
+	runner := DerivativeRunner{}
+	if err := runner.Run(context.Background(), ""); err == nil {
+		t.Fatal("没有派生物 ID 时应当报错")
+	}
+}
+
+func TestFindDerivativeRejectsUnknownProfile(t *testing.T) {
+	service := DerivativeService{Repository: &derivativeRepoStub{}}
+	_, err := service.FindDerivative(context.Background(), "k_org_1", "k_project_1",
+		contract.AssetVersionRef{AssetID: "asset_1", Version: 1}, DerivativeProfile("thumbnail_v9"))
+	if err == nil {
+		t.Fatal("不认识的派生物规格应当被拒")
 	}
 }

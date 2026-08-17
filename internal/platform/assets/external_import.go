@@ -171,6 +171,16 @@ func (s ExternalImportService) Import(ctx context.Context, requestContext contra
 	ref, err := s.Repository.CompleteExternalImport(ctx, stored.ID, commit, s.now())
 	if err == nil {
 		preserveQuarantine = false
+		// 只有真正新落库的这一条进台账。上面那条按 SHA256 复用已有素材的路不记：
+		// 复用的是同一个文件，账本里它早就有一行了。
+		s.Upload.recordLedger(ctx, LedgerEntry{
+			OrganizationID: stored.OrganizationID, ProjectID: projectID,
+			ActorID: requestContext.Actor.Principal.ID,
+			AssetID: ref.AssetVersion.AssetID, Version: ref.AssetVersion.Version,
+			Kind: commit.Kind, SourceType: commit.SourceType,
+			Title: LedgerTitle("", commit.SourceType, s.now()),
+		})
+		s.Upload.ensurePoster(ctx, stored.OrganizationID, projectID, ref.AssetVersion, commit.Kind)
 		return ref, nil
 	}
 	return s.reconcileUnknown(ctx, stored, err)

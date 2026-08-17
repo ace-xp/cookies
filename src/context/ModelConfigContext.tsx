@@ -1,5 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api } from '../data/api'
+import {
+  api,
+  type ApiVideoModelConfiguration,
+  type ApiVideoModelConfigurationInput,
+  type ApiVideoModelVerification,
+} from '../data/api'
 
 export type ModelProviderId = 'ark'
 export type ModelProviderStatus = '未配置' | '已配置'
@@ -20,8 +25,12 @@ interface ModelConfigValue {
   configuredCount: number
   isLoading: boolean
   refresh: () => Promise<void>
-  saveProvider: (input: { apiKey: string; baseUrl?: string }) => Promise<void>
-  clearProvider: () => Promise<void>
+  /** 视频生成模型的服务端配置，未读到时为 null。 */
+  videoConfig: ApiVideoModelConfiguration | null
+  isVideoLoading: boolean
+  refreshVideoConfig: () => Promise<void>
+  saveVideoConfig: (input: ApiVideoModelConfigurationInput) => Promise<ApiVideoModelConfiguration>
+  verifyVideoConfig: (input: ApiVideoModelConfigurationInput) => Promise<ApiVideoModelVerification>
 }
 
 const ModelConfigContext = createContext<ModelConfigValue | null>(null)
@@ -49,6 +58,8 @@ function summarizeCapabilities(capabilities: Array<{ capability: string; availab
 export function ModelConfigProvider({ children }: { children: ReactNode }) {
   const [providers, setProviders] = useState<ModelProviderConfig[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [videoConfig, setVideoConfig] = useState<ApiVideoModelConfiguration | null>(null)
+  const [isVideoLoading, setIsVideoLoading] = useState(true)
   const refresh = useCallback(async () => {
     setIsLoading(true)
     try {
@@ -70,33 +81,42 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
   }, [])
   useEffect(() => { void refresh() }, [refresh])
 
-  const saveProvider = useCallback(async (input: { apiKey: string; baseUrl?: string }) => {
-    const configuration = await api.updateProviderConfiguration(input)
-    setProviders([{
-      id: 'ark',
-      name: '模型能力网关',
-      description: summarizeCapabilities(configuration.capabilities.capabilities),
-      status: configuration.status === 'configured' ? '已配置' : '未配置',
-      baseUrl: configuration.baseUrl,
-      source: configuration.source,
-      maskedApiKey: configuration.maskedApiKey,
-      lastVerifiedAt: configuration.capabilities.checkedAt,
-    }])
+  const refreshVideoConfig = useCallback(async () => {
+    setIsVideoLoading(true)
+    try {
+      setVideoConfig(await api.getVideoModelConfiguration())
+    } catch {
+      setVideoConfig(null)
+    } finally {
+      setIsVideoLoading(false)
+    }
   }, [])
+  useEffect(() => { void refreshVideoConfig() }, [refreshVideoConfig])
 
-  const clearProvider = useCallback(async () => {
-    await api.deleteProviderConfiguration()
-    await refresh()
+  // 保存成功意味着服务端刚探通过一次，能力清单也随之变化，所以顺带刷一次。
+  const saveVideoConfig = useCallback(async (input: ApiVideoModelConfigurationInput) => {
+    const saved = await api.saveVideoModelConfiguration(input)
+    setVideoConfig(saved)
+    void refresh()
+    return saved
   }, [refresh])
+
+  const verifyVideoConfig = useCallback(
+    (input: ApiVideoModelConfigurationInput) => api.verifyVideoModelConfiguration(input),
+    [],
+  )
 
   const value = useMemo(() => ({
     providers,
     configuredCount: providers.filter(provider => provider.status === '已配置').length,
     isLoading,
     refresh,
-    saveProvider,
-    clearProvider,
-  }), [providers, isLoading, refresh, saveProvider, clearProvider])
+    videoConfig,
+    isVideoLoading,
+    refreshVideoConfig,
+    saveVideoConfig,
+    verifyVideoConfig,
+  }), [providers, isLoading, refresh, videoConfig, isVideoLoading, refreshVideoConfig, saveVideoConfig, verifyVideoConfig])
   return <ModelConfigContext.Provider value={value}>{children}</ModelConfigContext.Provider>
 }
 

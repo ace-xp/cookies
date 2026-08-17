@@ -115,7 +115,7 @@ func (r MySQLRepository) CreateManualMiyunMaterial(ctx context.Context, record M
 		record.Snapshot.MaterialID != record.Material.ID || record.InsightAsset.ID != record.Material.InsightAssetID ||
 		record.Snapshot.OrganizationID != record.Material.OrganizationID || record.Snapshot.ProjectID != record.Material.ProjectID ||
 		record.InsightAsset.OrganizationID != record.Material.OrganizationID || record.InsightAsset.ProjectID != record.Material.ProjectID ||
-		record.InsightAsset.SourceKind != AssetSourceExternal ||
+		record.InsightAsset.SourceKind != AssetSourceMiyun ||
 		record.InsightAsset.PlatformAssetID != string(record.Material.PlatformAssetID) ||
 		record.InsightAsset.PlatformAssetVersion != record.Material.PlatformAssetVersion {
 		return MiyunManualImportResult{}, ErrInvalidRequest
@@ -223,13 +223,13 @@ func encodeMiyunProfileJSON(value MiyunProductProfile) ([]byte, []byte, []byte, 
 
 func insertMiyunInsightAsset(ctx context.Context, execer miyunSQLExecer, value Asset) error {
 	_, err := execer.ExecContext(ctx, `INSERT INTO insight_assets (
-		id, organization_id, project_id, lineage_id, revision, title,
+		id, organization_id, project_id, role, lineage_id, revision, title,
 		source_kind, source_ref, source_job_id, platform_asset_id, platform_asset_version,
 		asset_type, asset_type_source, asset_type_confidence,
 		analysis_status, analysis_status_reason, analysis_status_changed_at,
 		version, created_by, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		value.ID, value.OrganizationID, value.ProjectID, value.LineageID, value.Revision, value.Title,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		value.ID, value.OrganizationID, value.ProjectID, value.Role, value.LineageID, value.Revision, value.Title,
 		value.SourceKind, value.SourceRef, nullableString(value.SourceJobID), nullableString(value.PlatformAssetID),
 		nullableInt64(value.PlatformAssetVersion), value.AssetType, value.AssetTypeSource, value.AssetTypeConfidence,
 		value.AnalysisStatus, value.AnalysisStatusReason, value.AnalysisStatusChangedAt,

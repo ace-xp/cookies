@@ -24,6 +24,8 @@ import (
 	"github.com/shikanon/cookies/internal/integrations/creativeprovider"
 	"github.com/shikanon/cookies/internal/integrations/deliveryinsights"
 	"github.com/shikanon/cookies/internal/integrations/gotenberg"
+	"github.com/shikanon/cookies/internal/integrations/insightsledger"
+	"github.com/shikanon/cookies/internal/integrations/insightsposter"
 	"github.com/shikanon/cookies/internal/integrations/lasdocument"
 	"github.com/shikanon/cookies/internal/integrations/productsource"
 	"github.com/shikanon/cookies/internal/integrations/seedresearch"
@@ -129,7 +131,10 @@ func main() {
 	scanner := buildScanner(cfg)
 	projectService := &project.Service{Store: projectStore, Authorizer: projectStore}
 	assetRepository := assets.MySQLRepository{DB: db}
-	uploadService := &assets.UploadService{Repository: assetRepository, Projects: projectService, Blobs: blobs, Scanner: scanner, QuarantineBucket: cfg.ObjectStorage.QuarantineBucket, AssetsBucket: cfg.ObjectStorage.AssetsBucket, UsePolicy: assets.AssetUsePolicy{Rights: assetRepository}}
+	// 台账的收录钩子。insightsService 要到几百行之后才造得出来，
+	// 而中间有几处按值把 UploadService 拷走；拷的是这个指针，回填也回填这个指针。
+	ledgerRelay := &assets.LedgerRelay{}
+	uploadService := &assets.UploadService{Repository: assetRepository, Projects: projectService, Blobs: blobs, Scanner: scanner, QuarantineBucket: cfg.ObjectStorage.QuarantineBucket, AssetsBucket: cfg.ObjectStorage.AssetsBucket, UsePolicy: assets.AssetUsePolicy{Rights: assetRepository}, Ledger: ledgerRelay}
 	if ffprobePath != "" {
 		uploadService.VideoProbe = assets.FFprobeVideoProbe{Path: ffprobePath, WorkRoot: cfg.Media.VideoWorkRoot}
 		uploadService.AudioProbe = assets.FFprobeAudioProbe{Path: ffprobePath, WorkRoot: cfg.Media.VideoWorkRoot}
@@ -329,6 +334,18 @@ func main() {
 		log.Printf("Creative viral analysis configured: model_alias=%s prompt_version=%s asr=%s", "cookies.text.standard", "viral.analyze.v1", cfg.Provider.VolcengineASR.ResourceID)
 	}
 	runtimeStore := jobruntime.MySQLStore{DB: db}
+	// 派生物（目前只有视频首帧图）。ffmpeg 没配就整条不启用——本地开发机
+	// 没装 ffmpeg 也要能把服务跑起来，清单退回类型图标即可。
+	var derivativeService *assets.DerivativeService
+	if ffmpegPath != "" {
+		derivativeService = &assets.DerivativeService{
+			Repository: assetRepository,
+			Scheduler: assets.JobRuntimeDerivativeScheduler{
+				Store: runtimeStore, NewID: func() (string, error) { return ids.New("assetderivativeexec") },
+			},
+		}
+		uploadService.Derivatives = derivativeService
+	}
 	creativeService.DirectionScheduler = creative.JobRuntimeDirectionGenerationScheduler{Store: runtimeStore}
 	creativeService.AINativeOperationCanceller = creativeAINativeOperationCanceller{store: runtimeStore}
 	var researchRunner knowledge.ExternalResearchRunner
@@ -562,6 +579,14 @@ func main() {
 		MiyunVerifier:       miyunVerifier,
 		MiyunCooldown:       time.Duration(cfg.Miyun.CooldownSeconds) * time.Second,
 	}
+	// 回填台账钩子。必须在 insightsService 构造完之后——
+	// 在这之前，素材库那边每一次入库都从 relay 上读到 nil，什么都不做。
+	ledgerRelay.Recorder = insightsledger.Recorder{Service: insightsService}
+	// 封面取用口。derivativeService 为 nil（没配 ffmpeg）时不接，
+	// ReadAssetPoster 会明说没接通，前端退回类型图标。
+	if derivativeService != nil {
+		insightsService.Posters = insightsposter.Reader{Derivatives: *derivativeService, Uploads: uploadService}
+	}
 	// Text 为 nil 时提取会直接失败，不会退化成模板产出——
 	// 库里一条编造的特征，代价远大于一次失败的提取。
 	if textProvider != nil {
@@ -581,6 +606,16 @@ func main() {
 	if cfg.Miyun.Enabled {
 		runtimeHandlers[insights.MiyunCrawlJobKind] = insightsService.HandleMiyunCrawlJob
 		runtimeHandlers[insights.MiyunMaterialImportJobKind] = insightsService.HandleMiyunMaterialImportJob
+	}
+	// 抽帧 worker。要有系统身份：IngestDerivedImage 认 assets.write，
+	// 而这条路上没有人在点，只有 worker。
+	if derivativeService != nil && actor != nil {
+		runtimeHandlers[assets.DerivativeJobKind] = assets.DerivativeRuntimeHandler(assets.DerivativeRunner{
+			Repository: assetRepository, Assets: assetRepository, Blobs: blobs,
+			Upload: *uploadService,
+			Poster: assets.FFmpegPosterExtractor{Path: ffmpegPath, WorkRoot: cfg.Media.VideoWorkRoot},
+			Actor:  *actor,
+		})
 	}
 	runtimeHandlers[creative.DirectionGenerationJobKind] = creativeService.HandleDirectionGenerationJob
 	creativeService.AINativeScriptScheduler = creative.JobRuntimeAINativeScriptScheduler{
@@ -731,23 +766,42 @@ func main() {
 			}
 			providerService.Routes = provider.MySQLGatewayConfigStore{DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP}
 		}
-		if cfg.Provider.VideoAdapter == "adapter_gateway" {
+		// The stored route is always resolved, so a configuration saved in the
+		// Settings page takes effect without a restart. When the environment also
+		// carries a key, a missing route is not an error: the adapter falls back
+		// to that key, which keeps deployments working that never opened the page.
+		if cfg.Provider.VideoAdapter == "adapter_gateway" || cfg.Provider.VideoAdapter == "ark_video" {
 			cipher, cipherErr := provider.NewAESGCMCredentialCipher(cfg.Provider.MasterKey, cfg.Provider.MasterKeyVersion)
 			if cipherErr != nil {
 				log.Fatalf("configure Provider video credential encryption: %v", cipherErr)
 			}
-			videoRoutes := provider.MySQLGatewayConfigStore{
+			connectionType := "ark"
+			if cfg.Provider.VideoAdapter == "adapter_gateway" {
+				connectionType = "adapter_gateway"
+			}
+			videoConfigStore := provider.MySQLGatewayConfigStore{
 				DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP,
-				VideoConnectionType: "adapter_gateway",
+				VideoConnectionType: connectionType,
 			}
-			resolved, resolveErr := videoRoutes.ResolveVideoRoute(context.Background(), "", "cookies.video.standard")
-			if resolveErr != nil {
-				log.Fatalf("resolve Adapter-only cookies.video.standard route: %v", resolveErr)
+			if cfg.Provider.VideoAdapter == "adapter_gateway" {
+				resolved, resolveErr := videoConfigStore.ResolveVideoRoute(context.Background(), "", "cookies.video.standard")
+				if resolveErr != nil {
+					log.Fatalf("resolve Adapter-only cookies.video.standard route: %v", resolveErr)
+				}
+				if resolved.ConnectionType != "adapter_gateway" {
+					log.Fatalf("cookies.video.standard resolved forbidden video connection type %q", resolved.ConnectionType)
+				}
+				providerService.VideoRoutes = videoConfigStore
+			} else {
+				providerService.VideoRoutes = videoConfigStore
+				providerService.VideoRouteOptional = cfg.Provider.ArkVideoDirect()
+				dependencies.ProviderVideoConfiguration = videoConfigStore
+				dependencies.ProviderVideoEnvironment = httpserver.ProviderVideoEnvironment{
+					Configured: cfg.Provider.ArkVideoDirect(),
+					Model:      cfg.Provider.ArkVideo.Model,
+					BaseURL:    cfg.Provider.ArkVideo.BaseURL,
+				}
 			}
-			if resolved.ConnectionType != "adapter_gateway" {
-				log.Fatalf("cookies.video.standard resolved forbidden video connection type %q", resolved.ConnectionType)
-			}
-			providerService.VideoRoutes = videoRoutes
 		}
 		dependencies.ProviderJobs = providerService
 		productionCenter.Sources = append(productionCenter.Sources, creative.ProviderRunAdapter{Jobs: &providerService})
@@ -871,6 +925,20 @@ func buildVideoAdapter(cfg config.Config, db *sql.DB, handles provider.OutputHan
 		}
 		store := provider.MySQLGatewayConfigStore{DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP, VideoConnectionType: "adapter_gateway"}
 		return provider.NewAdapterGatewayVideoAdapter(store, handles, cfg.Provider.AllowInsecureHTTP)
+	case "ark_video":
+		cipher, err := provider.NewAESGCMCredentialCipher(cfg.Provider.MasterKey, cfg.Provider.MasterKeyVersion)
+		if err != nil {
+			return nil, err
+		}
+		store := provider.MySQLGatewayConfigStore{DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP}
+		// Both credential sources stay live for the process lifetime: a job that
+		// carries a route saved in the Settings page uses it, and one that does
+		// not falls back to the environment key this process started with.
+		return provider.NewArkVideoAdapterWithRoutes(provider.ArkVideoConfig{
+			APIKey:  cfg.Provider.ArkVideo.APIKey,
+			Model:   cfg.Provider.ArkVideo.Model,
+			BaseURL: cfg.Provider.ArkVideo.BaseURL,
+		}, store, handles)
 	default:
 		return nil, fmt.Errorf("unsupported Provider video adapter %q", cfg.Provider.VideoAdapter)
 	}

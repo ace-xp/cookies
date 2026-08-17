@@ -47,6 +47,7 @@ export function ConclusionsView() {
     .filter(Boolean).join(' · '), [filter])
 
   const cards = data?.cards ?? []
+  const repeatedPatterns = (data?.patterns ?? []).filter(pattern => pattern.repeated).length
   // 跨渠道提示只在真横跨了两个以上渠道、而且人没显式打开时出现。抖音有效的开场
   // 未必在视频号有效，两个渠道的结论并排列出来，人会当成一份榜单从上往下照做。
   const mixed = (data?.mixed_channels?.length ?? 0) > 1 && !data?.cross_channel_comparison
@@ -63,8 +64,22 @@ export function ConclusionsView() {
     </div>
 
     <p className="lookup-context">
-      按 {scope || '（没设条件）'} 筛出 {cards.length} 条。
-      {data?.patterns.length ? `另有 ${data.patterns.length} 个反复有效的内容特征，在「历史模式」里。` : ''}
+      {/* 没设条件时不写「按（没设条件）筛出」——那是把一个空占位塞进句子里，
+          读起来像出了 bug。没筛就直说没筛。 */}
+      {scope ? `按 ${scope} 筛出 ${cards.length} 条。` : `没设条件，符合上面这些要求的一共 ${cards.length} 条。`}
+      {/* 只数够得上「反复」的那些。原来数的是全部桶——一个只被提过一次的特征
+          也会被算进「反复有效」，这句话就成了假的。 */}
+      {repeatedPatterns ? `另有 ${repeatedPatterns} 个反复有效的内容特征，在「历史模式」里。`
+        : data?.patterns.length ? `内容特征在「历史模式」里，目前还没有哪个够得上「反复」。` : ''}
+    </p>
+
+    {/* 这一页和「经验 → 查经验」筛的是同一批经验，条件宽松时两边会返回一模一样的
+        几条——不写清楚分工，人只会觉得点了两个地方看到同一页，然后随便挑一个用。
+        差别不在数据在把关：这里敢少给（挡掉没写适用范围的、只留能归因的），
+        因为它是拿来做决定的；那里不敢，因为它是翻账用的。 */}
+    <p className="lookup-context">
+      这一页只给 ✅ 能归因、状态在用、并且写了适用范围的经验，是开工前做决定用的，所以宁可少给。
+      要翻完整目录（含 👁 只是观察的、没写适用范围的），去「经验 → 查经验」。
     </p>
 
     <div className="lookup-filters">

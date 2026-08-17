@@ -111,6 +111,80 @@ func TestQualityFreshnessSeverity(t *testing.T) {
 	}
 }
 
+// 停用的源不判滞后，但**在窗口中途停掉**要报覆盖不全。
+//
+// 盯的是一件很容易被漏掉的事：一个源在窗口第 5 天被暂停，后面 4 天它一条数据都没有，
+// 而整个窗口的花费和转化仍然被当成完整的一轮去比。旧实现对非 active 的源直接 continue，
+// 于是这种情况在界面上一点痕迹都没有——看上去像是那个源后半段表现掉了。
+func TestQualityStoppedSourceMidWindowIsReported(t *testing.T) {
+	t.Parallel()
+
+	target := fingerprint(QualityFreshness, "stopped", "src_1")
+
+	// 窗口是 7-20 ~ 7-29。数据止于 7-24，源已暂停：窗口后 5 天没有它的数据。
+	midway := qualityDay(24)
+	paused := qualitySource("src_1", &midway)
+	paused.Status = DataSourcePaused
+	report := buildQualityReport(qualityWindow(), []DataSource{paused}, nil, nil, nil, qualityNow)
+	issue := findIssue(t, report, target)
+	if issue.Severity != SeverityWarning {
+		t.Fatalf("覆盖不全是警告不是阻断（停一个旧账号不该锁死整轮结论），实际 %s", issue.Severity)
+	}
+	if issue.AffectedDays != 5 {
+		t.Fatalf("少的天数应为 5，实际 %d", issue.AffectedDays)
+	}
+	if !report.StrongConclusionsAllowed {
+		t.Fatal("只有覆盖不全这一条警告时，不该禁止强结论")
+	}
+
+	// 数据一直到窗口结束：暂停发生在这一轮之后，和这一轮无关。
+	full := qualityDay(29)
+	after := qualitySource("src_1", &full)
+	after.Status = DataSourcePaused
+	if hasIssue(buildQualityReport(qualityWindow(), []DataSource{after}, nil, nil, nil, qualityNow), target) {
+		t.Error("数据覆盖了整个窗口，不该报覆盖不全")
+	}
+
+	// 数据止于窗口开始之前：这个源在这一轮压根没投过。
+	before := qualityDay(19)
+	old := qualitySource("src_1", &before)
+	old.Status = DataSourceRevoked
+	if hasIssue(buildQualityReport(qualityWindow(), []DataSource{old}, nil, nil, nil, qualityNow), target) {
+		t.Error("这一轮没投过的源不该报覆盖不全")
+	}
+
+	// 草稿源从来没产出过数据。
+	draft := qualitySource("src_1", &midway)
+	draft.Status = DataSourceDraft
+	if hasIssue(buildQualityReport(qualityWindow(), []DataSource{draft}, nil, nil, nil, qualityNow), target) {
+		t.Error("草稿源不该报覆盖不全")
+	}
+}
+
+// 底表上那个天数得能解释自己算不算问题。前端据此在每一行后面写「为什么不算」，
+// 而不是自己复制一份阈值——复制的那份迟早和这里对不上，底表就会说一件和队列相反的话。
+func TestSourceHealthSaysWhetherFreshnessWasJudged(t *testing.T) {
+	t.Parallel()
+
+	tolerated := qualityDay(27) // 落后 2 天，在容忍范围内
+	if health := sourceHealthOf(qualitySource("src_1", &tolerated), qualityNow); health.FreshnessJudged {
+		t.Error("落后 2 天不进队列，freshness_judged 应为 false")
+	}
+	lagging := qualityDay(26)
+	if health := sourceHealthOf(qualitySource("src_1", &lagging), qualityNow); !health.FreshnessJudged {
+		t.Error("落后 3 天进了队列，freshness_judged 应为 true")
+	}
+	paused := qualitySource("src_1", &lagging)
+	paused.Status = DataSourcePaused
+	health := sourceHealthOf(paused, qualityNow)
+	if health.FreshnessJudged {
+		t.Error("停用的源不判滞后")
+	}
+	if health.Status != DataSourcePaused {
+		t.Errorf("生命周期状态没带上：%q", health.Status)
+	}
+}
+
 func TestQualityBlockingIssueStopsStrongConclusions(t *testing.T) {
 	through := qualityDay(23)
 	report := buildQualityReport(qualityWindow(),

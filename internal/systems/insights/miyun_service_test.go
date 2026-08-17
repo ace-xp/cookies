@@ -160,7 +160,7 @@ func TestMiyunManualImportReferencesExistingMP4AndReplaysIdempotently(t *testing
 	}
 	if first.Material.ID != second.Material.ID || !second.Replayed || first.Material.ImportMethod != MiyunImportManual ||
 		first.Material.FirstSeenCrawlJobID != "" || first.Snapshot.CrawlJobID != "" ||
-		first.Snapshot.CumulativeImpressionsRaw != "1.2万" || first.InsightAsset.SourceKind != AssetSourceExternal {
+		first.Snapshot.CumulativeImpressionsRaw != "1.2万" || first.InsightAsset.SourceKind != AssetSourceMiyun {
 		t.Fatalf("manual replay/result mismatch: first=%#v second=%#v", first, second)
 	}
 	request.Title = "different request"

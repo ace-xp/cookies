@@ -19,6 +19,7 @@ import {
   type ApiInsightAssetType,
 } from '../data/api'
 import { admissibleForAttribution, featureSourceLabel } from '../data/featureSource'
+import { isModelSetupFailure, modelSetupHint, readableError } from '../data/readableError'
 import type { DataState } from '../types'
 import { StateBoundary } from './StateBoundary'
 
@@ -27,7 +28,7 @@ import { StateBoundary } from './StateBoundary'
  *
  * 六类素材各有一套特征体系，不得混用——03 §MVP② 把「不把视频钩子字段套到公众号
  * 文章」列为明文验收。所以这里的每个类型标签只渲染该类型自己的字段，多素材看矩阵、
- * 单素材看逐项拆解（20 §4.1、22 §6.2 要求「不要堆洞察卡」）。
+ * 单素材看逐项拆解（20 §4.1、22 §6.2 要求「不要堆一屏卡片」）。
  */
 type ViewTarget = ApiInsightAssetType | 'single'
 
@@ -70,12 +71,23 @@ const reviewLabels: Record<ApiReviewState, string> = {
   authored: '人工填写',
 }
 
+// awaiting_data 显示成「待认类型」：它等的是类型识别，不是投放数据。
+// 这一页正是判类型的地方，照字面译成「待数据」会把人支去接数据。
 const statusLabels: Record<string, string> = {
-  awaiting_data: '待数据', awaiting_match: '待匹配', analysable: '可分析', analysing: '分析中',
+  awaiting_data: '待认类型', awaiting_match: '待匹配', analysable: '可分析', analysing: '分析中',
   pending_confirmation: '待确认', confirmed: '已确认', needs_review: '待复审', retired: '已失效',
 }
 
-export function ContentAnalysisPage({ state, activeView }: { state: DataState; activeView: string }) {
+export function ContentAnalysisPage({ state, activeView, focusAssetId }: {
+  state: DataState
+  activeView: string
+  /**
+   * 进来就选中这一条。别处（米云素材那一页）把人送过来时带的素材 ID——
+   * 那边的人心里想的是「分析我刚导进来的这一条」，落到这一屏却要自己在一排
+   * 素材里认出它是哪个，这一路就白接了。
+   */
+  focusAssetId?: string
+}) {
   const { currentProject } = useProject()
   const target = viewTargets[activeView] ?? 'single'
   const [schemas, setSchemas] = useState<ApiFeatureSchema[]>([])
@@ -131,8 +143,14 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
 
   useEffect(() => {
     const ids = breakdownAssets.map(asset => asset.id)
-    setSelectedId(current => (ids.includes(current) ? current : ids[0] ?? ''))
-  }, [breakdownAssets.map(asset => asset.id).join('|')])
+    // 人已经选过的那一条优先——列表刷新（提完特征会刷）不该把人挪到别处去。
+    // 其次才是别处指名送过来的那一条，最后退回第一条。
+    setSelectedId(current => {
+      if (ids.includes(current)) return current
+      if (focusAssetId && ids.includes(focusAssetId)) return focusAssetId
+      return ids[0] ?? ''
+    })
+  }, [breakdownAssets.map(asset => asset.id).join('|'), focusAssetId])
 
   const selectedAsset = breakdownAssets.find(asset => asset.id === selectedId)
 
@@ -200,15 +218,19 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
       await loadList()
       await loadFeatures()
       // loadList 会清空提示，所以放在它之后再写，否则这条反馈一闪就没了。
+      //
+      // 回执里报中文名，不报字段键。界面上那一行写的是「主题」，回执却说
+      // 「已填写 theme」——人得先在心里把两个名字对上，才敢确认自己改对了地方。
+      const name = typeSchema?.fields.find(field => field.key === key)?.label ?? key
       setNotice(verdict === 'confirmed'
-        ? `已认可「${key}」，人工结论已单独记一行。`
+        ? `已认可「${name}」，人工结论已单独记一行。`
         : verdict === 'authored'
-          ? `已填写「${key}」。AI 没提过这一项，所以记的是人工原创，不是推翻。`
-          : `已推翻「${key}」并写入人工结论。`)
+          ? `已填写「${name}」。AI 没提过这一项，所以记的是人工原创，不是推翻。`
+          : `已推翻「${name}」并写入人工结论。`)
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : '写入人工结论失败。')
     }
-  }, [currentProject.id, features, selectedAsset, loadList, loadFeatures])
+  }, [currentProject.id, features, selectedAsset, typeSchema, loadList, loadFeatures])
 
   const identifyType = useCallback(async (assetType: ApiInsightAssetType) => {
     if (!selectedAsset) return
@@ -409,7 +431,12 @@ export function ContentAnalysisPage({ state, activeView }: { state: DataState; a
                   提出 {run.feature_count} 项特征
                   {run.dropped_fields?.length ? ` · 有 ${run.dropped_fields.length} 项没采信：${run.dropped_fields.join('；')}` : ''}
                 </small> : null}
-                {run.status === 'failed' ? <small>{readableError(run.error_message) || '没有记下失败原因。'}</small> : null}
+                {/* 「还没配模型」是人自己能解决的，所以要连着说清楚在哪儿配；
+                    别的失败原因不加这一句，免得把「上游超时」也指到设置页去。 */}
+                {run.status === 'failed' ? <small>
+                  {readableError(run.error_message) || '没有记下失败原因。'}
+                  {isModelSetupFailure(run.error_message) ? ` ${modelSetupHint}` : ''}
+                </small> : null}
               </div>)
               : <div className="prelaunch-fact"><ScrollText size={17}/><span><small>还没有跑过提取</small><b>每次提取都会留一条记录：用的哪版 Skill、哪个模型、花了多久、哪几项没采信。失败的也会留，不然成功率永远是 100%。</b></span></div>}
           </div>
@@ -519,15 +546,6 @@ const runStatusLabels: Record<string, string> = { running: '进行中', succeede
 function formatTime(raw: string): string {
   const at = new Date(raw)
   return Number.isNaN(at.getTime()) ? raw : at.toLocaleString('zh-CN', { hour12: false })
-}
-
-/**
- * 库里存的是整条错误链（英文 sentinel + 中文原因），排查时有用，但摆在页面上
- * 只会让人多看一串英文。这里只取那句给人看的中文。
- */
-function readableError(raw = ''): string {
-  const at = raw.search(/[一-龥]/)
-  return at > 0 && /: $/.test(raw.slice(0, at)) ? raw.slice(at) : raw
 }
 
 function formatLatency(ms: number): string {

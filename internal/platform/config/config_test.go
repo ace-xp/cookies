@@ -748,6 +748,79 @@ func TestMiyunConfigurationIsDisabledByDefaultAndStrictWhenEnabled(t *testing.T)
 	}
 }
 
+func TestArkVideoAcceptsDirectEnvironmentCredential(t *testing.T) {
+	t.Parallel()
+	// The Settings page can replace the environment credential at any time, so
+	// ark_video needs a master key to encrypt what it saves even when the
+	// environment already carries a usable key.
+	if _, err := FromLookup(mapLookup(map[string]string{
+		"COOKIES_PROVIDER_VIDEO_ADAPTER":      "ark_video",
+		"COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO": "true",
+		"COOKIES_ARK_VIDEO_API_KEY":           "ark-local-test-key",
+		"COOKIES_ARK_VIDEO_MODEL":             "doubao-seedance-2-0-fast-260128",
+	})); err == nil {
+		t.Fatal("expected ark_video without a master key to be rejected")
+	}
+	configured, err := FromLookup(mapLookup(map[string]string{
+		"COOKIES_PROVIDER_VIDEO_ADAPTER":      "ark_video",
+		"COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO": "true",
+		"COOKIES_PROVIDER_MASTER_KEY":         base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		"COOKIES_ARK_VIDEO_API_KEY":           "ark-local-test-key",
+		"COOKIES_ARK_VIDEO_MODEL":             "doubao-seedance-2-0-fast-260128",
+	}))
+	if err != nil {
+		t.Fatalf("ark_video with a direct environment credential rejected: %v", err)
+	}
+	if !configured.Provider.ArkVideoDirect() {
+		t.Fatalf("expected direct Ark video credential mode: %#v", configured.Provider.ArkVideo)
+	}
+	if configured.Provider.ArkVideo.BaseURL != DefaultArkVideoBaseURL {
+		t.Fatalf("unexpected default Ark video base URL: %q", configured.Provider.ArkVideo.BaseURL)
+	}
+}
+
+func TestArkVideoDirectCredentialRequiresModelAndHTTPSBaseURL(t *testing.T) {
+	t.Parallel()
+	if _, err := FromLookup(mapLookup(map[string]string{
+		"COOKIES_PROVIDER_VIDEO_ADAPTER":      "ark_video",
+		"COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO": "true",
+		"COOKIES_ARK_VIDEO_API_KEY":           "ark-local-test-key",
+	})); err == nil {
+		t.Fatal("expected a direct Ark video credential without a model to be rejected")
+	}
+	if _, err := FromLookup(mapLookup(map[string]string{
+		"COOKIES_PROVIDER_VIDEO_ADAPTER":      "ark_video",
+		"COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO": "true",
+		"COOKIES_ARK_VIDEO_API_KEY":           "ark-local-test-key",
+		"COOKIES_ARK_VIDEO_MODEL":             "doubao-seedance-2-0-fast-260128",
+		"COOKIES_ARK_VIDEO_BASE_URL":          "ark.example.test/api/v3",
+	})); err == nil {
+		t.Fatal("expected a non-absolute Ark video base URL to be rejected")
+	}
+}
+
+func TestArkVideoWithoutDirectCredentialStillRequiresMasterKey(t *testing.T) {
+	t.Parallel()
+	if _, err := FromLookup(mapLookup(map[string]string{
+		"COOKIES_PROVIDER_VIDEO_ADAPTER":      "ark_video",
+		"COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO": "true",
+	})); err == nil {
+		t.Fatal("expected the stored-credential Ark video mode to still require a master key")
+	}
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	configured, err := FromLookup(mapLookup(map[string]string{
+		"COOKIES_PROVIDER_VIDEO_ADAPTER":      "ark_video",
+		"COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO": "true",
+		"COOKIES_PROVIDER_MASTER_KEY":         key,
+	}))
+	if err != nil {
+		t.Fatalf("stored-credential Ark video configuration rejected: %v", err)
+	}
+	if configured.Provider.ArkVideoDirect() {
+		t.Fatal("stored-credential mode must not report a direct Ark video credential")
+	}
+}
+
 func mapLookup(values map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {
 		value, ok := values[key]

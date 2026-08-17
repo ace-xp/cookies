@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FileCode2, History, Lock, RotateCcw } from 'lucide-react'
+import { useAuth } from '../../../context/AuthContext'
 import { useProject } from '../../../context/ProjectContext'
 import {
   api,
@@ -8,6 +9,7 @@ import {
   type ApiResolvedThresholds,
   type ApiThresholdSet,
 } from '../../../data/api'
+import { hasScope, roleSentence } from '../../../data/scopes'
 import { formatDate } from '../analysis/format'
 
 /**
@@ -30,6 +32,10 @@ type Draft = Record<string, string>
 
 export function ThresholdView() {
   const { currentProject } = useProject()
+  // 改阈值走的是「确认」那一档权限（改的是全组织的判定标准，影响面比写一条数据大）。
+  // 在这里先问一次，是为了让没这个权限的人在**填理由之前**就知道自己保存不了。
+  const { session } = useAuth()
+  const canEdit = hasScope(session, 'insights.confirm')
   const [settings, setSettings] = useState<ApiInsightSettings | null>(null)
   const [current, setCurrent] = useState<ApiResolvedThresholds | null>(null)
   const [history, setHistory] = useState<ApiThresholdSet[]>([])
@@ -83,7 +89,7 @@ export function ThresholdView() {
   }, [settings])
   const dirty = Object.keys(draft).some(key => (draft[key] ?? '') !== (baseline[key] ?? ''))
   const malformed = Object.values(draft).some(value => value.trim() !== '' && !isPositiveInteger(value))
-  const canSave = dirty && !malformed && reason.trim() !== '' && !busy
+  const canSave = canEdit && dirty && !malformed && reason.trim() !== '' && !busy
 
   const save = useCallback(async () => {
     if (!settings) return
@@ -132,6 +138,18 @@ export function ThresholdView() {
 
       <section className="settings-group">
         <span className="section-label">存这一版</span>
+        {/* 权限不够就先说，别等人填完理由按下保存才回一句 403。 */}
+        {!canEdit ? <div className="settings-lock">
+          <Lock size={16}/>
+          <span>
+            <b>你改不了这一段</b>
+            {/* 角色读不到时不能凑一个「当前角色」出来——那句话读起来像页面坏了。
+                真正管事的是有哪几档权限，所以角色和权限一起说，由 roleSentence 兜底。 */}
+            改判定阈值要「确认」这一档权限。{roleSentence(session.membership?.role, session.scopes)}。
+            上面的数字仍然能看——看得见的阈值和改得动的阈值是两件事。
+            要改的话，找组织的管理员。
+          </span>
+        </div> : null}
         <div className="threshold-save">
           <label>
             为什么改
@@ -217,7 +235,6 @@ function ThresholdRow({ item, value, onChange }: {
     </p>
     <p className="setting-meta">
       <FileCode2 size={12}/>
-      <code>{item.source}</code>
       <span>依据：{item.basis}</span>
       {editable ? null : <span>这一条不给改：它是保护性上限或统计口径，不是判定标准。</span>}
     </p>
@@ -247,7 +264,10 @@ function describeValues(set: ApiThresholdSet, labels: Record<string, string>): s
   const entries = Object.entries(set.values).filter(([, value]) => typeof value === 'number')
   if (!entries.length) return '这一版把所有格子都交回给出厂设定。'
   const parts = entries.map(([key, value]) => `${labels[key] ?? key} = ${value}`)
-  return `改了 ${entries.length} 格：${parts.join('、')}`
+  // 「改了 N 格」会被读成「这一次动了 N 格」，可这里存的是**整版的快照**：
+  // 只动了一格、其余两格沿用上一版，也照样列三条。版本本来就是一整套阈值，
+  // 说成「这一版偏离出厂设定的格子」才对得上它实际的意思。
+  return `这一版有 ${entries.length} 格不走出厂设定：${parts.join('、')}`
 }
 
 function isPositiveInteger(value: string): boolean {

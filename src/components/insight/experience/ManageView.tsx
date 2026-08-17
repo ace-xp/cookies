@@ -3,15 +3,17 @@ import { Check, PencilLine, RefreshCw } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
 import { api, type ApiExperience, type ApiExperienceStatus, type ReviseExperienceBody } from '../../../data/api'
 import { ExperienceReviseForm } from '../../ExperienceReviseForm'
-import { shortId } from '../../../data/shortId'
-import { ExperienceCard } from './ExperienceCard'
+import { ExperienceCard, missingFieldsOf } from './ExperienceCard'
 
 /**
  * 「管」：谁来给这些结论背书。
  *
  * 低频模式。人进来第一件事是看有没有事要做，所以列表按「要不要人做事」排：
  * 待定的没人认可过，标了复审的有人提出质疑，这两批排前面；其余是存档。
- * 按时间排的话，一条躺了两周的待定经验会被今天新沉淀的一堆挤到看不见。
+ * 按时间排的话，一条躺了两周的待定经验会被今天新收进来的一堆挤到看不见。
+ *
+ * 每张卡上摊开「还缺哪几格」（showGaps）。这一屏的人是唯一能动手补的人，
+ * 缺什么却只在投前那一屏显示的话，看得见的改不了、改得了的看不见。
  */
 export function ManageView() {
   const { currentProject } = useProject()
@@ -44,13 +46,17 @@ export function ManageView() {
     rank(left) - rank(right) || right.updated_at.localeCompare(left.updated_at)), [experiences])
   const pendingCount = experiences.filter(item => item.status === 'pending').length
   const flaggedCount = experiences.filter(item => item.needs_review).length
+  // 「依据不全」和「待定」是两批人做两件事：待定的等人点确认，依据不全的等人回去补格子。
+  // 一条已经在用的经验照样可能五格缺三格，只统计待定的话它永远没人想起来。
+  const gappyCount = experiences.filter(item =>
+    item.status !== 'retired' && missingFieldsOf(item).length).length
 
   const runAction = async (experience: ApiExperience, action: Action) => {
     const reason = (reasons[experience.id] ?? '').trim()
     // 确认不需要理由：它是「我看过了，成立」，动作本身就是理由。
     // 其余三个都会让一条经验对下游失效或降级，得留下一句话说明凭什么。
     if (action !== 'confirm' && !reason) {
-      setNotice(`${shortId(experience.id)}：${actionLabels[action]}要先填理由，它会写进审计记录。`)
+      setNotice(`「${brief(experience)}」：${actionLabels[action]}要先填理由，它会写进审计记录。`)
       return
     }
     setBusyId(experience.id)
@@ -61,7 +67,12 @@ export function ManageView() {
       if (action === 'retire') await api.retireExperience(currentProject.id, experience.id, experience.version, reason)
       setReasons(current => ({ ...current, [experience.id]: '' }))
       await load()
-      setNotice(`${shortId(experience.id)} 已${actionLabels[action]}。`)
+      // 确认一条修订版会连带把它的前身停用。不说这一句，人只看到列表里多了一条
+      // 「停用」，会以为自己误点了停用按钮。
+      setNotice(`「${brief(experience)}」已${actionLabels[action]}。${
+        action === 'confirm' && experience.supersedes_id
+          ? '它替下了原来那一版——那一版已停用，仍然保留可查。'
+          : ''}`)
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : '操作失败，请稍后重试。')
     } finally {
@@ -102,22 +113,36 @@ export function ManageView() {
 
     <p className="manage-context">
       {pendingCount} 条待定、{flaggedCount} 条该看一眼了。
-      {!pendingCount && !flaggedCount ? '现在没有要处理的。' : ''}
+      {!pendingCount && !flaggedCount ? '现在没有要确认的。' : ''}
+      {gappyCount
+        ? `另有 ${gappyCount} 条在用或待定的经验依据不全，卡上写着缺哪几格——补格子不用等确认，随时可以修订。`
+        : ''}
     </p>
     {notice ? <div className="inline-notice" role="status">{notice}</div> : null}
 
     {listState === 'loading' ? <p className="panel-empty">正在读取当前 Project 的经验…</p> : null}
     {listState === 'error' ? <p className="panel-empty">经验读取失败，请重试。</p> : null}
     {listState === 'ready' && !sorted.length
-      ? <p className="panel-empty">这个 Project 还没有经验。经验来自复盘——投完一轮、提交复盘，值得留的会沉淀到这里等人确认。</p>
+      ? <p className="panel-empty">这个 Project 还没有经验。经验只有一个来源：复盘——投完一轮、提交复盘，在复盘里「记一笔」留下的结论会进到这里等人确认。</p>
       : null}
 
     {sorted.map(experience => {
       const actions = actionsFor(experience)
       const busy = busyId === experience.id
+      // 按钮上以前恒写「修订，补齐依据」——依据齐全的卡上也是这句，于是它既不算
+      // 提示也不算说明，只是一行永远为真的字。现在按实际缺不缺分岔。
+      const gaps = missingFieldsOf(experience)
+      // 「有没有一版正在等确认」只能在这里算：修订时后端不回填旧版的
+      // superseded_by_id——新版还没被确认，接替这件事就还没发生，那个字段空着是对的。
+      // 但列表上这条仍然要说清楚，否则两张一字不差的卡里，人分不出哪张是旧的。
+      const pendingRevision = experiences.some(other =>
+        other.supersedes_id === experience.id && other.status === 'pending')
       return <div key={experience.id} className="manage-item">
         <ExperienceCard
           experience={experience}
+          showGaps
+          showLineage
+          pendingRevision={pendingRevision}
           status={<span className={`experience-status status-${experience.status}`}>{statusLabels[experience.status]}</span>}
           actions={revisingId === experience.id ? null : <>
             {/* 理由框只在有动作可做时出现。停用的经验没有动作，摆一个填不出所以然的
@@ -136,7 +161,7 @@ export function ManageView() {
             </button>)}
             {canRevise(experience) ? <button className="secondary-button" disabled={busy}
               onClick={() => { setNotice(''); setRevisingId(experience.id) }}>
-              <PencilLine size={15}/>修订，补齐依据
+              <PencilLine size={15}/>{gaps.length ? `修订，补上缺的 ${gaps.length} 格` : '修订'}
             </button> : null}
             {!actions.length && !canRevise(experience)
               ? <small className="manage-no-action">已停用的经验是逻辑删除，保留可读但不再参与流转。</small>
@@ -155,6 +180,18 @@ export function ManageView() {
       </div>
     })}
   </div>
+}
+
+/**
+ * 回执里用哪句话指认这一条。
+ *
+ * 原来报的是 ID 前八位。那串东西在界面上任何地方都不出现，人拿着它既对不上
+ * 刚点的那张卡，也没法拿去问别人——回执于是等于没有。用结论头一句指认，
+ * 卡面上写的就是它。
+ */
+function brief(experience: ApiExperience): string {
+  const text = experience.conclusion.trim()
+  return text.length > 18 ? `${text.slice(0, 18)}…` : text
 }
 
 type Action = 'confirm' | 'reject' | 'request-review' | 'retire'

@@ -162,6 +162,16 @@ func (w GeneratedIntakeWorker) ProcessOnce(ctx context.Context, workerID string)
 		}
 		return true, err
 	}
+	// ActorID 留空：这条入库是后台 worker 干的，GeneratedIntake 上没有记发起人，
+	// 台账会把它落成 system。编一个人名比留空更坏。
+	w.Upload.recordLedger(ctx, LedgerEntry{
+		OrganizationID: intake.OrganizationID, ProjectID: intake.ProjectID,
+		AssetID: commit.AssetID, Version: commit.Version,
+		Kind: commit.Kind, SourceType: commit.SourceType,
+		Title: LedgerTitle("", commit.SourceType, w.now()),
+	})
+	w.Upload.ensurePoster(ctx, intake.OrganizationID, intake.ProjectID,
+		contract.AssetVersionRef{AssetID: commit.AssetID, Version: commit.Version}, commit.Kind)
 	return true, nil
 }
 

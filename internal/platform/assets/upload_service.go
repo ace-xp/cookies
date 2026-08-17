@@ -12,6 +12,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"net/http"
 	"path"
 	"strings"
@@ -41,6 +42,12 @@ type UploadService struct {
 	VideoProbe       VideoMetadataProbe
 	AudioProbe       AudioMetadataProbe
 	UsePolicy        AssetUseAuthorizer
+	// Ledger 是洞察那边的素材台账。留空就不记，素材库照常工作——
+	// 台账是个旁路账本，不该有能力让上传失败。
+	Ledger LedgerRecorder
+	// Derivatives 是派生物（现在只有视频首帧图）。和 Ledger 一样是旁路：
+	// 留空就不排任务，上传照常成功。
+	Derivatives *DerivativeService
 }
 
 func (s UploadService) Create(ctx context.Context, requestContext contract.RequestContext, projectID contract.ProjectID, key contract.IdempotencyKey, request CreateUploadRequest) (CreateUploadResponse, error) {
@@ -201,6 +208,14 @@ func (s UploadService) Finalize(ctx context.Context, requestContext contract.Req
 		return UploadSession{}, err
 	}
 	_ = s.Blobs.Delete(ctx, session.Quarantine)
+	s.recordLedger(ctx, LedgerEntry{
+		OrganizationID: session.OrganizationID, ProjectID: session.ProjectID,
+		ActorID: session.Principal.ID,
+		AssetID: ref.AssetVersion.AssetID, Version: ref.AssetVersion.Version,
+		Kind: commit.Kind, SourceType: commit.SourceType,
+		Title: LedgerTitle(session.Filename, commit.SourceType, s.now()),
+	})
+	s.ensurePoster(ctx, session.OrganizationID, session.ProjectID, ref.AssetVersion, commit.Kind)
 	session.Status = UploadSucceeded
 	session.ProjectAssetRef = &ref
 	session.UpdatedAt = s.now()
@@ -368,8 +383,19 @@ func (s UploadService) ingestRenderedVideo(ctx context.Context, requestContext c
 		return contract.ProjectAssetRef{}, err
 	}
 	if ref.AssetVersion.AssetID != commit.AssetID || ref.AssetVersion.Version != commit.Version {
+		// 仓库返回的是别的版本，说明这个渲染任务先前已经落过库了。
+		// 这一次不该再记一条台账——同一个素材版本在账本里只该有一行。
 		_ = s.Blobs.Delete(ctx, commit.Location)
+		return ref, nil
 	}
+	s.recordLedger(ctx, LedgerEntry{
+		OrganizationID: requestContext.Actor.OrganizationID, ProjectID: projectID,
+		ActorID: requestContext.Actor.Principal.ID,
+		AssetID: ref.AssetVersion.AssetID, Version: ref.AssetVersion.Version,
+		Kind: commit.Kind, SourceType: commit.SourceType,
+		Title: LedgerTitle("", commit.SourceType, s.now()),
+	})
+	s.ensurePoster(ctx, requestContext.Actor.OrganizationID, projectID, ref.AssetVersion, commit.Kind)
 	return ref, nil
 }
 
@@ -645,8 +671,18 @@ func (s UploadService) IngestRenderedImage(
 		return contract.ProjectAssetRef{}, err
 	}
 	if ref.AssetVersion != outputRef {
+		// 同上：这一版先前已经落过库，台账里已经有它了。
 		_ = s.Blobs.Delete(ctx, commit.Location)
+		return ref, nil
 	}
+	s.recordLedger(ctx, LedgerEntry{
+		OrganizationID: requestContext.Actor.OrganizationID, ProjectID: projectID,
+		ActorID: requestContext.Actor.Principal.ID,
+		AssetID: ref.AssetVersion.AssetID, Version: ref.AssetVersion.Version,
+		Kind: commit.Kind, SourceType: commit.SourceType,
+		Title: LedgerTitle("", commit.SourceType, s.now()),
+	})
+	s.ensurePoster(ctx, requestContext.Actor.OrganizationID, projectID, ref.AssetVersion, commit.Kind)
 	return ref, nil
 }
 
@@ -868,6 +904,37 @@ func (s UploadService) validateDependencies() error {
 		return fmt.Errorf("upload service dependencies are incomplete")
 	}
 	return nil
+}
+
+// recordLedger 把刚落库的素材版本记进洞察的台账。
+//
+// 失败只记日志不回滚：上传已经成功了，用户的文件在库里躺着，为了一条账目把它退掉
+// 是本末倒置。漏掉的那条由 cookies-maintain backfill-ledger 补。
+//
+// 派生物（derived）不收：缩略图、转码档、抽出来的音轨都是同一个素材的不同形态，
+// 收进台账只会让「我有多少素材」这个数字翻好几倍。
+func (s UploadService) recordLedger(ctx context.Context, entry LedgerEntry) {
+	if s.Ledger == nil || entry.SourceType == contract.AssetSourceDerived {
+		return
+	}
+	if err := s.Ledger.Record(ctx, entry); err != nil {
+		log.Printf("记素材台账失败 asset=%s version=%d: %v", entry.AssetID, entry.Version, err)
+	}
+}
+
+// ensurePoster 给刚入库的视频排一个抽帧任务。
+//
+// 只对视频排：图片自己就是自己的缩略图，音频和文档没有画面。
+// 失败只记日志：封面做不出来不影响素材本身，清单退回类型图标就是了。
+func (s UploadService) ensurePoster(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, ref contract.AssetVersionRef, kind contract.AssetKind) {
+	if s.Derivatives == nil || kind != contract.AssetVideo {
+		return
+	}
+	if _, _, _, err := s.Derivatives.EnsureDerivative(ctx, EnsureDerivativeRequest{
+		OrganizationID: organizationID, ProjectID: projectID, AssetRef: ref, Profile: DerivativePoster,
+	}); err != nil {
+		log.Printf("排素材封面任务失败 asset=%s version=%d: %v", ref.AssetID, ref.Version, err)
+	}
 }
 
 func (s UploadService) now() time.Time {

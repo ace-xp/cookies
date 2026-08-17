@@ -207,6 +207,29 @@ type CreateExperienceRequest struct {
 	Applicability     Applicability   `json:"applicability"`
 	DataBasis         DataBasis       `json:"data_basis"`
 	ContentBasis      ContentBasis    `json:"content_basis"`
+
+	// SourceFinding 指认这条经验留的是复盘里哪一条发现。
+	//
+	// 它是「按哪一版阈值判的」这个号码唯一的合法来源：发现是系统算出来的，
+	// 身上带着当时那一版阈值；而人手敲的一句结论没有任何阈值参与，那种情况下这个
+	// 号码必须留空。凭空盖一个印上去，等于替一条来历不明的结论作保。
+	SourceFinding *FindingRef `json:"source_finding,omitempty"`
+}
+
+// FindingRef 是复盘里一条发现的身份：哪个维度上的哪个变量、出自哪个对象。
+// 和 ReportFinding.pinKey() 用同一把尺——前端点亮「记一笔」按钮靠的也是这三格，
+// 两边不同的话，人挑中的那条和系统找到的那条会是两条。
+type FindingRef struct {
+	Dimension string `json:"dimension,omitempty"`
+	Variable  string `json:"variable,omitempty"`
+	SourceRef string `json:"source_ref,omitempty"`
+}
+
+func (r FindingRef) pinKey() string {
+	if r.Dimension == "" && r.Variable == "" && r.SourceRef == "" {
+		return ""
+	}
+	return r.Dimension + "\x00" + r.Variable + "\x00" + r.SourceRef
 }
 
 // withCardDefaults 补上没填的类型和置信。放在这里而不是各调用点，
@@ -502,11 +525,9 @@ type Repository interface {
 	// 「记一笔」不问人要往哪记——问了等于要求人在看数据之前先声明意图。
 	FindDraftByWindow(context.Context, contract.OrganizationID, contract.ProjectID, string, string) (InsightReport, error)
 	ConfirmReport(context.Context, contract.OrganizationID, contract.ProjectID, string, int64, string, time.Time) (InsightReport, error)
-	// SubmitReport 在一条 UPDATE 里补执行 ID、写入定格后的 digest、置为已确认。
-	// 拆成三次调用会留下「已确认但没有系统发现」的报告，而它看起来和正常的一模一样。
-	SubmitReport(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID,
-		reportID string, expectedVersion int64, executionID string, digest []ReportFinding,
-		actorID string, at time.Time) (InsightReport, error)
+	// SubmitReport 在一条 UPDATE 里补执行 ID 和摘要、写入定格后的 digest、置为已确认。
+	// 拆成几次调用会留下「已确认但没有系统发现」的报告，而它看起来和正常的一模一样。
+	SubmitReport(context.Context, SubmitReportInput) (InsightReport, error)
 	UpdateReportDigest(context.Context, contract.OrganizationID, contract.ProjectID, string, int64, []ReportFinding, time.Time) (InsightReport, error)
 	// PurgeEmptyDrafts 删掉 before 之前建的、一条发现都没有的草稿。
 	// 它们是「记一笔」建了但人什么都没记的残留，不删会一直占着
@@ -565,6 +586,9 @@ type Service struct {
 	// Media 是客观可测层的唯一入口：从素材库读文件已经探测出来的元数据。
 	// 为 nil 时 DeriveFeatures 直接失败，不会退化成「按类型猜一个默认时长」。
 	Media MediaReader
+	// Posters 是素材封面的入口。为 nil 时清单退回类型图标，不影响其他功能——
+	// 缩略图是锦上添花，不该让一整页打不开。
+	Posters PosterReader
 	// Understanding 是视频语义特征的入口：把视频交给多模态，拿回带帧号的证据。
 	// 为 nil 时视频类退回老路（人填画面描述），不是报错——没接多模态的环境里，
 	// 提取仍然应该做得成，只是做得糙。
@@ -903,12 +927,29 @@ func (s Service) SubmitReview(ctx context.Context, actor contract.ActorContext,
 		return InsightReport{}, err
 	}
 
+	// 摘要留空就沿用报告原来那句：模拟投放建的报告自带一句系统摘要，
+	// 拿一个空串盖上去，等于因为人没写而抹掉了本来有的信息。
+	summary := strings.TrimSpace(request.Summary)
+	if summary == "" {
+		summary = report.Summary
+	}
+	// 执行同理。草稿一般是记一笔建的（本来就没有执行），但直接建出来的报告
+	// 建的时候就挂了一次执行；提交时没选执行就把它清掉，是拿「没填」当「要删」。
+	executionID := strings.TrimSpace(request.ExecutionID)
+	if executionID == "" {
+		executionID = report.ExecutionID
+	}
+
 	window, ok := reportMetricWindow(report)
 	if !ok {
 		// 窗口解析不出来就没法算系统发现。宁可只带人记的那几笔提交，
 		// 也不能拿一个猜出来的窗口去算——算出来的数字看起来一样可信。
-		return s.Repository.SubmitReport(ctx, actor.OrganizationID, projectID, reportID,
-			request.ExpectedVersion, request.ExecutionID, report.Digest, actor.Principal.ID, s.now())
+		return s.Repository.SubmitReport(ctx, SubmitReportInput{
+			OrganizationID: actor.OrganizationID, ProjectID: projectID, ReportID: reportID,
+			ExpectedVersion: request.ExpectedVersion, ExecutionID: executionID,
+			Summary: summary, Digest: report.Digest,
+			ActorID: actor.Principal.ID, At: s.now(),
+		})
 	}
 
 	analysis, err := s.GetPerformanceAnalysis(ctx, actor, projectID, window)
@@ -933,8 +974,12 @@ func (s Service) SubmitReview(ctx context.Context, actor contract.ActorContext,
 	}
 	digest := mergeFindings(pinned, buildReportDigest(analysis, experiments, experiences))
 
-	return s.Repository.SubmitReport(ctx, actor.OrganizationID, projectID, reportID,
-		request.ExpectedVersion, request.ExecutionID, digest, actor.Principal.ID, s.now())
+	return s.Repository.SubmitReport(ctx, SubmitReportInput{
+		OrganizationID: actor.OrganizationID, ProjectID: projectID, ReportID: reportID,
+		ExpectedVersion: request.ExpectedVersion, ExecutionID: executionID,
+		Summary: summary, Digest: digest,
+		ActorID: actor.Principal.ID, At: s.now(),
+	})
 }
 
 // reportMetricWindow 把报告定格的日期串解析回窗口。
@@ -963,6 +1008,16 @@ func (s Service) CreateExperience(ctx context.Context, actor contract.ActorConte
 	if report.Status != ReportConfirmed {
 		return Experience{}, ErrInvalidState
 	}
+	// ❓算不出来的那条留不成经验。
+	//
+	// 记一笔可以钉它——「这一轮连这个都判断不了」本身是这一轮的事实，而且它自带
+	// 下一步（找相似素材把样本做厚），复盘里留着它是对的。但经验是一句主张，
+	// 会被下一轮当依据引用；把一条「判断不了」变成一条经验，等于凭空造出一个
+	// 从来没算出来过的结论，而它在经验库里长得和真结论一模一样。
+	if source, ok := findSourceFinding(report, request.SourceFinding); ok && source.Verdict == VerdictUnclear {
+		return Experience{}, fmt.Errorf(
+			"%w: 这条发现当时算不出来（样本不够，连差异存不存在都判断不了），留不成经验。先按它去找相似素材把样本做厚，重算成能归因之后再留", ErrInvalidRequest)
+	}
 	id, err := s.idGenerator()("experience")
 	if err != nil {
 		return Experience{}, err
@@ -989,7 +1044,7 @@ func (s Service) CreateExperience(ctx context.Context, actor contract.ActorConte
 		SourceMetricSnapshotID: report.MetricSnapshotID,
 		Conclusion:             strings.TrimSpace(request.Conclusion), Conditions: append([]string{}, request.Conditions...),
 		Counterexamples: append([]string{}, request.Counterexamples...), Status: ExperiencePending,
-		CardType: card.CardType, Judgement: judge(card.Confidence, ""),
+		CardType: card.CardType, Judgement: inheritJudgement(report, request, card.Confidence),
 		RecommendedAction: strings.TrimSpace(card.RecommendedAction),
 		Applicability:     card.Applicability, DataBasis: basis, ContentBasis: card.ContentBasis,
 		StatusChangedBy: actor.Principal.ID, StatusChangedAt: &now,
@@ -1000,6 +1055,62 @@ func (s Service) CreateExperience(ctx context.Context, actor contract.ActorConte
 		FromStatus: "", ToStatus: ExperiencePending, Reason: "从已确认复盘报告沉淀，等待人工确认。",
 		ActorID: actor.Principal.ID, CreatedAt: now,
 	})
+}
+
+// revisedJudgement 是修订版本的档位。
+//
+// 修订改的是结论的说法，数据来源照抄前一版（报告、执行、快照、窗口都是），
+// 阈值印同理：档位没动就跟着搬过来，动了就摘掉——新档位是人自己判的，不是那一版
+// 阈值算出来的，留着旧号码等于让人以为系统重新按第 N 版算过一遍。
+func revisedJudgement(source Experience, confidence ConfidenceLevel) Judgement {
+	value := judge(confidence, "")
+	if confidence == source.Confidence {
+		value.ThresholdVersion = source.ThresholdVersion
+	}
+	return value
+}
+
+// inheritJudgement 决定这条新经验的档位从哪来，以及能不能盖阈值印。
+//
+// 三种情形，只有第一种能盖印：
+//  1. 挑了复盘里的一条发现，且没有另填档位——整条判定（档位、理由、阈值版本）
+//     原样继承。那条发现是系统按当时那一版阈值算出来的，这个号码是真的。
+//  2. 挑了发现，但人另填了一个不同的档位——听人的，但不盖印。人推翻了系统的判定，
+//     再盖上「按第 N 版阈值判定」，是拿阈值给一个人工判断背书。
+//  3. 没挑发现（自己敲一句结论）——不盖印。这条结论里根本没有阈值参与过。
+//
+// 找不到那条发现（被删了、维度对不上）也走第三种：宁可空着，不猜。
+func inheritJudgement(report InsightReport, request CreateExperienceRequest, confidence ConfidenceLevel) Judgement {
+	source, ok := findSourceFinding(report, request.SourceFinding)
+	if !ok {
+		return judge(confidence, "")
+	}
+	if strings.TrimSpace(string(request.Confidence)) == "" || request.Confidence == source.Confidence {
+		return source.Judgement
+	}
+	return judge(confidence, "")
+}
+
+// findSourceFinding 按人挑中的那三格去报告里找那条发现。
+//
+// 被人删掉的不算：删是一个明确的决定（这条不要），还能从它身上继承判定的话，
+// 等于把删除当成没发生。找不到就是找不到——不猜一条最像的。
+func findSourceFinding(report InsightReport, ref *FindingRef) (ReportFinding, bool) {
+	if ref == nil {
+		return ReportFinding{}, false
+	}
+	key := ref.pinKey()
+	if key == "" {
+		return ReportFinding{}, false
+	}
+	for _, finding := range report.Digest {
+		if finding.Dropped || finding.pinKey() != key {
+			continue
+		}
+		finding.normalize()
+		return finding, true
+	}
+	return ReportFinding{}, false
 }
 
 // reportWindow 把报告定格的窗口解析回时间。报告里存的是日期串，早期报告根本没有
@@ -1166,7 +1277,7 @@ func (s Service) ReviseExperience(ctx context.Context, actor contract.ActorConte
 		SourceMetricSnapshotID: source.SourceMetricSnapshotID,
 		Conclusion:             strings.TrimSpace(request.Conclusion), Conditions: append([]string{}, request.Conditions...),
 		Counterexamples: append([]string{}, request.Counterexamples...), Status: ExperiencePending,
-		CardType: card.CardType, Judgement: judge(card.Confidence, ""),
+		CardType: card.CardType, Judgement: revisedJudgement(source, card.Confidence),
 		RecommendedAction: strings.TrimSpace(card.RecommendedAction),
 		Applicability:     card.Applicability, DataBasis: basis, ContentBasis: card.ContentBasis,
 		StatusReason: reason, StatusChangedBy: actor.Principal.ID, StatusChangedAt: &now,

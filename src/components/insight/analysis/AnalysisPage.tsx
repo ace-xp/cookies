@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CircleAlert, FlaskConical, Layers3, RefreshCw, Ruler } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
 import { api, type ApiPerformanceAnalysis } from '../../../data/api'
-import { verdictLabel } from '../../../data/verdict'
+import { verdictLabel, type Judgement } from '../../../data/verdict'
 import type { DataState } from '../../../types'
 import { StateBoundary } from '../../StateBoundary'
 import { NotEnoughSample, ThresholdStamp, VerdictBadge } from '../shared'
@@ -22,7 +22,7 @@ import { usePinFinding, type PinTarget } from './usePinFinding'
  * 和「疲劳里算的」会来自两份数据，对不上的时候没人解释得清哪个对。
  *
  * 这一页对结论**只读**。唯一的写是「记一笔」——把这一条钉进本轮复盘草稿；
- * 要不要沉淀成经验，是复盘页上另一次明确的决定。分析页是自由探索的地方，
+ * 要不要留成经验，是复盘页上另一次明确的决定。分析页是自由探索的地方，
  * 一个误点不该把一条没想清楚的东西直接变成下一轮的依据。
  *
  * 全页只有一条纪律：**能不能归因，和差异有多大，是两件事**。所以每条结论旁边
@@ -39,6 +39,14 @@ export interface ViewProps {
   onPin: (target: PinTarget) => void
   pinned: ReadonlySet<string>
   pinning: boolean
+  /**
+   * 总览专用：把它自己那一次取数算出来的档位报上来，让壳上的屏级徽章显示它。
+   *
+   * 总览和另外五屏不是一回事——它读的是指标总览接口，档位是那个接口给的，
+   * performance-analysis 里没有对应的一份。不报上来的话，壳只能拿跨视图那一档
+   * 顶上，于是「总览每条都是能归因」和「徽章说算不出来」同屏出现。
+   */
+  onJudgement?: (judgement: Judgement | null) => void
 }
 
 const rangeOptions = [
@@ -76,18 +84,22 @@ const headings: Record<AnalysisView, { label: string; title: string; lead: strin
   drivers: {
     label: 'DRIVER',
     title: '哪些内容特征和表现一起变化',
-    lead: '一起变化不等于起了作用。组内还有别的特征同向变化时，这里会直接把它标成「分不开」，不给强结论。',
+    lead: '一起变化不等于起了作用。组内还有别的特征同向变化时，这里会直接把它标成「分不开」，不给能归因。',
   },
 }
 
 // 空态的文案说清「缺什么」和「怎么补」。只写「暂无数据」的话，人无从下手。
+//
+// 异常那条不写「没有发现异常」：这一屏空着有两种相反的含义（查过了很干净 /
+// 天数不够根本没查），哪一种只有后端知道。后端会在 view_judgements.anomalies
+// 里给出带档位的那句话，空态优先用它，这里的文案只是取不到时的兜底。
 const emptyHints: Record<AnalysisView, string> = {
   overview: '这个窗口里没有任何指标数据。先在「数据接入」接一个数据源、配好字段映射并导入报表，这一页才有东西可看。',
   comparisons: '还没有可配对的素材。需要同一类型下至少两个素材、且都在这个窗口里有投放数据。',
   trends: '这个窗口里没有素材产生过投放数据。',
   fatigue: '这个窗口里没有素材跑够两段可比较的时间。',
-  anomalies: '这个窗口里没有发现偏离常态的日子。窗口内至少要有 5 天数据才做这项判断。',
-  drivers: '还没有素材记录内容特征，或同一取值下的素材不足 2 个。去「分析素材库 · 特征库」补齐特征后再来看。',
+  anomalies: '这个窗口里没有列出偏离常态的日子。',
+  drivers: '还没有素材记录内容特征，或同一取值下的素材不足 2 个。去「素材 · 变量」补齐特征后再来看。',
 }
 
 export function AnalysisPage({ state, view, onOpenExperiments }: {
@@ -129,6 +141,16 @@ export function AnalysisPage({ state, view, onOpenExperiments }: {
 
   const heading = headings[view]
 
+  // 总览自己那一屏的档位，由 OverviewView 报上来。切走视图时清掉：留着的话，
+  // 从总览切到趋势的那一瞬间，徽章会短暂显示上一屏的档位。
+  const [overviewJudgement, setOverviewJudgement] = useState<Judgement | null>(null)
+  useEffect(() => { setOverviewJudgement(null) }, [view, window.start, window.end])
+
+  // 屏级徽章说的必须是**当前这一屏**。跨视图那一档挪到右栏，标明它是跨视图的。
+  const screenJudgement = view === 'overview'
+    ? overviewJudgement
+    : analysis?.view_judgements?.[view] ?? analysis?.judgement ?? null
+
   // 会影响下面每一条结论怎么读的东西，一律放在结论前面。
   const troubles = useMemo(() => [
     ...(analysis?.notes ?? []),
@@ -149,8 +171,10 @@ export function AnalysisPage({ state, view, onOpenExperiments }: {
             <p>{heading.lead}</p>
           </div>
           <div className="core-flow-actions">
-            {/* 屏级档位挨着窗口放：先知道这一屏能信到什么程度，再看下面的数字。 */}
-            {analysis ? <VerdictBadge judgement={analysis.judgement}/> : null}
+            {/* 屏级档位挨着窗口放：先知道这一屏能信到什么程度，再看下面的数字。
+                取的是**这一屏自己**的档位——取跨视图那一档的话，会出现「正文每条
+                都是 ✅」而徽章写 ❓ 的同屏打架。 */}
+            {screenJudgement ? <VerdictBadge judgement={screenJudgement}/> : null}
             {/* 每屏只标一处。判定阈值是可调的，不标的话，同一屏在两次调整之间
                 看起来完全一样，实际是按两套标准算的。 */}
             {analysis ? <ThresholdStamp version={analysis.judgement.threshold_version}/> : null}
@@ -179,16 +203,23 @@ export function AnalysisPage({ state, view, onOpenExperiments }: {
         {listState === 'loading' ? <div className="panel-empty">正在取数…</div>
           : listState === 'error' ? <div className="panel-empty">读取失败，请重试。</div>
           : !analysis ? <div className="panel-empty">{emptyHints[view]}</div>
-          /* 空列表不是「暂无数据」，是「这一屏现在算不出来」——档位照样要标出来，
-             理由用这个视图专属的那句：整屏的 note 说的是有结论的那几条为什么弱，
-             对一个一条都没有的视图答非所问。档位也不能照抄整屏的：整屏取的是六个
-             视图里最弱的一档，别的视图有结论时它可能是「只是观察」，安到一条都
-             没有的这一屏上就成了「❓ 只是观察」——图标和字自己打架。
+          /* 空列表不是「暂无数据」，档位照样要标出来，而且要标这一屏自己的那一档
+             ——整屏取的是六个视图里最弱的一档，别的视图有结论时它可能是「只是观察」，
+             安到一条都没有的这一屏上就成了「❓ 只是观察」，图标和字自己打架。
+
+             档位和理由都取后端 view_judgements 里这一屏那一份，前端不再自己判成
+             「算不出来」：异常屏空着的常见含义是**查过了，很干净**，那是一条站得住
+             的结论；前端一律判 unclear 的话，一屏干净数据会被说成没查成。
              总览除外：它自己还要取一次指标总览，空不空由它自己判断。 */
-          : rows === 0 && view !== 'overview' ? <NotEnoughSample judgement={{
-            ...analysis.judgement, verdict: 'unclear', verdict_label: verdictLabel.unclear, note: emptyHints[view],
-          }}/>
-          : renderView(view, { analysis, projectId: currentProject.id, window, onPin: pin, pinned, pinning })}
+          : rows === 0 && view !== 'overview' ? <NotEnoughSample judgement={
+            analysis.view_judgements?.[view] ?? {
+              ...analysis.judgement, verdict: 'unclear', verdict_label: verdictLabel.unclear, note: emptyHints[view],
+            }
+          }/>
+          : renderView(view, {
+            analysis, projectId: currentProject.id, window, onPin: pin, pinned, pinning,
+            onJudgement: setOverviewJudgement,
+          })}
       </section>
 
       <aside className="prelaunch-detail">
@@ -207,10 +238,16 @@ export function AnalysisPage({ state, view, onOpenExperiments }: {
           <div className="prelaunch-fact"><Layers3 size={17}/><span><small>覆盖情况</small><b>
             窗口内有 {analysis.assets_in_window} 个素材产生了数据，其中 {analysis.assets_with_features} 个记录了内容特征。
           </b></span></div>
+          {/* 跨视图那一档挪到这里，并且写明它是跨视图的。它有用——别的屏上有算不
+              出来的结论，是「这次分析整体别急着下结论」的信号；但它不能挂在屏级
+              徽章的位置上替当前这一屏说话。 */}
+          <div className="prelaunch-fact"><Layers3 size={17}/><span><small>另外五屏合起来</small><b>
+            <VerdictBadge judgement={analysis.judgement}/> {analysis.judgement.note}
+          </b></span></div>
           {analysis.assets_with_features < analysis.assets_in_window ? <div className="prelaunch-boundary">
             <CircleAlert size={16}/><span><small>特征没覆盖全</small>
               还有 {analysis.assets_in_window - analysis.assets_with_features} 个素材没有内容特征。它们不会出现在素材对比和驱动因素里
-              ——不是它们表现不好，是没法判断它们和别人差在哪。去「分析素材库 · 待提取」补。
+              ——不是它们表现不好，是没法判断它们和别人差在哪。去「素材 · 变量」补。
             </span></div> : null}
         </> : null}
 
@@ -221,7 +258,7 @@ export function AnalysisPage({ state, view, onOpenExperiments }: {
 
         <div className="prelaunch-boundary"><CircleAlert size={16}/><span><small>看到值得留的怎么办</small>
           按那一行的「记一笔」。它只把这条钉进本轮复盘草稿，不改任何结论，也不算数你已经认可了它
-          ——要不要沉淀成下一轮能用的经验，是复盘页上另一次明确的决定。
+          ——要不要留成下一轮能用的经验，是复盘页上另一次明确的决定。
         </span></div>
 
         {notice ? <div className="inline-notice" role="status">{notice}</div> : null}

@@ -23,8 +23,13 @@ const options = [
   { value: '爆款复刻', label: '爆款复刻' },
 ]
 
-export function FeatureView({ state }: { state: DataState }) {
+export function FeatureView({ state, focusAssetId }: {
+  state: DataState
+  /** 路由上带过来的素材 ID，进来直接选中它。米云素材页把人送过来时会带。 */
+  focusAssetId?: string
+}) {
   // 类型选择留在这一层，理由同 IntakeView：抛给导航会把二级视图名冲掉。
+  // 指名送过来一条素材时停在「单素材拆解」——它本来就是第一项，这里不必特判。
   const [active, setActive] = useState(options[0].value)
 
   return <div className="assets-delegate">
@@ -38,6 +43,6 @@ export function FeatureView({ state }: { state: DataState }) {
         归因只认前两种，模型猜的只能参考。
       </span>
     </div>
-    <ContentAnalysisPage state={state} activeView={active}/>
+    <ContentAnalysisPage state={state} activeView={active} focusAssetId={focusAssetId}/>
   </div>
 }

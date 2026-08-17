@@ -1470,11 +1470,12 @@ const analysisViews: Record<string, AnalysisView> = {
   驱动因素: 'drivers',
 }
 
-// 素材入口的五个视图。数据接入和变量这两段是整页委托过去的，它们自己还有分段
+// 素材入口的六个视图。数据接入和变量这两段是整页委托过去的，它们自己还有分段
 // （数据源/导入任务/…、按素材类型），那些分段名不在这张表里——落到默认值即可，
 // 委托过去的页面认得它们。
 const assetsViews: Record<string, AssetsView> = {
   总览: 'overview',
+  台账: 'ledger',
   数据接入: 'intake',
   变量: 'features',
   找相似: 'similar',
@@ -1485,7 +1486,7 @@ const assetsViews: Record<string, AssetsView> = {
 const reviewViews: Record<string, ReviewView> = {
   本轮: 'current',
   全部复盘: 'all',
-  已沉淀经验: 'harvest',
+  留下的经验: 'harvest',
 }
 
 // 经验入口的两个模式。认不出来的落到「查」：那是高频的一屏，
@@ -1609,12 +1610,14 @@ export function ModulePage({
     : system.key === 'insight' && item.id === 'assets' ? <AssetsPage
       state={dataState}
       view={assetsViews[activeView] ?? 'overview'}
+      objectId={objectId}
       onOpenView={setActiveView}
       onOpenLibrary={() => onOpenProject(currentProject.id, 'creative', 'production', undefined, '源素材')}
       onOpenAnalysis={() => onOpenProject(currentProject.id, 'insight', 'analysis')}/>
     : system.key === 'insight' && item.id === 'experience' ? <ExperiencePage state={dataState} view={experienceViews[activeView] ?? 'lookup'}/>
     : system.key === 'insight' && item.id === 'review' ? <ReviewPage state={dataState} view={reviewViews[activeView] ?? 'current'} objectId={objectId}/>
-    : system.key === 'insight' && item.id === 'miyun-materials' ? <MiyunMaterialsPage state={dataState} activeView={activeView}/>
+    : system.key === 'insight' && item.id === 'miyun-materials' ? <MiyunMaterialsPage state={dataState} activeView={activeView}
+      onOpenAssetAnalysis={assetId => onOpenProject(currentProject.id, 'insight', 'assets', assetId, '变量')}/>
     : system.key === 'insight' && item.id === 'experiments' ? <ExperimentCenterPage state={dataState} activeView={activeView}/>
     : system.key === 'insight' && item.id === 'settings' ? <SettingsPage state={dataState} view={settingsViews[activeView] ?? 'thresholds'}/>
     : system.key === 'delivery' && item.id === 'tour' ? <DeliveryTourPage projectId={currentProject.id} routeRunId={tourRunId}/>

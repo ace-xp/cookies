@@ -68,14 +68,54 @@ const (
 	AssetSourceCreative AssetSourceKind = "creative" // 创意模块产物
 	AssetSourceUpload   AssetSourceKind = "upload"   // 上传文件
 	AssetSourceExternal AssetSourceKind = "external" // 外部引用
+	// AssetSourceMiyun 是米云采集、导入或回流回来的素材。
+	//
+	// 它从 external 里拆出来是因为那个标签在界面上写的是「外部引用」，指的是
+	// 平台外的竞品参照证据——那些永远不能投。米云的素材有 platform_asset_id、
+	// 能投、要跑归因。同一个词指两样东西，看的人一定会搞错。
+	AssetSourceMiyun AssetSourceKind = "miyun"
 )
 
 func (k AssetSourceKind) valid() bool {
 	switch k {
-	case AssetSourceCreative, AssetSourceUpload, AssetSourceExternal:
+	case AssetSourceCreative, AssetSourceUpload, AssetSourceExternal, AssetSourceMiyun:
 		return true
 	}
 	return false
+}
+
+// AssetRole 是素材的**身份**，和 AnalysisStatus 说的**进度**是两回事。
+//
+// 台账（ledger）是平台里所有素材的账本：创意做的每一张图、每一版剪辑、每一段配音
+// 都在里面，绝大多数永远不会拿去投流。分析对象（analysis）是真正投出去、有花费、
+// 要跑归因的那些成品。
+//
+// 不做成第九个 analysis_status 的理由：一条素材从台账被拉进分析时，它走到过哪一步
+// 应该原样保留；退回台账再拉回来也不该清零。两个正交维度各管各的，队列一律按
+// role 过滤，而不是靠把状态归零来实现。
+type AssetRole string
+
+const (
+	AssetRoleLedger   AssetRole = "ledger"   // 台账：登记在册，不进分析队列
+	AssetRoleAnalysis AssetRole = "analysis" // 分析对象：投过流、要跑归因
+)
+
+func (r AssetRole) valid() bool {
+	switch r {
+	case AssetRoleLedger, AssetRoleAnalysis:
+		return true
+	}
+	return false
+}
+
+func (r AssetRole) Label() string {
+	switch r {
+	case AssetRoleLedger:
+		return "台账"
+	case AssetRoleAnalysis:
+		return "分析对象"
+	}
+	return string(r)
 }
 
 // FeatureSource separates the data layers 03 §14 insists must not overwrite
@@ -191,6 +231,9 @@ type Asset struct {
 	ID             string                  `json:"id"`
 	OrganizationID contract.OrganizationID `json:"organization_id"`
 	ProjectID      contract.ProjectID      `json:"project_id"`
+
+	// 台账还是分析对象。登记时不填默认是分析对象——现有的每一条都是分析对象。
+	Role AssetRole `json:"role"`
 
 	LineageID string `json:"lineage_id"`
 	Revision  int    `json:"revision"`
@@ -335,11 +378,16 @@ func (in FeatureInput) validate(assetType AssetType) error {
 // An empty LineageID starts a new lineage; a known one appends a revision, so
 // the same creative keeps one identity across edits.
 type IndexAssetRequest struct {
-	Title       string          `json:"title"`
-	SourceKind  AssetSourceKind `json:"source_kind"`
-	SourceRef   string          `json:"source_ref"`
-	SourceJobID string          `json:"source_job_id"`
-	LineageID   string          `json:"lineage_id"`
+	Title      string          `json:"title"`
+	SourceKind AssetSourceKind `json:"source_kind"`
+
+	// Role 留空就是分析对象——手工登记的素材默认是要拿去投的。
+	// 后台自动收录的台账素材由 RecordLedgerAsset 显式填 ledger。
+	Role AssetRole `json:"role"`
+
+	SourceRef   string `json:"source_ref"`
+	SourceJobID string `json:"source_job_id"`
+	LineageID   string `json:"lineage_id"`
 
 	PlatformAssetID      string `json:"platform_asset_id"`
 	PlatformAssetVersion int64  `json:"platform_asset_version"`
@@ -358,6 +406,9 @@ func (r IndexAssetRequest) validate() error {
 	}
 	if !r.SourceKind.valid() {
 		return fmt.Errorf("%w: 素材来源必须是 creative、upload 或 external", ErrInvalidRequest)
+	}
+	if r.Role != "" && !r.Role.valid() {
+		return fmt.Errorf("%w: 素材身份必须是 ledger 或 analysis", ErrInvalidRequest)
 	}
 	if len(r.SourceRef) > 512 || len(r.LineageID) > 96 {
 		return ErrInvalidRequest
@@ -498,8 +549,45 @@ type AssetFilter struct {
 	Statuses    []AnalysisStatus  `json:"statuses,omitempty"`
 	AssetTypes  []AssetType       `json:"asset_types,omitempty"`
 	SourceKinds []AssetSourceKind `json:"source_kinds,omitempty"`
-	LineageID   string            `json:"lineage_id,omitempty"`
-	Limit       int               `json:"limit,omitempty"`
+
+	// Roles 留空等于「只看分析对象」。这条默认值是台账不淹没四个队列的唯一保证：
+	// 忘了传的调用方拿到的是分析对象，不是几千条台账。
+	Roles []AssetRole `json:"roles,omitempty"`
+
+	LineageID string `json:"lineage_id,omitempty"`
+
+	// Cursor 是上一页最后一条的位置，不透明串，由 ListAssetPage 发出。
+	// 台账几千条起，offset 分页翻到第 50 页要数过前面 4900 行；游标只比一次索引。
+	Cursor string `json:"cursor,omitempty"`
+	// Query 按标题模糊搜。台账里绝大多数素材人只记得个名字，
+	// 没有搜索的清单等于让人一页页翻——那就是查不动。
+	Query string `json:"q,omitempty"`
+
+	Limit int `json:"limit,omitempty"`
+}
+
+// AssetPage 是一页素材。NextCursor 为空表示到底了——
+// 前端靠这一个信号决定「加载更多」还显不显示，不必自己数条数。
+type AssetPage struct {
+	Items      []Asset `json:"items"`
+	NextCursor string  `json:"next_cursor,omitempty"`
+}
+
+// UnledgeredPlatformAsset 是平台素材库里有、但台账里还没有的一个素材版本。
+// 回填命令按它一条条补，直到查不出来为止。
+type UnledgeredPlatformAsset struct {
+	OrganizationID contract.OrganizationID
+	ProjectID      contract.ProjectID
+	AssetID        string
+	Version        int64
+	SourceType     string
+	// Kind 是平台那边的 asset_kind：image / video / audio / document / text。
+	// 台账只收投得出去的那几种，见 LedgerAcceptsKind。
+	Kind string
+	// ObjectKey 是这份文件在对象存储里的路径。回填拿不到当初的上传文件名，
+	// 但对象键的最后一段往往就是它，用来给台账起名，见 ledgerObjectTitle。
+	ObjectKey string
+	CreatedAt time.Time
 }
 
 // AssetMappingFilter drives the 待匹配 queue.
@@ -578,6 +666,17 @@ type TransitionAssetInput struct {
 	Now             time.Time
 }
 
+// UpdateAssetRoleInput 只换身份，不碰 analysis_status。
+// 两个维度分开写，是为了让「拉进分析 → 退回台账 → 再拉进分析」全程无损。
+type UpdateAssetRoleInput struct {
+	OrganizationID  contract.OrganizationID
+	ProjectID       contract.ProjectID
+	ID              string
+	ExpectedVersion int64
+	To              AssetRole
+	Now             time.Time
+}
+
 // UpsertAssetFeaturesInput writes one data layer and advances the asset in the
 // same transaction. Only rows in ReplaceLayer are touched, so re-extraction can
 // never overwrite a human conclusion (AM-006).
@@ -604,6 +703,10 @@ type AssetRepository interface {
 	ListAssetLineage(context.Context, contract.OrganizationID, contract.ProjectID, string) ([]Asset, error)
 	UpdateAssetType(context.Context, UpdateAssetTypeInput) (Asset, error)
 	TransitionAsset(context.Context, TransitionAssetInput) (Asset, error)
+	UpdateAssetRole(context.Context, UpdateAssetRoleInput) (Asset, error)
+	ListAssetPage(context.Context, contract.OrganizationID, contract.ProjectID, AssetFilter) (AssetPage, error)
+	ListUnledgeredPlatformAssets(context.Context, int) ([]UnledgeredPlatformAsset, error)
+	DeleteLedgerAssetsByPlatformKind(context.Context, []string) (int, error)
 
 	CreateAssetMapping(context.Context, AssetMapping) (AssetMapping, error)
 	ListAssetMappings(context.Context, contract.OrganizationID, contract.ProjectID, AssetMappingFilter) ([]AssetMapping, error)
@@ -613,6 +716,13 @@ type AssetRepository interface {
 	UpsertAssetFeatures(context.Context, UpsertAssetFeaturesInput) ([]AssetFeature, error)
 	ListAssetFeatures(context.Context, contract.OrganizationID, contract.ProjectID, []string, int) ([]AssetFeature, error)
 	CountAssetFeaturesByReviewState(context.Context, contract.OrganizationID, contract.ProjectID, string, ReviewState) (int, error)
+}
+
+// PosterReader 把一个平台素材版本的封面换成一个可以直接放进 <img src> 的地址。
+//
+// 洞察自己不抽帧、不存图：那是素材库的事。这里只要一个能看的地址。
+type PosterReader interface {
+	ReadPoster(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, platformAssetID string, platformAssetVersion int64) (string, error)
 }
 
 // IndexAsset registers a creative revision so it can be analysed (AM-001).
@@ -649,12 +759,23 @@ func (s Service) IndexAsset(ctx context.Context, actor contract.ActorContext, pr
 	now := s.now()
 	// A freshly indexed asset is 待数据 until a type is identified; without a
 	// type there is no feature system to extract into (03 §11.1).
-	status, reason := AnalysisAwaitingData, "已登记，等待类型识别与投放数据。"
+	//
+	// 这句话直接显示在界面的「最近一次状态说明」上，所以只说它真正缺的那一样。
+	// 原来写的是「等待类型识别与投放数据」——提特征这一整段不查任何投放数据
+	// （见 ExtractFeatures 的前置条件），多提一句「与投放数据」会把人支去接数据，
+	// 接完回来素材还停在原地。
+	status, reason := AnalysisAwaitingData, "已登记，等待识别广告类型；认了类型才知道该提哪套变量。"
 	if request.AssetType.valid() {
 		status, reason = AnalysisAnalysable, "登记时已知类型，可开始特征提取。"
 	}
+	// 手工登记默认是分析对象；台账收录由调用方显式声明 ledger。
+	role := request.Role
+	if role == "" {
+		role = AssetRoleAnalysis
+	}
 	return s.Assets.CreateAsset(ctx, Asset{
 		ID: id, OrganizationID: actor.OrganizationID, ProjectID: projectID,
+		Role:      role,
 		LineageID: lineageID, Revision: revision, Title: strings.TrimSpace(request.Title),
 		SourceKind: request.SourceKind, SourceRef: strings.TrimSpace(request.SourceRef),
 		SourceJobID:     strings.TrimSpace(request.SourceJobID),
@@ -671,23 +792,90 @@ func (s Service) ListAssets(ctx context.Context, actor contract.ActorContext, pr
 	if err := s.assetsReady(actor, projectID, ScopeRead); err != nil {
 		return nil, err
 	}
+	filter, err := normalizeAssetFilter(filter)
+	if err != nil {
+		return nil, err
+	}
+	filter.Limit = normalizeLimit(filter.Limit)
+	return s.Assets.ListAssets(ctx, actor.OrganizationID, projectID, filter)
+}
+
+// ListAssetPage 是台账清单的取数口。ListAssets 一次取完的做法留给分析对象那几十条，
+// 台账不能这么取——它和平台素材库一样大。
+func (s Service) ListAssetPage(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, filter AssetFilter) (AssetPage, error) {
+	if err := s.assetsReady(actor, projectID, ScopeRead); err != nil {
+		return AssetPage{}, err
+	}
+	filter, err := normalizeAssetFilter(filter)
+	if err != nil {
+		return AssetPage{}, err
+	}
+	if filter.Limit < 1 || filter.Limit > assetPageMaxLimit {
+		filter.Limit = assetPageDefaultLimit
+	}
+	return s.Assets.ListAssetPage(ctx, actor.OrganizationID, projectID, filter)
+}
+
+// ReadAssetPoster 取一条素材的封面地址。
+//
+// 取不到就报 ErrNotFound，让前端退回类型图标。封面是锦上添花——
+// 为了一张缩略图让整个清单打不开是本末倒置。
+func (s Service) ReadAssetPoster(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, assetID string) (string, error) {
+	if err := s.assetsReady(actor, projectID, ScopeRead); err != nil {
+		return "", err
+	}
+	asset, err := s.Assets.GetAsset(ctx, actor.OrganizationID, projectID, assetID)
+	if err != nil {
+		return "", err
+	}
+	if asset.PlatformAssetID == "" || asset.PlatformAssetVersion == 0 {
+		return "", fmt.Errorf("%w: 这条素材没有对应的平台文件，没有封面可取", ErrNotFound)
+	}
+	if s.Posters == nil {
+		// 也报「没有」而不是报故障：这个环境没配 ffmpeg，抽帧链路整条是关的，
+		// 那就是真的没有封面。报 500 的话，一屏几十张缩略图会在日志和监控里
+		// 刷出几十条服务器错误，看起来像出事了，其实只是没开这个功能。
+		return "", fmt.Errorf("%w: 这个环境没有接封面服务（多半是没配 ffmpeg）", ErrNotFound)
+	}
+	return s.Posters.ReadPoster(ctx, actor, projectID, asset.PlatformAssetID, asset.PlatformAssetVersion)
+}
+
+const (
+	assetPageDefaultLimit = 50
+	assetPageMaxLimit     = 100
+)
+
+// normalizeAssetFilter 校验筛选条件并补上默认身份。两个取数口共用一份，
+// 免得哪天只在其中一个上加了校验，另一个成了后门。
+func normalizeAssetFilter(filter AssetFilter) (AssetFilter, error) {
 	for _, status := range filter.Statuses {
 		if !status.valid() {
-			return nil, fmt.Errorf("%w: 未知的分析状态 %q", ErrInvalidRequest, string(status))
+			return filter, fmt.Errorf("%w: 未知的分析状态 %q", ErrInvalidRequest, string(status))
 		}
 	}
 	for _, assetType := range filter.AssetTypes {
 		if !assetType.valid() {
-			return nil, fmt.Errorf("%w: 未知的素材类型 %q", ErrInvalidRequest, string(assetType))
+			return filter, fmt.Errorf("%w: 未知的素材类型 %q", ErrInvalidRequest, string(assetType))
 		}
 	}
 	for _, kind := range filter.SourceKinds {
 		if !kind.valid() {
-			return nil, fmt.Errorf("%w: 未知的素材来源 %q", ErrInvalidRequest, string(kind))
+			return filter, fmt.Errorf("%w: 未知的素材来源 %q", ErrInvalidRequest, string(kind))
 		}
 	}
-	filter.Limit = normalizeLimit(filter.Limit)
-	return s.Assets.ListAssets(ctx, actor.OrganizationID, projectID, filter)
+	for _, role := range filter.Roles {
+		if !role.valid() {
+			return filter, fmt.Errorf("%w: 未知的素材身份 %q", ErrInvalidRequest, string(role))
+		}
+	}
+	// 不传身份就是只看分析对象。台账动辄几千条，默认漏进四个队列会把它们淹掉。
+	if len(filter.Roles) == 0 {
+		filter.Roles = []AssetRole{AssetRoleAnalysis}
+	}
+	if len(filter.Query) > 255 {
+		return filter, fmt.Errorf("%w: 搜索词过长", ErrInvalidRequest)
+	}
+	return filter, nil
 }
 
 func (s Service) GetAsset(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, assetID string) (Asset, error) {
@@ -848,6 +1036,9 @@ func (s Service) ExtractFeatures(ctx context.Context, actor contract.ActorContex
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requireAnalysisRole(asset); err != nil {
+		return nil, err
+	}
 	if !asset.TypeIdentified() {
 		return nil, fmt.Errorf("%w: 素材类型待识别，无法确定要提取哪套特征", ErrInvalidState)
 	}
@@ -902,6 +1093,9 @@ func (s Service) PatchFeatures(ctx context.Context, actor contract.ActorContext,
 	}
 	asset, err := s.Assets.GetAsset(ctx, actor.OrganizationID, projectID, assetID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requireAnalysisRole(asset); err != nil {
 		return nil, err
 	}
 	if !asset.TypeIdentified() {
@@ -1017,6 +1211,63 @@ func (s Service) transitionAsset(ctx context.Context, actor contract.ActorContex
 	return s.Assets.TransitionAsset(ctx, TransitionAssetInput{
 		OrganizationID: actor.OrganizationID, ProjectID: projectID, ID: assetID,
 		ExpectedVersion: request.ExpectedVersion, From: from, To: to, Reason: reason, Now: s.now(),
+	})
+}
+
+// PromoteAssetToAnalysis 把一条台账素材拉进分析。
+//
+// 这是唯一一条从台账进分析的路，而且必须有人点：台账里绝大多数素材永远不会投流，
+// 自动往里拉只会把四个队列重新灌满。
+func (s Service) PromoteAssetToAnalysis(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, assetID string, request AssetTransitionRequest) (Asset, error) {
+	if err := s.assetsReady(actor, projectID, ScopeWrite); err != nil {
+		return Asset{}, err
+	}
+	if len(strings.TrimSpace(request.Reason)) > 1000 {
+		return Asset{}, fmt.Errorf("%w: 原因超长", ErrInvalidRequest)
+	}
+	asset, err := s.Assets.GetAsset(ctx, actor.OrganizationID, projectID, assetID)
+	if err != nil {
+		return Asset{}, err
+	}
+	if asset.Role == AssetRoleAnalysis {
+		return Asset{}, fmt.Errorf("%w: 这条素材已经是分析对象", ErrInvalidState)
+	}
+	return s.Assets.UpdateAssetRole(ctx, UpdateAssetRoleInput{
+		OrganizationID: actor.OrganizationID, ProjectID: projectID, ID: assetID,
+		ExpectedVersion: request.ExpectedVersion, To: AssetRoleAnalysis, Now: s.now(),
+	})
+}
+
+// ReturnAssetToLedger 把拉错的素材退回台账。
+//
+// 只有从没对上号的素材能退：对上号意味着它有广告对象、有花费、进过归因，
+// 这时候退回台账就是把已经产生的数据从队列里藏起来。
+func (s Service) ReturnAssetToLedger(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, assetID string, request AssetTransitionRequest) (Asset, error) {
+	if err := s.assetsReady(actor, projectID, ScopeWrite); err != nil {
+		return Asset{}, err
+	}
+	if len(strings.TrimSpace(request.Reason)) > 1000 {
+		return Asset{}, fmt.Errorf("%w: 原因超长", ErrInvalidRequest)
+	}
+	asset, err := s.Assets.GetAsset(ctx, actor.OrganizationID, projectID, assetID)
+	if err != nil {
+		return Asset{}, err
+	}
+	if asset.Role == AssetRoleLedger {
+		return Asset{}, fmt.Errorf("%w: 这条素材本来就在台账里", ErrInvalidState)
+	}
+	matched, err := s.Assets.ListAssetMappings(ctx, actor.OrganizationID, projectID, AssetMappingFilter{
+		AssetID: assetID, Statuses: []MappingStatus{MappingMatched}, Limit: 1,
+	})
+	if err != nil {
+		return Asset{}, err
+	}
+	if len(matched) > 0 {
+		return Asset{}, fmt.Errorf("%w: 这条素材已经和广告对象对上号，有投放数据，不能退回台账", ErrInvalidState)
+	}
+	return s.Assets.UpdateAssetRole(ctx, UpdateAssetRoleInput{
+		OrganizationID: actor.OrganizationID, ProjectID: projectID, ID: assetID,
+		ExpectedVersion: request.ExpectedVersion, To: AssetRoleLedger, Now: s.now(),
 	})
 }
 
@@ -1136,6 +1387,18 @@ func (s Service) assetsReady(actor contract.ActorContext, projectID contract.Pro
 	}
 	if actor.OrganizationID == "" || projectID == "" || !actor.HasScope(scope) {
 		return fmt.Errorf("%s scope is required", scope)
+	}
+	return nil
+}
+
+// requireAnalysisRole 挡住往台账素材上写特征的一切路径。
+//
+// 台账是账本：登记在册就够了，它不进队列、不跑归因、不该有任何特征。
+// 四条写路径（人工修改、AI 提取、量客观变量、单条分析）各自都要过这道门——
+// 少一条，那条路径就成了绕过身份的后门。
+func (s Service) requireAnalysisRole(asset Asset) error {
+	if asset.Role == AssetRoleLedger {
+		return fmt.Errorf("%w: 这条素材在台账里，先「拉进分析」才能提特征", ErrInvalidState)
 	}
 	return nil
 }

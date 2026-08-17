@@ -35,8 +35,12 @@ func (r MySQLRepository) CreateReport(ctx context.Context, value InsightReport) 
 		value.IsSimulated, value.DatasetVersion, value.Status, value.Summary, findings,
 		digest, value.WindowStart, value.WindowEnd,
 		value.Version, value.CreatedBy, value.CreatedAt, value.UpdatedAt)
+	// 唯一键只约束还没提交的草稿（uq_insight_reports_open_draft 里的 draft_slot
+	// 对已确认的行是 NULL）。所以撞上它只有一种意思：这个窗口已经开着一份草稿了，
+	// 不是「这一轮复盘过了」——已经提交过的那份不挡新草稿，PRD §15.3 要的就是
+	// 提交之后还能开下一份。
 	if isDuplicateKey(err) {
-		return InsightReport{}, fmt.Errorf("%w: 这次投放的这个数据窗口已经有一份复盘了，去「复盘」看那一份", ErrInvalidState)
+		return InsightReport{}, fmt.Errorf("%w: 这个数据窗口已经有一份还没提交的复盘草稿了，去「复盘」看那一份", ErrInvalidState)
 	}
 	if err != nil {
 		return InsightReport{}, err
@@ -106,7 +110,8 @@ func (r MySQLRepository) GetReport(ctx context.Context, organizationID contract.
 }
 
 // FindDraftByWindow 只找 draft，不找已确认的。已确认的复盘是定格的，
-// 往里加一条新发现等于事后改结论。
+// 往里加一条新发现等于事后改结论。提交之后还想记，开的是下一份草稿——
+// 唯一键放得下（uq_insight_reports_open_draft 只约束草稿）。
 //
 // 同一个 (项目 + 窗口) 下可能有多份草稿——唯一键里还有 execution_id，从投放执行
 // 建出来的草稿和记一笔建出来的草稿会并存。按创建时间取最早那份：人在这个窗口上
@@ -167,24 +172,25 @@ func (r MySQLRepository) PurgeEmptyDrafts(ctx context.Context, before time.Time)
 	return result.RowsAffected()
 }
 
-// SubmitReport 补执行 ID、写入定格后的 digest、置为已确认——一条 UPDATE 做完。
+// SubmitReport 补执行 ID 和摘要、写入定格后的 digest、置为已确认——一条 UPDATE 做完。
 //
-// 分成三次写会留下「已确认但没有系统发现」的报告，而它看起来和正常的一模一样，
+// 分成几次写会留下「已确认但没有系统发现」的报告，而它看起来和正常的一模一样，
 // 没人会怀疑那份复盘漏了东西。
-func (r MySQLRepository) SubmitReport(ctx context.Context, organizationID contract.OrganizationID,
-	projectID contract.ProjectID, reportID string, expectedVersion int64, executionID string,
-	digest []ReportFinding, actorID string, at time.Time) (InsightReport, error) {
-	encoded, err := marshalReportDigest(digest)
+func (r MySQLRepository) SubmitReport(ctx context.Context, input SubmitReportInput) (InsightReport, error) {
+	organizationID, projectID, reportID := input.OrganizationID, input.ProjectID, input.ReportID
+	expectedVersion := input.ExpectedVersion
+	encoded, err := marshalReportDigest(input.Digest)
 	if err != nil {
 		return InsightReport{}, err
 	}
-	result, err := r.DB.ExecContext(ctx, `UPDATE insight_reports SET execution_id = ?, digest = ?, status = ?, confirmed_by = ?, confirmed_at = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND project_id = ? AND id = ? AND version = ? AND status = ?`,
-		executionID, encoded, ReportConfirmed, actorID, at, at,
+	result, err := r.DB.ExecContext(ctx, `UPDATE insight_reports SET execution_id = ?, summary = ?, digest = ?, status = ?, confirmed_by = ?, confirmed_at = ?, version = version + 1, updated_at = ? WHERE organization_id = ? AND project_id = ? AND id = ? AND version = ? AND status = ?`,
+		input.ExecutionID, input.Summary, encoded, ReportConfirmed, input.ActorID, input.At, input.At,
 		organizationID, projectID, reportID, expectedVersion, ReportDraft)
 	if err != nil {
-		// 唯一键是 (organization_id, project_id, execution_id, window_start, window_end)。
-		// 补执行 ID 的这一下有可能撞上同执行同窗口的另一份复盘——多半是同一轮
-		// 被两个人各记了一份。这时候必须给出能看懂的错，不能扔一个重复键出去。
+		// 这一下同时把 status 改成 confirmed，而唯一键里的 draft_slot 对已确认的行
+		// 是 NULL，所以提交本身撞不上唯一键——同一个窗口允许躺着多份已确认的历史
+		// 报告。留着这个分支是防唯一键哪天又改回去：那时候扔出去的会是一个裸的
+		// 重复键错误，前端只能显示成 500。
 		if isDuplicateKey(err) {
 			return InsightReport{}, fmt.Errorf("%w: 这次投放在这个窗口上已经有一份复盘了，先看那一份", ErrInvalidState)
 		}
@@ -271,18 +277,24 @@ func insertExperienceTx(ctx context.Context, tx *sql.Tx, value Experience) error
 	if err != nil {
 		return err
 	}
+	// 阈值版本用 NULL 表示「不知道」，不是 0。0 是「按出厂设定判的」，也是一个
+	// 确定的答案；把不知道写成 0，界面上就会给一条人手填档位的经验盖上出厂印。
+	var thresholdVersion any
+	if value.ThresholdVersion != nil {
+		thresholdVersion = *value.ThresholdVersion
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO insight_experiences (
 		id, organization_id, project_id, lineage_id, revision, supersedes_id, superseded_by_id,
 		report_id, source_execution_id, source_evidence_id, source_metric_snapshot_id,
-		conclusion, card_type, confidence, recommended_action,
+		conclusion, card_type, confidence, threshold_version, recommended_action,
 		conditions, counterexamples, applicability, data_basis, content_basis,
 		status, needs_review, status_reason, status_changed_by, status_changed_at,
 		confirmed_by, confirmed_at, version, created_by, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
 		value.ID, value.OrganizationID, value.ProjectID, value.LineageID, value.Revision,
 		nullableString(value.SupersedesID),
 		value.ReportID, value.SourceExecutionID, value.SourceEvidenceID, value.SourceMetricSnapshotID,
-		value.Conclusion, value.CardType, value.Confidence, value.RecommendedAction,
+		value.Conclusion, value.CardType, value.Confidence, thresholdVersion, value.RecommendedAction,
 		conditions, counterexamples, applicability, dataBasis, contentBasis,
 		value.Status, value.NeedsReview, value.StatusReason,
 		value.StatusChangedBy, value.StatusChangedAt,
@@ -603,7 +615,7 @@ func unmarshalNullableJSON(raw []byte, target any) error {
 }
 
 const insightReportSelect = `SELECT id, organization_id, project_id, execution_id, delivery_mode, evidence_id, evidence_summary, metric_snapshot_id, creative_package_id, is_simulated, dataset_version, status, summary, findings, digest, window_start, window_end, version, created_by, confirmed_by, confirmed_at, created_at, updated_at FROM insight_reports`
-const experienceSelect = `SELECT id, organization_id, project_id, lineage_id, revision, supersedes_id, superseded_by_id, report_id, source_execution_id, source_evidence_id, source_metric_snapshot_id, conclusion, card_type, confidence, recommended_action, conditions, counterexamples, applicability, data_basis, content_basis, status, needs_review, status_reason, status_changed_by, status_changed_at, confirmed_by, confirmed_at, version, created_by, created_at, updated_at FROM insight_experiences`
+const experienceSelect = `SELECT id, organization_id, project_id, lineage_id, revision, supersedes_id, superseded_by_id, report_id, source_execution_id, source_evidence_id, source_metric_snapshot_id, conclusion, card_type, confidence, threshold_version, recommended_action, conditions, counterexamples, applicability, data_basis, content_basis, status, needs_review, status_reason, status_changed_by, status_changed_at, confirmed_by, confirmed_at, version, created_by, created_at, updated_at FROM insight_experiences`
 const experienceAuditSelect = `SELECT id, organization_id, project_id, experience_id, from_status, to_status, reason, actor_id, created_at FROM insight_experience_audits`
 const experienceReferenceSelect = `SELECT id, organization_id, project_id, experience_id, consumer_kind, consumer_id, outcome, note, version, created_by, created_at, updated_at FROM insight_experience_references`
 
@@ -658,10 +670,11 @@ func scanExperience(row rowScanner) (Experience, error) {
 	var applicability, dataBasis, contentBasis []byte
 	var supersedesID, supersededByID, confirmedBy sql.NullString
 	var statusChangedAt, confirmedAt sql.NullTime
+	var thresholdVersion sql.NullInt64
 	err := row.Scan(&value.ID, &value.OrganizationID, &value.ProjectID,
 		&value.LineageID, &value.Revision, &supersedesID, &supersededByID, &value.ReportID,
 		&value.SourceExecutionID, &value.SourceEvidenceID, &value.SourceMetricSnapshotID, &value.Conclusion,
-		&value.CardType, &value.Confidence, &value.RecommendedAction, &conditions,
+		&value.CardType, &value.Confidence, &thresholdVersion, &value.RecommendedAction, &conditions,
 		&counterexamples, &applicability, &dataBasis, &contentBasis,
 		&value.Status, &value.NeedsReview, &value.StatusReason, &value.StatusChangedBy, &statusChangedAt,
 		&confirmedBy, &confirmedAt, &value.Version, &value.CreatedBy, &value.CreatedAt, &value.UpdatedAt)
@@ -671,6 +684,12 @@ func scanExperience(row rowScanner) (Experience, error) {
 	// 库里只存 confidence。三档判定不落库，每次读出来由唯一收敛点重新算——
 	// 存下来的话，收敛规则改了以后老行还带着旧档位，同一条经验在两个页面上会不一样。
 	value.Judgement = judge(value.Confidence, "")
+	// 阈值版本例外：它不是算出来的，是当初判这一档时生效的那一版的号码，
+	// 存的是历史事实，重算不出来。NULL 保持为 nil（不知道），不落成 0（出厂设定）。
+	if thresholdVersion.Valid {
+		version := thresholdVersion.Int64
+		value.ThresholdVersion = &version
+	}
 	if err := json.Unmarshal(conditions, &value.Conditions); err != nil {
 		return Experience{}, fmt.Errorf("decode experience conditions: %w", err)
 	}

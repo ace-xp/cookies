@@ -28,6 +28,7 @@ func (s *Server) registerAssetRoutes() {
 	s.mux.HandleFunc("POST /api/insights/v1/projects/{project_id}/assets/{asset_action}", s.assetAction)
 	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}", s.getAsset)
 	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}/lineage", s.listAssetLineage)
+	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}/poster", s.getAssetPoster)
 	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}/features", s.listAssetFeatures)
 	s.mux.HandleFunc("PATCH /api/insights/v1/projects/{project_id}/assets/{asset_id}/features", s.patchAssetFeatures)
 	s.mux.HandleFunc("GET /api/insights/v1/projects/{project_id}/assets/{asset_id}/analysis-runs", s.listAssetAnalysisRuns)
@@ -65,7 +66,14 @@ func (s *Server) indexAsset(writer http.ResponseWriter, request *http.Request) {
 
 func (s *Server) listAssets(writer http.ResponseWriter, request *http.Request) {
 	query := request.URL.Query()
-	filter := insights.AssetFilter{LineageID: query.Get("lineage_id"), Limit: queryLimit(request)}
+	filter := insights.AssetFilter{
+		LineageID: query.Get("lineage_id"),
+		// 不传 role 就只看分析对象——默认值在服务层补，这里原样透传，
+		// 免得两处各写一份默认，改一处漏一处。
+		Cursor: query.Get("cursor"),
+		Query:  query.Get("q"),
+		Limit:  queryLimit(request),
+	}
 	for _, value := range queryList(request, "status") {
 		filter.Statuses = append(filter.Statuses, insights.AnalysisStatus(value))
 	}
@@ -75,12 +83,21 @@ func (s *Server) listAssets(writer http.ResponseWriter, request *http.Request) {
 	for _, value := range queryList(request, "source_kind") {
 		filter.SourceKinds = append(filter.SourceKinds, insights.AssetSourceKind(value))
 	}
-	values, err := s.app.ListAssets(request.Context(), mustActor(request), projectID(request), filter)
+	for _, value := range queryList(request, "role") {
+		filter.Roles = append(filter.Roles, insights.AssetRole(value))
+	}
+	page, err := s.app.ListAssetPage(request.Context(), mustActor(request), projectID(request), filter)
 	if err != nil {
 		writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": values})
+	body := map[string]any{"items": page.Items}
+	// 没有下一页时干脆不给这个键。给一个空串等于让前端自己判断空值算不算「还有」，
+	// 而键在不在是个没有歧义的信号。
+	if page.NextCursor != "" {
+		body["next_cursor"] = page.NextCursor
+	}
+	writeJSON(writer, http.StatusOK, body)
 }
 
 func (s *Server) getAsset(writer http.ResponseWriter, request *http.Request) {
@@ -99,6 +116,19 @@ func (s *Server) listAssetLineage(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"items": values})
+}
+
+// getAssetPoster 把请求 302 到一个带签名、会过期的地址。
+//
+// 不代理字节：缩略图是最高频的请求，一个清单一屏就是几十张。让它们直接
+// 打到对象存储，API 只负责说清「哪一张、能看多久」。
+func (s *Server) getAssetPoster(writer http.ResponseWriter, request *http.Request) {
+	url, err := s.app.ReadAssetPoster(request.Context(), mustActor(request), projectID(request), request.PathValue("asset_id"))
+	if err != nil {
+		writeError(writer, request, err)
+		return
+	}
+	http.Redirect(writer, request, url, http.StatusFound)
 }
 
 func (s *Server) listAssetFeatures(writer http.ResponseWriter, request *http.Request) {
@@ -273,6 +303,13 @@ func (s *Server) assetAction(writer http.ResponseWriter, request *http.Request) 
 		s.assetTransition(writer, request, strings.TrimSuffix(action, ":confirm"), s.app.ConfirmAssetAnalysis)
 	case strings.HasSuffix(action, ":request-review"):
 		s.assetTransition(writer, request, strings.TrimSuffix(action, ":request-review"), s.app.RequestAssetReview)
+	case strings.HasSuffix(action, ":promote"):
+		// 台账 → 分析对象。台账里绝大多数素材永远不会投流，
+		// 所以这条路必须有人点，没有任何地方会自动触发。
+		s.assetTransition(writer, request, strings.TrimSuffix(action, ":promote"), s.app.PromoteAssetToAnalysis)
+	case strings.HasSuffix(action, ":return-to-ledger"):
+		// 分析对象 → 台账。只有从没对上号的素材退得回去。
+		s.assetTransition(writer, request, strings.TrimSuffix(action, ":return-to-ledger"), s.app.ReturnAssetToLedger)
 	case strings.HasSuffix(action, ":retire"):
 		s.assetTransition(writer, request, strings.TrimSuffix(action, ":retire"), s.app.RetireAsset)
 	default:

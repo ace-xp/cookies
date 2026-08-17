@@ -48,8 +48,19 @@ type Server struct {
 	evals             EvalManager
 	agentRuns         AgentRunManager
 	providerConfig    ProviderConfigurationReader
+	providerVideo     ProviderVideoConfigurationStore
+	providerVideoEnv  ProviderVideoEnvironment
 	mux               *http.ServeMux
 	newID             func() (string, error)
+}
+
+// ProviderVideoEnvironment describes the credential the process was started
+// with. The Settings page shows it as the fallback that keeps working until
+// someone saves a configuration of their own.
+type ProviderVideoEnvironment struct {
+	Configured bool
+	Model      string
+	BaseURL    string
 }
 
 type ReadinessChecker interface {
@@ -77,6 +88,10 @@ type Dependencies struct {
 	Evals             EvalManager
 	AgentRuns         AgentRunManager
 	ProviderConfig    ProviderConfigurationReader
+	// ProviderVideoConfiguration and ProviderVideoEnvironment together back the
+	// video model card in the Settings page.
+	ProviderVideoConfiguration ProviderVideoConfigurationStore
+	ProviderVideoEnvironment   ProviderVideoEnvironment
 	// AuthenticatedDomainMounts allow vertical systems to share the platform
 	// listener and identity context without making this package import them.
 	// Mount handlers remain responsible for project authorization and scopes.
@@ -320,6 +335,15 @@ type ProviderConfigurationReader interface {
 	ListCapabilities(context.Context, contract.OrganizationID) ([]provider.CapabilityStatus, error)
 }
 
+// ProviderVideoConfigurationStore backs the Settings page. Reads never return
+// the stored API key, and writes only land after the credential has been
+// probed against the upstream service.
+type ProviderVideoConfigurationStore interface {
+	GetVideoConfiguration(context.Context, contract.OrganizationID) (provider.VideoConfiguration, error)
+	VerifyVideoConfiguration(context.Context, contract.OrganizationID, provider.VideoConfigurationInput) (provider.VideoProbeResult, error)
+	SaveVideoConfiguration(context.Context, contract.OrganizationID, provider.VideoConfigurationInput) (provider.VideoConfiguration, error)
+}
+
 // New retains the bootstrap construction path for focused HTTP tests. The
 // application uses NewWithDependencies so readiness and project checks are real.
 func New(resolver identity.Resolver) *Server {
@@ -342,6 +366,7 @@ func NewWithDependencies(dependencies Dependencies) *Server {
 		creative: dependencies.Creative, productionCenter: dependencies.ProductionCenter, productionAssets: dependencies.ProductionAssets, productionRetry: dependencies.ProductionRetry, sessions: dependencies.Sessions, knowledge: dependencies.Knowledge,
 		remixPlans: dependencies.RemixPlans, evals: dependencies.Evals, agentRuns: dependencies.AgentRuns,
 		providerConfig: dependencies.ProviderConfig,
+		providerVideo:  dependencies.ProviderVideoConfiguration, providerVideoEnv: dependencies.ProviderVideoEnvironment,
 	}
 	server.mux = http.NewServeMux()
 	server.mux.HandleFunc("GET /healthz", server.health)
@@ -357,6 +382,9 @@ func NewWithDependencies(dependencies Dependencies) *Server {
 	server.mux.Handle("POST /platform/v1/organizations/{organization_id}/members", server.requireAuthentication(server.requireScope("organization.members.manage", http.HandlerFunc(server.addOrganizationMember))))
 	server.mux.Handle("PATCH /platform/v1/organizations/{organization_id}/members/{user_id}", server.requireAuthentication(server.requireScope("organization.members.manage", http.HandlerFunc(server.updateOrganizationMember))))
 	server.mux.Handle("GET /platform/v1/provider/capabilities", server.requireAuthentication(http.HandlerFunc(server.providerCapabilities)))
+	server.mux.Handle("GET /platform/v1/provider/video-configuration", server.requireAuthentication(http.HandlerFunc(server.readVideoConfiguration)))
+	server.mux.Handle("PUT /platform/v1/provider/video-configuration", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.saveVideoConfiguration))))
+	server.mux.Handle("POST /platform/v1/provider/video-configuration/verification", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.verifyVideoConfiguration))))
 	server.mux.Handle("POST /platform/v1/brands", server.requireAuthentication(server.requireScope("project.write", http.HandlerFunc(server.createBrand))))
 	server.mux.Handle("POST /platform/v1/projects", server.requireAuthentication(server.requireScope("project.write", http.HandlerFunc(server.createProject))))
 	server.mux.Handle("GET /platform/v1/projects", server.requireAuthentication(server.requireScope("project.read", http.HandlerFunc(server.listProjects))))

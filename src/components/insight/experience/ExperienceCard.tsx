@@ -15,7 +15,7 @@ import { EvidenceTrail } from './EvidenceTrail'
  * 时候有 matched 说得出「凭什么推给你」。同一条经验在两屏上长成两个样子的话，
  * 人会以为那是两条不同的经验。
  */
-export function ExperienceCard({ experience, matched, citation, status, actions }: {
+export function ExperienceCard({ experience, matched, citation, status, showGaps, showLineage, pendingRevision, actions }: {
   experience: ApiExperience
   /**
    * 命中了哪几格适用条件，由后端给。undefined 表示这一屏根本没按条件筛
@@ -27,10 +27,33 @@ export function ExperienceCard({ experience, matched, citation, status, actions 
   citation?: string
   /** 状态标签。「查」模式不给：那一屏里的经验全是在用的，每张卡上挂一遍是噪音。 */
   status?: ReactNode
+  /**
+   * 要不要在卡面上摊开「还缺哪几格」。「管」模式给 true。
+   *
+   * 缺格这件事以前只在投前那一屏显示——而投前那一屏的人是来找能用的经验的，
+   * 看见了也改不了；能改的人在「管」这一屏，那里一个字都不显示。看得见的改不了、
+   * 改得了的看不见，于是没人补。
+   */
+  showGaps?: boolean
+  /**
+   * 要不要在卡面上说清这条是第几版、是不是已经被新的一版接替。「管」模式给 true。
+   *
+   * 修订一条经验会新增一版并回到「待定」，原来那一版继续在用——于是列表上出现
+   * **两张结论一字不差的卡**，除了状态标签没有任何区别。刚改完的人有一句回执
+   * 兜着，下次再进来时回执早没了，看到的就是「经验库里怎么有两条重复的」。
+   * 「查」模式不给：那一屏只列当前生效的那一版，不会撞在一起，挂版本号是噪音。
+   */
+  showLineage?: boolean
+  /**
+   * 这一版是不是已经有一个修订版在等确认。由列表算好传进来：修订时后端不回填
+   * 旧版的 superseded_by_id——新版还没被确认，接替就还没发生，那个字段空着是对的。
+   */
+  pendingRevision?: boolean
   actions?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const caveat = caveats[experience.verdict]
+  const gaps = showGaps ? missingFieldsOf(experience) : []
 
   return <article className={`experience-card${caveat ? ' experience-card-soft' : ''}`}>
     <header>
@@ -40,6 +63,16 @@ export function ExperienceCard({ experience, matched, citation, status, actions 
       {experience.needs_review
         // 标记要看得见但不能吓人：这条经验还在用，只是该重新看一眼它的依据了。
         ? <span className="experience-review-flag" title={experience.status_reason}>该看一眼了</span>
+        : null}
+      {/* 第几版、以及有没有被接替。两条同文的卡并排时，这是唯一说得清
+          「哪张是旧的」的东西——光看「在用 / 待定」，人会以为是重复条目。 */}
+      {showLineage && experience.revision > 1
+        ? <span className="experience-lineage-flag">第 {experience.revision} 版</span>
+        : null}
+      {showLineage && (pendingRevision || experience.superseded_by_id)
+        ? <span className="experience-lineage-flag" title="新的一版还没被确认，所以这一版继续在用">
+            已有更新的一版
+          </span>
         : null}
     </header>
 
@@ -51,6 +84,12 @@ export function ExperienceCard({ experience, matched, citation, status, actions 
     {/* 档位不够的要当场说清能拿它干什么，不能只靠徽章上一个 👁 或 ❓。
         没这句话，人会把 👁 读成一条弱一点的结论，照着做，然后归因到它头上。 */}
     {caveat ? <p className="experience-caveat">{caveat}</p> : null}
+
+    {/* 措辞和投前那一屏的「这条还缺什么」一致：同一条经验在两屏上缺的东西必须
+        是同一批，否则人会以为其中一屏算错了。 */}
+    {gaps.length ? <p className="experience-gaps">
+      还缺：{gaps.join('、')}——缺这几格不影响它能不能用，但意味着它还没被完整推敲过。
+    </p> : null}
 
     <button type="button" className="text-button experience-trail-toggle"
       aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -67,6 +106,37 @@ export function ExperienceCard({ experience, matched, citation, status, actions 
 const caveats: Record<string, string> = {
   observed: '这条只是观察，没排除掉别的变量。可以参考，但别当成「照着做就会这样」。',
   unclear: '这条的样本不够，算不出来是不是真的。当成一个待验证的线索，别当结论用。',
+}
+
+/**
+ * 这条经验还缺哪几格。
+ *
+ * 五格的判定和后端 `buildInsightCard` 的 MissingFields 逐条对齐
+ * （`internal/systems/insights/prelaunch.go:436`），一格不多一格不少——投前那一屏
+ * 已经在按这五格说「这条还缺什么」，这边另立一套口径的话，同一条经验会在两屏上
+ * 缺不同的东西。
+ *
+ * 「来源复盘」不在这五格里：它不是人能在修订表单里补的（挂哪份复盘由留下那一刻决定），
+ * 列进来只会给出一个按不动的待办。它缺的时候由「凭什么」展开层里那句话负责说。
+ */
+export function missingFieldsOf(experience: ApiExperience): string[] {
+  const missing: string[] = []
+  const scope = experience.applicability
+  if (!applicabilityGroups(scope).length && !scope?.time_range_note?.trim()) {
+    missing.push('适用范围')
+  }
+  const basis = experience.data_basis
+  if (!basis?.asset_count && !basis?.sample_size && !basis?.window_start && !basis?.window_end
+    && !basis?.metrics?.length && !basis?.baseline?.trim()) {
+    missing.push('数据依据')
+  }
+  const content = experience.content_basis
+  if (!content?.features?.length && !content?.example_asset_versions?.length && !content?.note?.trim()) {
+    missing.push('内容依据')
+  }
+  if (!experience.counterexamples.length) missing.push('风险与反例')
+  if (!experience.recommended_action.trim()) missing.push('建议动作')
+  return missing
 }
 
 /**

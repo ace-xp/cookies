@@ -34,6 +34,11 @@ export function FindingRow({ finding, index, editable, onDrop }: {
       }}/> : null}
       {/* 一份复盘里的发现可能来自不同时间的分析，所以标在每一条上而不是报告顶部。 */}
       {finding.verdict ? <ThresholdStamp version={finding.threshold_version}/> : null}
+      {/* 定格的日子。上面那句总的披露说了「档位不重算」，这里回答「那是哪天的判断」
+          ——两条记在同一份复盘里的发现可能差好几天，只给一句总的说明还是对不上号。 */}
+      {finding.verdict && finding.pinned_at
+        ? <small className="finding-note">按 {formatDay(finding.pinned_at)} 那天的数据判的</small>
+        : null}
       {finding.note ? <small className="finding-note">{finding.note}</small> : null}
     </div>
     {editable ? <button type="button" className="text-button"
@@ -42,4 +47,13 @@ export function FindingRow({ finding, index, editable, onDrop }: {
       {finding.dropped ? <RotateCcw size={14}/> : <Trash2 size={14}/>}
     </button> : null}
   </li>
+}
+
+// pinned_at 是带时区的时间戳，这里只要日子。判定的粒度本来就是天，
+// 精确到秒会让人以为「这一档是那一秒算的」，而它其实是那一天的数据算的。
+function formatDay(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.valueOf())
+    ? value
+    : `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`
 }

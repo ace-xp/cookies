@@ -65,6 +65,24 @@ func NewArkVideoAdapter(config ArkVideoConfig, handles OutputHandleStore) (*ArkV
 	}, nil
 }
 
+// NewArkVideoAdapterWithRoutes builds an adapter that prefers the route stored
+// by the Settings page and falls back to the environment credential when a job
+// carries no route. Both sources stay available for the process lifetime, so a
+// deployment can be configured from the UI without a restart.
+func NewArkVideoAdapterWithRoutes(config ArkVideoConfig, credentials GatewayCredentialResolver, handles OutputHandleStore) (*ArkVideoAdapter, error) {
+	if credentials == nil || handles == nil {
+		return nil, fmt.Errorf("Ark video credential resolver and output handle store are required")
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
+	if baseURL == "" {
+		baseURL = arkVideoDefaultBaseURL
+	}
+	return &ArkVideoAdapter{
+		apiKey: strings.TrimSpace(config.APIKey), model: strings.TrimSpace(config.Model), baseURL: baseURL,
+		client: &http.Client{Timeout: 3 * time.Minute}, handles: handles, credentials: credentials, now: time.Now,
+	}, nil
+}
+
 func (*ArkVideoAdapter) ProviderCode() string { return arkVideoProviderCode }
 
 func (a *ArkVideoAdapter) Submit(ctx context.Context, request VideoGenerationRequest) (VideoSubmission, error) {

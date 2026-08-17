@@ -3,10 +3,12 @@ package insights
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/shikanon/cookies/internal/platform/contract"
 )
@@ -16,13 +18,13 @@ import (
 
 func (r MySQLRepository) CreateAsset(ctx context.Context, value Asset) (Asset, error) {
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO insight_assets (
-		id, organization_id, project_id, lineage_id, revision, title,
+		id, organization_id, project_id, role, lineage_id, revision, title,
 		source_kind, source_ref, source_job_id, platform_asset_id, platform_asset_version,
 		asset_type, asset_type_source, asset_type_confidence,
 		analysis_status, analysis_status_reason, analysis_status_changed_at,
 		version, created_by, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		value.ID, value.OrganizationID, value.ProjectID, value.LineageID, value.Revision, value.Title,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		value.ID, value.OrganizationID, value.ProjectID, value.Role, value.LineageID, value.Revision, value.Title,
 		value.SourceKind, value.SourceRef, nullableString(value.SourceJobID),
 		nullableString(value.PlatformAssetID), nullableInt64(value.PlatformAssetVersion),
 		value.AssetType, value.AssetTypeSource, value.AssetTypeConfidence,
@@ -55,6 +57,12 @@ func (r MySQLRepository) ListAssets(ctx context.Context, organizationID contract
 			args = append(args, kind)
 		}
 	}
+	if len(filter.Roles) > 0 {
+		query += ` AND role IN (` + placeholders(len(filter.Roles)) + `)`
+		for _, role := range filter.Roles {
+			args = append(args, role)
+		}
+	}
 	if filter.LineageID != "" {
 		query += ` AND lineage_id = ?`
 		args = append(args, filter.LineageID)
@@ -67,6 +75,191 @@ func (r MySQLRepository) ListAssets(ctx context.Context, organizationID contract
 		args = append(args, filter.Limit)
 	}
 	return r.queryAssets(ctx, query, args...)
+}
+
+// 游标编的是排序键本身 (updated_at, id)，不是行号。中间插进来一条新素材时，
+// 已经翻过的页不会因此错位重复——这是 offset 分页做不到的。
+func encodeAssetCursor(updatedAt time.Time, id string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(updatedAt.UTC().Format(time.RFC3339Nano) + "|" + id))
+}
+
+func decodeAssetCursor(value string) (time.Time, string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("%w: 游标格式不对", ErrInvalidRequest)
+	}
+	parts := strings.SplitN(string(raw), "|", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return time.Time{}, "", fmt.Errorf("%w: 游标格式不对", ErrInvalidRequest)
+	}
+	at, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("%w: 游标里的时间读不出来", ErrInvalidRequest)
+	}
+	return at, parts[1], nil
+}
+
+// ListAssetPage 按 (updated_at, id) 游标翻页。台账和平台素材库一样大，
+// 一次取完的 ListAssets 只适合分析对象那几十条。
+func (r MySQLRepository) ListAssetPage(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, filter AssetFilter) (AssetPage, error) {
+	query := insightAssetSelect + ` WHERE organization_id = ? AND project_id = ?`
+	args := []any{organizationID, projectID}
+
+	if len(filter.Roles) > 0 {
+		query += ` AND role IN (` + placeholders(len(filter.Roles)) + `)`
+		for _, role := range filter.Roles {
+			args = append(args, role)
+		}
+	}
+	if len(filter.Statuses) > 0 {
+		query += ` AND analysis_status IN (` + placeholders(len(filter.Statuses)) + `)`
+		for _, status := range filter.Statuses {
+			args = append(args, status)
+		}
+	}
+	if len(filter.AssetTypes) > 0 {
+		query += ` AND asset_type IN (` + placeholders(len(filter.AssetTypes)) + `)`
+		for _, assetType := range filter.AssetTypes {
+			args = append(args, assetType)
+		}
+	}
+	if len(filter.SourceKinds) > 0 {
+		query += ` AND source_kind IN (` + placeholders(len(filter.SourceKinds)) + `)`
+		for _, kind := range filter.SourceKinds {
+			args = append(args, kind)
+		}
+	}
+	if filter.LineageID != "" {
+		query += ` AND lineage_id = ?`
+		args = append(args, filter.LineageID)
+	}
+	if trimmed := strings.TrimSpace(filter.Query); trimmed != "" {
+		// 只搜标题。全文检索是另一件事，台账要的只是「我记得它叫什么」。
+		query += ` AND title LIKE ? ESCAPE '\\'`
+		args = append(args, "%"+escapeLike(trimmed)+"%")
+	}
+	if filter.Cursor != "" {
+		at, id, err := decodeAssetCursor(filter.Cursor)
+		if err != nil {
+			return AssetPage{}, err
+		}
+		query += ` AND (updated_at < ? OR (updated_at = ? AND id < ?))`
+		args = append(args, at, at, id)
+	}
+
+	limit := filter.Limit
+	if limit < 1 || limit > assetPageMaxLimit {
+		limit = assetPageDefaultLimit
+	}
+	// 多要一条：拿到了就说明还有下一页，用不着再数一次总数。
+	query += ` ORDER BY updated_at DESC, id DESC LIMIT ?`
+	args = append(args, limit+1)
+
+	items, err := r.queryAssets(ctx, query, args...)
+	if err != nil {
+		return AssetPage{}, err
+	}
+	page := AssetPage{Items: items}
+	if len(items) > limit {
+		page.Items = items[:limit]
+		last := page.Items[limit-1]
+		page.NextCursor = encodeAssetCursor(last.UpdatedAt, last.ID)
+	}
+	return page, nil
+}
+
+// ListUnledgeredPlatformAssets 找出台账漏掉的素材版本。
+//
+// 跨模块直接查 project_assets / asset_versions 是有意的：这是一次性的回填命令，
+// 不是运行时通路。运行时那条走 internal/integrations/insightsledger，分层没有破。
+//
+// 从 project_assets 起手而不是 asset_versions，是因为版本表里根本没有项目：
+// 一个素材版本挂在哪个项目下，只有 project_assets 知道，而台账是按项目分的。
+// 派生物排除在外，理由和收录时一样——它们是同一个素材的另一种形态。
+//
+// 顺带把对象键取出来给台账起名：回填拿不到当初的上传文件名，对象键的最后一段
+// 往往就是它，见 ledgerObjectTitle。JOIN 而不是 LEFT JOIN——asset_versions.blob_id
+// 是 NOT NULL 且带外键，没有对应 blob 的版本行在库里不存在。
+func (r MySQLRepository) ListUnledgeredPlatformAssets(ctx context.Context, limit int) ([]UnledgeredPlatformAsset, error) {
+	rows, err := r.DB.QueryContext(ctx, `
+		SELECT pa.organization_id, pa.project_id, pa.asset_id, pa.asset_version,
+		       v.source_type, s.asset_kind, b.object_key, pa.created_at
+		FROM project_assets pa
+		JOIN asset_versions v
+		  ON v.organization_id = pa.organization_id
+		 AND v.asset_id = pa.asset_id
+		 AND v.version = pa.asset_version
+		JOIN assets s
+		  ON s.organization_id = pa.organization_id
+		 AND s.id = pa.asset_id
+		JOIN asset_blobs b
+		  ON b.id = v.blob_id
+		LEFT JOIN insight_assets a
+		  ON a.organization_id = pa.organization_id
+		 AND a.role = 'ledger'
+		 AND a.platform_asset_id = pa.asset_id
+		 AND a.platform_asset_version = pa.asset_version
+		WHERE a.id IS NULL
+		  AND v.source_type <> 'derived'
+		  AND s.asset_kind NOT IN ('document', 'text')
+		  AND v.status = 'ready'
+		  AND pa.status <> 'removed'
+		ORDER BY pa.created_at ASC, pa.asset_id ASC, pa.asset_version ASC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	values := make([]UnledgeredPlatformAsset, 0, limit)
+	for rows.Next() {
+		var value UnledgeredPlatformAsset
+		if err := rows.Scan(&value.OrganizationID, &value.ProjectID, &value.AssetID,
+			&value.Version, &value.SourceType, &value.Kind, &value.ObjectKey, &value.CreatedAt); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+// DeleteLedgerAssetsByPlatformKind 删掉台账里指向某几类平台素材的行。
+//
+// 三道闸各挡一件事，少一道都会删错东西：
+//   - role = 'ledger' —— 已经被人拉进分析的不碰，那上面挂着人做过的判断。
+//   - platform_asset_id IS NOT NULL —— 手工登记的素材没有平台来源，
+//     JOIN 不上任何一行，它不该因为「查不到类型」被顺手删掉。
+//   - EXISTS 而不是 JOIN DELETE —— 一条台账行只该被自己那条平台素材决定去留。
+func (r MySQLRepository) DeleteLedgerAssetsByPlatformKind(ctx context.Context, kinds []string) (int, error) {
+	if len(kinds) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
+	arguments := make([]any, 0, len(kinds))
+	for _, kind := range kinds {
+		arguments = append(arguments, kind)
+	}
+	result, err := r.DB.ExecContext(ctx, `
+		DELETE FROM insight_assets
+		WHERE role = 'ledger'
+		  AND platform_asset_id IS NOT NULL
+		  AND EXISTS (
+		    SELECT 1 FROM assets s
+		    WHERE s.organization_id = insight_assets.organization_id
+		      AND s.id = insight_assets.platform_asset_id
+		      AND s.asset_kind IN (`+placeholders+`)
+		  )`, arguments...)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	return int(affected), err
+}
+
+// escapeLike 把 LIKE 的三个元字符转义掉。不转义的话，搜「100%」会命中所有素材。
+func escapeLike(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
 }
 
 func (r MySQLRepository) GetAsset(ctx context.Context, organizationID contract.OrganizationID, projectID contract.ProjectID, id string) (Asset, error) {
@@ -132,6 +325,41 @@ func (r MySQLRepository) TransitionAsset(ctx context.Context, input TransitionAs
 		if txErr != nil {
 			return txErr
 		}
+		value = current
+		return nil
+	})
+	if err != nil {
+		return Asset{}, err
+	}
+	return value, nil
+}
+
+// UpdateAssetRole 换身份。乐观锁和 TransitionAsset 用同一套：版本对不上就报冲突，
+// 两个人同时把一条素材一个拉进分析一个退回台账时，后到的那个必须知道自己晚了。
+func (r MySQLRepository) UpdateAssetRole(ctx context.Context, input UpdateAssetRoleInput) (Asset, error) {
+	var value Asset
+	err := r.inTx(ctx, func(tx *sql.Tx) error {
+		current, txErr := getAssetForUpdate(ctx, tx, input.OrganizationID, input.ProjectID, input.ID)
+		if txErr != nil {
+			return txErr
+		}
+		if current.Version != input.ExpectedVersion {
+			return ErrVersionConflict
+		}
+		if current.Role == input.To {
+			value = current
+			return nil
+		}
+		if _, execErr := tx.ExecContext(ctx, `UPDATE insight_assets
+			SET role = ?, version = version + 1, updated_at = ?
+			WHERE organization_id = ? AND project_id = ? AND id = ? AND version = ?`,
+			input.To, input.Now,
+			input.OrganizationID, input.ProjectID, input.ID, input.ExpectedVersion); execErr != nil {
+			return execErr
+		}
+		current.Role = input.To
+		current.Version++
+		current.UpdatedAt = input.Now
 		value = current
 		return nil
 	})
@@ -385,7 +613,7 @@ func getAssetForUpdate(ctx context.Context, tx *sql.Tx, organizationID contract.
 	return value, err
 }
 
-const insightAssetSelect = `SELECT id, organization_id, project_id, lineage_id, revision, title, source_kind, source_ref, source_job_id, platform_asset_id, platform_asset_version, asset_type, asset_type_source, asset_type_confidence, analysis_status, analysis_status_reason, analysis_status_changed_at, version, created_by, created_at, updated_at FROM insight_assets`
+const insightAssetSelect = `SELECT id, organization_id, project_id, role, lineage_id, revision, title, source_kind, source_ref, source_job_id, platform_asset_id, platform_asset_version, asset_type, asset_type_source, asset_type_confidence, analysis_status, analysis_status_reason, analysis_status_changed_at, version, created_by, created_at, updated_at FROM insight_assets`
 const assetMappingSelect = `SELECT id, organization_id, project_id, platform, platform_object_kind, platform_object_id, platform_object_name, insight_asset_id, status, match_source, matched_by, matched_at, note, version, created_at, updated_at FROM insight_asset_mappings`
 const assetFeatureSelect = `SELECT id, organization_id, project_id, insight_asset_id, asset_type, feature_key, value_kind, value_text, value_number, value_bool, value_terms, source, confidence, review_state, skill_id, skill_version, extracted_at, version, created_by, created_at, updated_at FROM insight_asset_features`
 
@@ -394,7 +622,7 @@ func scanAsset(row rowScanner) (Asset, error) {
 	var sourceJobID, platformAssetID sql.NullString
 	var platformAssetVersion sql.NullInt64
 	var statusChangedAt sql.NullTime
-	err := row.Scan(&value.ID, &value.OrganizationID, &value.ProjectID, &value.LineageID, &value.Revision,
+	err := row.Scan(&value.ID, &value.OrganizationID, &value.ProjectID, &value.Role, &value.LineageID, &value.Revision,
 		&value.Title, &value.SourceKind, &value.SourceRef, &sourceJobID,
 		&platformAssetID, &platformAssetVersion,
 		&value.AssetType, &value.AssetTypeSource, &value.AssetTypeConfidence,

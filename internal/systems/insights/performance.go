@@ -39,10 +39,20 @@ type PerformanceAnalysis struct {
 	// 没有特征就没有变量，素材对比会退化成「两个素材谁的数字大」。
 	AssetsInWindow  int `json:"assets_in_window"`
 	AssetsWithFeats int `json:"assets_with_features"`
-	// Judgement 是屏级档位：六个视图里最弱的那一条。一屏上有一条算不出来，
-	// 这屏就不能整体标成能归因。
+	// Judgement 是**跨视图**档位：五个视图里最弱的那一条。它回答的是「这一次分析
+	// 整体能信到什么程度」，不回答「我现在看的这一屏能信到什么程度」。
+	//
+	// 页面上不要拿它当屏级徽章用——人看的是当前这一屏，而这个值里混着他没打开的
+	// 那几屏。屏级徽章一律取 ViewJudgements 里对应的那一条。
 	Judgement Judgement `json:"judgement"`
-	Notes     []string  `json:"notes,omitempty"`
+	// ViewJudgements 是每个视图**只按自己那一批结论**算出来的档位，键是视图名
+	// （comparisons / trends / fatigue / anomalies / drivers）。
+	//
+	// 为什么要单独发一份而不是让前端自己从行里取最弱：档位怎么收敛是判定规则的一
+	// 部分，规则只能有一处实现。前端各算各的，迟早出现「一行是能归因、整屏是算不
+	// 出来」这种同屏打架，而没人说得清哪个对。
+	ViewJudgements map[string]Judgement `json:"view_judgements"`
+	Notes          []string             `json:"notes,omitempty"`
 }
 
 // FeatureDiff 是两个素材之间一个特征的取值差异，也就是 AM-009 说的「实验变量」。
@@ -455,7 +465,8 @@ func buildPerformanceAnalysis(window MetricWindow, facts []MetricFactWithMapping
 	analysis.Comparisons = buildComparisons(ordered, analysis.Comparable, &analysis.Notes, thresholds)
 	analysis.Trends = buildTrends(ordered, thresholds)
 	analysis.Fatigue = buildFatigue(ordered, window, thresholds)
-	analysis.Anomalies = buildAnomalies(projectByDate, ordered, thresholds)
+	anomalies, anomalyCoverage := buildAnomalies(projectByDate, ordered, thresholds)
+	analysis.Anomalies = anomalies
 	analysis.Drivers = buildDrivers(ordered, analysis.Comparable, thresholds)
 
 	if analysis.AssetsInWindow == 0 {
@@ -467,7 +478,18 @@ func buildPerformanceAnalysis(window MetricWindow, facts []MetricFactWithMapping
 		analysis.Notes = append(analysis.Notes, "口径不一致："+analysis.ComparableReason+"。这一页所有对比结论都只能当方向性观察。")
 	}
 
-	// 屏级档位取最弱：六个视图里只要有一个说算不出来，整屏就不能标成能归因。
+	// 先按视图各算各的，再把五份合成跨视图那一份。反过来做（先算总的再拆）会
+	// 丢掉「这一屏一条结论都没有」和「这一屏的结论都很弱」的区别。
+	analysis.ViewJudgements = map[string]Judgement{
+		"comparisons": viewJudgement("comparisons", verdictsOf(analysis.Comparisons, func(item VariantComparison) Judgement { return item.Judgement }), thresholds),
+		"trends":      viewJudgement("trends", verdictsOf(analysis.Trends, func(item AssetTrend) Judgement { return item.Judgement }), thresholds),
+		"fatigue":     viewJudgement("fatigue", verdictsOf(analysis.Fatigue, func(item FatigueSignal) Judgement { return item.Judgement }), thresholds),
+		"anomalies":   anomalyViewJudgement(verdictsOf(analysis.Anomalies, func(item MetricAnomaly) Judgement { return item.Judgement }), anomalyCoverage, thresholds),
+		"drivers":     viewJudgement("drivers", verdictsOf(analysis.Drivers, func(item FeatureDriver) Judgement { return item.Judgement }), thresholds),
+	}
+
+	// 跨视图档位取最弱：整次分析里只要有一屏说算不出来，这次分析整体就不能说成
+	// 能归因。它出现在「这一页怎么读」里，不出现在屏级徽章上。
 	verdicts := make([]Verdict, 0, len(analysis.Comparisons)+len(analysis.Trends)+
 		len(analysis.Fatigue)+len(analysis.Anomalies)+len(analysis.Drivers))
 	for _, item := range analysis.Comparisons {
@@ -492,29 +514,119 @@ func buildPerformanceAnalysis(window MetricWindow, facts []MetricFactWithMapping
 		Verdict:      weakest,
 		VerdictLabel: weakest.Label(),
 		Upgrade:      weakest.Upgrade(),
-		Note:         screenNote(weakest, len(verdicts)),
-		// 屏级是页面上唯一挂标注的地方，这个号码不能空。这里手拼 Judgement 而不
-		// 走 judgeAt，是因为屏级档位由六视图取最弱算出来，不是从一个 confidence
-		// 收敛来的——套 judgeAt 会把已经算好的 weakest 覆盖掉。
+		Note:         crossViewNote(weakest, len(verdicts)),
+		// 跨视图那一份也要盖号码：它同样是「按某一版标准算出来的」。这里手拼
+		// Judgement 而不走 judgeAt，是因为它由五视图取最弱算出来，不是从一个
+		// confidence 收敛来的——套 judgeAt 会把已经算好的 weakest 覆盖掉。
 		ThresholdVersion: &screenThresholdVersion,
 	}
 	return analysis
 }
 
-// worstConfidenceOf 给屏级档位配一个统计口径值，让 confidence 和 verdict 不打架。
+// verdictsOf 把一个视图里每一行的判定摘出来。泛型是为了不给五个视图各写一遍
+// 同样的 for 循环——那种重复最容易在加第六个视图时漏掉一个。
+func verdictsOf[T any](items []T, pick func(T) Judgement) []Judgement {
+	out := make([]Judgement, 0, len(items))
+	for _, item := range items {
+		out = append(out, pick(item))
+	}
+	return out
+}
+
+// viewJudgement 给单个视图定档：只看这一屏自己的结论，取最弱的那一条。
+//
+// 一条结论都没有时给 unclear，理由用这个视图专属的那句——「这一屏里有结论连差异
+// 存不存在都判断不了」安到一条结论都没有的屏上是答非所问。
+func viewJudgement(view string, items []Judgement, thresholds ResolvedThresholds) Judgement {
+	verdicts := make([]Verdict, 0, len(items))
+	worst := ConfidenceSufficient
+	seen := false
+	for _, item := range items {
+		verdicts = append(verdicts, item.Verdict)
+		if !seen || confidenceRank(item.Confidence) < confidenceRank(worst) {
+			worst, seen = item.Confidence, true
+		}
+	}
+	if !seen {
+		worst = ConfidenceLowSample
+	}
+	weakest := weakestVerdict(verdicts...)
+	version := thresholds.Version
+	return Judgement{
+		Confidence:       worst,
+		Verdict:          weakest,
+		VerdictLabel:     weakest.Label(),
+		Upgrade:          weakest.Upgrade(),
+		Note:             viewNote(view, weakest, len(verdicts)),
+		ThresholdVersion: &version,
+	}
+}
+
+// viewNote 是屏级徽章上那句话。主语必须是「这一屏」，而且要说清这一屏自己的情况。
+func viewNote(view string, verdict Verdict, items int) string {
+	if items == 0 {
+		return viewEmptyNotes[view]
+	}
+	switch verdict {
+	case VerdictExplained:
+		return "这一屏的结论都站得住，可以直接用。"
+	case VerdictObserved:
+		return "这一屏里有结论归不到具体变量上，只能当观察看。"
+	}
+	return "这一屏里有结论连差异存不存在都判断不了。"
+}
+
+// anomalyViewJudgement 是异常屏专属的定档。别的四屏「一条都没有」只有一个意思
+// ——算不出来；异常屏不是：它零条的常见含义恰恰是**查过了，很干净**，那是一条
+// 站得住的结论，不该顶着「❓ 算不出来」发出去（人会以为检测坏了，或者以为
+// 这屏还没跑）。所以这里按覆盖情况分开定档，而不是沿用 viewJudgement 的空态。
+func anomalyViewJudgement(items []Judgement, scan anomalyScan, thresholds ResolvedThresholds) Judgement {
+	if len(items) > 0 {
+		return viewJudgement("anomalies", items, thresholds)
+	}
+	if !scan.covered() {
+		// 没查成的原因要说对。天数够了但每天数字一模一样，跟天数不够是两件事，
+		// 后者再等几天就有，前者等多久都不会有——这批数据本身没有波动可言。
+		if scan.FlatAssets > 0 || scan.ProjectFlat {
+			return judgeAt(thresholds, ConfidenceLowSample,
+				"窗口内的数字每天一模一样，没有起伏就没有「常态」可言，偏离也就无从算起——这种序列通常是补录或按均值摊出来的。"+
+					"这一屏空着不代表没问题，是没查成。")
+		}
+		return judgeAt(thresholds, ConfidenceLowSample, fmt.Sprintf(
+			"窗口内还没有序列跑够 %d 天，这项判断没做成——这一屏是空的不代表没问题，是根本没查。",
+			thresholds.MinAnomalyDays))
+	}
+	if skipped := scan.skipped(); skipped > 0 {
+		return judgeAt(thresholds, ConfidenceSufficient, fmt.Sprintf(
+			"查过了，这个窗口里没有哪一天偏离常态。另有 %d 个素材没参与这项检查（天数不够 %d 天，或者整段数字没有起伏）。",
+			skipped, thresholds.MinAnomalyDays))
+	}
+	return judgeAt(thresholds, ConfidenceSufficient, "查过了，这个窗口里没有哪一天偏离常态。")
+}
+
+// viewEmptyNotes 说的是「这一屏为什么一条都没有」，不是「这一屏的结论很弱」。
+// 前端的空态提示和这里保持同一口径。
+//
+// 每条都带一句「怎么补」：空态最容易被读成「这个功能坏了」，写清缺什么、去哪补，
+// 人才有下一步。前端不再另写一份——两份文案迟早不一致。
+var viewEmptyNotes = map[string]string{
+	"comparisons": "这一屏没有可配对的素材，比不出任何差异。要配对得有同一类型下至少两个素材、且都在这个窗口里有投放数据。",
+	"trends":      "这一屏没有素材跑够可比较的时间，算不出走势。先确认这个窗口里有素材在投，数据也回流了。",
+	"fatigue":     "这一屏没有素材跑够两段可比较的时间，判断不了跑不跑得动。同一条素材至少要连着投上几天。",
+	// 异常屏的空态正常走 anomalyViewJudgement，不落到这里。留一条兜底文案是
+	// 防它哪天被别的路径调到——那时也不能说成「没发现」，因为查没查过还不知道。
+	"anomalies": "这一屏没有列出偏离常态的日子。",
+	"drivers":   "这一屏还没有足够的特征数据，谈不上哪个特征在起作用。要么素材还没记内容特征，要么同一取值下的素材不足 2 个——去「素材 · 变量」补。",
+}
+
+// worstConfidenceOf 给跨视图档位配一个统计口径值，让 confidence 和 verdict 不打架。
 // 三档是从四档收敛来的，反过来一个 verdict 对应不止一个 confidence，
 // 这里取「最能解释为什么是这一档」的那个。
 func worstConfidenceOf(analysis PerformanceAnalysis) ConfidenceLevel {
 	worst := ConfidenceSufficient
-	rank := map[ConfidenceLevel]int{
-		ConfidenceLowSample:   0,
-		ConfidenceConfounded:  1,
-		ConfidenceDirectional: 2,
-		ConfidenceSufficient:  3,
-	}
 	seen := false
 	visit := func(level ConfidenceLevel) {
-		if !seen || rank[level] < rank[worst] {
+		if !seen || confidenceRank(level) < confidenceRank(worst) {
 			worst, seen = level, true
 		}
 	}
@@ -539,17 +651,19 @@ func worstConfidenceOf(analysis PerformanceAnalysis) ConfidenceLevel {
 	return worst
 }
 
-func screenNote(verdict Verdict, items int) string {
+// crossViewNote 说的是整次分析，不是某一屏。主语必须是「这次分析」——写成
+// 「这一屏」的话，它出现在任何一个视图上都在替那一屏说话，而它算的是五屏之和。
+func crossViewNote(verdict Verdict, items int) string {
 	if items == 0 {
 		return "这个窗口里还没有能出结论的数据。"
 	}
 	switch verdict {
 	case VerdictExplained:
-		return "这一屏的结论都站得住，可以直接用。"
+		return "这次分析的五个视图里，每一条结论都站得住。"
 	case VerdictObserved:
-		return "这一屏里有结论归不到具体变量上，只能当观察看。"
+		return "这次分析里有结论归不到具体变量上，它们可能不在你当前这一屏。"
 	}
-	return "这一屏里有结论连差异存不存在都判断不了。"
+	return "这次分析里有结论连差异存不存在都判断不了，它们可能不在你当前这一屏。"
 }
 
 // assignFeatures 把特征贴到素材上。同一个 key 有 AI 行和人工行时以人工为准
@@ -767,6 +881,19 @@ func compareAssets(baseline, variant *assetSlice, comparable bool,
 		result.Judgement = judgeAt(thresholds, ConfidenceDirectional,
 			fmt.Sprintf("只改了「%s」，区间也不重叠，但样本还没到 %s 次展示的充分门槛。",
 				admissible[0].Label, countText(int64(thresholds.SufficientImpressions))))
+	case result.ControlledCount == 0:
+		// 「只改了一个变量」这句话是靠受控变量撑起来的：两边还有别的特征、而且取值
+		// 相同，才谈得上「别的都没动」。一个受控变量都没有，说明两条素材身上各自
+		// 只记着这一个能比的特征——差异确实存在，但把它归到这个变量上，等于用
+		// 「我们只量了这一个」冒充「只有这一个不一样」。
+		//
+		// 这一档不是样本问题，补数据也不会变成 ✅：要升上去得先把两边的内容变量
+		// 补齐（人工确认过的那种），让「其余特征相同」这句话真的有东西撑着。
+		result.VariantVerdict = VerdictDirectional
+		result.Judgement = judgeAt(thresholds, ConfidenceDirectional,
+			fmt.Sprintf("只改了「%s」，样本也够、区间也不重叠，但两边再没有第二个能对上的特征"+
+				"——除了这一个，别的地方是不是也不一样，现在判断不了。先去「素材 · 变量」把两条素材的变量补齐再看。",
+				admissible[0].Label))
 	default:
 		result.VariantVerdict = VerdictAttributable
 		result.Judgement = judgeAt(thresholds, ConfidenceSufficient,
@@ -979,9 +1106,36 @@ func floatOf(value int64) *float64 {
 
 // --- 异常（20 §4.1「错误与延迟置顶」）---
 
+// anomalyScan 记的是这一轮异常检测**到底查过什么**。
+//
+// 零条异常有两种截然相反的含义：查过了、这个窗口很干净；和一条序列都没跑够天数、
+// 根本没查成。不把它记下来的话，屏级徽章只能一律给「❓ 算不出来」，于是一屏
+// 干净数据被说成没查成——人会以为异常检测坏了，而它其实正常跑完了。
+type anomalyScan struct {
+	// ProjectScanned 项目级花费序列是否真的跑过判定（天数够且有波动可言）。
+	ProjectScanned bool
+	// ProjectFlat 项目级天数够了，但整段花费一点波动都没有。
+	ProjectFlat bool
+	// ScannedAssets 跑过判定的素材条数。
+	ScannedAssets int
+	// ShortAssets 天数不够门槛、没参与判定的素材条数。
+	ShortAssets int
+	// FlatAssets 天数够了、但整段曝光一点波动都没有的素材条数。
+	//
+	// 这两种「没查成」要分开记，因为给人的下一步完全不同：天数不够是再等几天，
+	// 没有波动是这批数据本身有问题（补录、按均值摊）。混成一句「天数不够」，
+	// 会让人对着一条跑满 7 天的素材看到「还没跑够 5 天」。
+	FlatAssets int
+}
+
+func (s anomalyScan) covered() bool { return s.ProjectScanned || s.ScannedAssets > 0 }
+
+func (s anomalyScan) skipped() int { return s.ShortAssets + s.FlatAssets }
+
 func buildAnomalies(projectByDate map[string]MetricCounts, ordered []*assetSlice,
-	thresholds ResolvedThresholds) []MetricAnomaly {
+	thresholds ResolvedThresholds) ([]MetricAnomaly, anomalyScan) {
 	thresholds = thresholds.orDefaults()
+	scan := anomalyScan{}
 	anomalies := make([]MetricAnomaly, 0, 8)
 	dates := make([]string, 0, len(projectByDate))
 	for date := range projectByDate {
@@ -995,7 +1149,11 @@ func buildAnomalies(projectByDate map[string]MetricCounts, ordered []*assetSlice
 	}
 	median, mad := medianAndMAD(spends)
 	// 少于这么多天没有「常态」可言，算出来的异常全是噪声。
+	if len(dates) >= thresholds.MinAnomalyDays && mad <= 0 {
+		scan.ProjectFlat = true
+	}
 	if len(dates) >= thresholds.MinAnomalyDays && mad > 0 {
+		scan.ProjectScanned = true
 		for index, date := range dates {
 			deviation := math.Abs(spends[index]-median) / mad
 			if deviation < anomalyMADMultiple {
@@ -1025,6 +1183,7 @@ func buildAnomalies(projectByDate map[string]MetricCounts, ordered []*assetSlice
 	for _, slice := range ordered {
 		dates := slice.dates()
 		if len(dates) < thresholds.MinAnomalyDays {
+			scan.ShortAssets++
 			continue
 		}
 		impressions := make([]float64, 0, len(dates))
@@ -1034,9 +1193,12 @@ func buildAnomalies(projectByDate map[string]MetricCounts, ordered []*assetSlice
 		assetMedian, assetMAD := medianAndMAD(impressions)
 		if assetMAD <= 0 {
 			// 常态一点波动都没有，说明这是被四舍五入或补录填出来的序列，
-			// 拿它当基准算偏离只会得到一堆假阳性。
+			// 拿它当基准算偏离只会得到一堆假阳性。这条也算「没查成」，
+			// 但原因和天数不够不是一回事，分开记。
+			scan.FlatAssets++
 			continue
 		}
+		scan.ScannedAssets++
 		// 每条素材每个方向只留偏离最大的那一天，其余的折进备注里。
 		//
 		// 这不是为了让列表短。整窗中位数对「台阶」不稳健：一条素材中途加了个投放
@@ -1113,7 +1275,7 @@ func buildAnomalies(projectByDate map[string]MetricCounts, ordered []*assetSlice
 		}
 		return anomalies[i].Date < anomalies[j].Date
 	})
-	return anomalies
+	return anomalies, scan
 }
 
 // medianAndMAD 返回中位数和中位数绝对偏差。用 MAD 而不是标准差：

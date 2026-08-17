@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CalendarRange, CircleAlert, CircleCheck, Database, RefreshCw } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
 import { api, type ApiExperience, type ApiInsightReport } from '../../../data/api'
+import { shortId } from '../../../data/shortId'
 import type { DataState } from '../../../types'
 import { StateBoundary } from '../../StateBoundary'
 import { DraftPanel } from './DraftPanel'
@@ -10,13 +11,13 @@ import { DraftPanel } from './DraftPanel'
  * 「复盘」入口。一轮投放收尾时人真正要做事的地方。
  *
  * 一屏干一件事：左边挑一份复盘，右边看「这一轮我记的」和「系统补的」，
- * 逐条决定留不留，然后提交。提交之后这份复盘冻住，才谈得上沉淀经验。
+ * 逐条决定留不留，然后提交。提交之后这份复盘冻住，才谈得上留成经验。
  *
  * 三个视图分的是「现在要做什么」，不是「按什么排序」：
  *   本轮     —— 只列还没提交的草稿，这是日常最常进的一屏；
  *   全部复盘 —— 含已提交的，用来回头查一轮投放当时是怎么判的；
- *   已沉淀经验 —— 查的不是报告而是经验按 report_id 的归属，答的是
- *                「这些复盘最后到底留下了什么」。一份提交了却没沉淀出
+ *   留下的经验 —— 查的不是报告而是经验按 report_id 的归属，答的是
+ *                「这些复盘最后到底留下了什么」。一份提交了却没留下
  *                任何经验的复盘，等于这次收尾白做了，这个视图专门让它显出来。
  */
 export type ReviewView = 'current' | 'all' | 'harvest'
@@ -35,14 +36,14 @@ const headings: Record<ReviewView, { label: string; title: string; lead: string 
   harvest: {
     label: 'REVIEW · HARVEST',
     title: '这些复盘最后留下了什么',
-    lead: '按复盘看它沉淀出的经验。一份已确认却一条经验都没沉淀的报告，说明这次复盘的结论没人愿意为它背书——这比没做复盘更值得注意。',
+    lead: '按复盘看它留下了哪些经验。一份已确认却一条经验都没留下的报告，说明这次复盘的结论没人愿意为它背书——这比没做复盘更值得注意。',
   },
 }
 
 const emptyHints: Record<ReviewView, string> = {
   current: '这一轮还没有复盘草稿。去「分析」里看，看到值得留的按「记一笔」，草稿会自动建出来。',
   all: '这个 Project 还没有复盘。复盘从「记一笔」开始，不是等系统生成的。',
-  harvest: '还没有提交过的复盘。提交之后才能从它沉淀经验。',
+  harvest: '还没有提交过的复盘。提交之后才能从它留下经验。',
 }
 
 export function ReviewPage({ state, view, objectId }: {
@@ -80,8 +81,8 @@ export function ReviewPage({ state, view, objectId }: {
   useEffect(() => { void load() }, [load])
   useEffect(() => { setNotice('') }, [view])
 
-  // 一份复盘沉淀出的经验按 report_id 归属。三个视图都要用它：
-  // 「沉淀了几条」是判断一次收尾有没有落地的唯一依据。
+  // 一份复盘留下的经验按 report_id 归属。三个视图都要用它：
+  // 「留下了几条」是判断一次收尾有没有落地的唯一依据。
   const harvested = useMemo(() => {
     const map = new Map<string, ApiExperience[]>()
     experiences.forEach(experience => {
@@ -108,6 +109,17 @@ export function ReviewPage({ state, view, objectId }: {
 
   const selected = visible.find(report => report.id === selectedId)
 
+  // 同一个窗口可以有不止一份复盘：提交完之后又看到值得留的结论，再按「记一笔」
+  // 开出来的是下一份草稿，老的那份定格留档。不点破的话，人在「本轮」看到一份
+  // 只有一条发现的草稿，会以为上次提交的东西丢了。
+  const sameWindow = useMemo(() => {
+    if (!selected?.window_start || !selected.window_end) return []
+    return reports.filter(report => report.id !== selected.id
+      && report.window_start === selected.window_start && report.window_end === selected.window_end)
+  }, [reports, selected])
+  const earlierConfirmed = sameWindow.filter(report => report.status === 'confirmed').length
+  const laterDraft = sameWindow.some(report => report.status === 'draft')
+
   const draftCount = reports.filter(report => report.status === 'draft').length
   const barrenCount = reports.filter(report =>
     report.status === 'confirmed' && !(harvested.get(report.id)?.length)).length
@@ -129,15 +141,15 @@ export function ReviewPage({ state, view, objectId }: {
           </div>
         </div>
 
-        {/* 已提交却没沉淀出经验的复盘，是这一页最该被看见的事：做了，什么也没留下。 */}
+        {/* 已提交却一条经验都没留下的复盘，是这一页最该被看见的事：做了，什么也没留下。 */}
         {view === 'harvest' && barrenCount > 0 ? <div className="feature-stack">
-          <span>有 {barrenCount} 份已提交的复盘没沉淀出任何经验</span>
+          <span>有 {barrenCount} 份已提交的复盘一条经验都没留下</span>
           <b>提交只表示「这一轮的账算清了」，不表示有人愿意把它当成下一轮的依据。这几份复盘的结论目前不会出现在投前洞察里。</b>
         </div> : null}
 
         <div className="prelaunch-filterbar">
           <span>{visible.length} 份复盘</span>
-          <span>全项目 {reports.length} 份 · 未提交 {draftCount} 份 · 已沉淀经验 {experiences.filter(item => item.report_id).length} 条</span>
+          <span>全项目 {reports.length} 份 · 未提交 {draftCount} 份 · 留下的经验 {experiences.filter(item => item.report_id).length} 条</span>
         </div>
 
         {listState === 'loading' ? <div className="panel-empty">正在读取当前 Project 的复盘…</div> : null}
@@ -146,13 +158,15 @@ export function ReviewPage({ state, view, objectId }: {
 
         {listState === 'ready' && visible.length ? <div className="prelaunch-table" role="list" aria-label={heading.title}>
           <div className="prelaunch-row header">
-            <span>复盘</span><span>数据窗口</span><span>沉淀经验</span><span>状态</span>
+            <span>复盘</span><span>数据窗口</span><span>留下的经验</span><span>状态</span>
           </div>
           {visible.map(report => <button role="listitem" key={report.id}
             className={report.id === selectedId ? 'prelaunch-row active' : 'prelaunch-row'}
-            onClick={() => setSelectedId(report.id)}>
+            /* 人自己换一份复盘时把回执清掉：那句「已提交」说的是刚才那一份，
+               挂在另一份旁边就成了错的。提交后的自动跳转不走这里，所以回执留得住。 */
+            onClick={() => { setSelectedId(report.id); setNotice('') }}>
             <span>
-              <b>{report.summary || '（这一轮还没写摘要）'}</b>
+              <b>{reportTitle(report)}</b>
               <small>记了 {countPinned(report)} 笔 · {formatTime(report.created_at)}</small>
             </span>
             <span>{report.window_start && report.window_end
@@ -172,7 +186,7 @@ export function ReviewPage({ state, view, objectId }: {
           <span className="section-label">
             {selected.status === 'confirmed' ? '已提交' : '未提交'} · 第 {selected.version} 版
           </span>
-          <h3>{selected.summary || '（这一轮还没写摘要）'}</h3>
+          <h3>{reportTitle(selected)}</h3>
 
           {/* 模拟投放要说在最前面：它的结论不能和真实投放的结论平起平坐。 */}
           {selected.is_simulated ? <div className="prelaunch-boundary">
@@ -180,7 +194,26 @@ export function ReviewPage({ state, view, objectId }: {
             <span>
               <small>这是模拟投放的复盘</small>
               数据来自演示数据集 {selected.dataset_version || '（未标版本）'}，不是任何一次真实投放的结果。
-              从它沉淀出的经验同样只是演示，不能作为真实决策依据。
+              从它留下的经验同样只是演示，不能作为真实决策依据。
+            </span>
+          </div> : null}
+
+          {/* 这个窗口上还有别的复盘。两个方向都要说：手上是新草稿时，得知道
+              「上次提交的没丢，在这个窗口的已提交里」；手上是已提交的那份时，
+              得知道「后来又开了一份，别以为这份就是最新结论」。 */}
+          {selected.status === 'draft' && earlierConfirmed > 0 ? <div className="prelaunch-boundary">
+            <CircleAlert size={16}/>
+            <span>
+              <small>这个窗口之前已经提交过 {earlierConfirmed} 份复盘</small>
+              提交过的不能再改，所以这一笔记进了新的一份草稿。老的那几份在「全部复盘」里，
+              它们留下的经验也照样在用——这份提交之后，两份并存，不会互相覆盖。
+            </span>
+          </div> : null}
+          {selected.status === 'confirmed' && laterDraft ? <div className="prelaunch-boundary">
+            <CircleAlert size={16}/>
+            <span>
+              <small>这个窗口后来又开了一份草稿</small>
+              有人在这份提交之后又记了新的东西。要看这一轮最新的判断，去「本轮」。
             </span>
           </div> : null}
 
@@ -192,20 +225,59 @@ export function ReviewPage({ state, view, objectId }: {
 
           {selected.status === 'confirmed' ? <div className="prelaunch-fact">
             <Database size={17}/><span><small>这一轮算哪次投放</small><b>
-              执行 {selected.execution_id || '未记录'} ·
+              {/* 没挂就明写「没挂」，不写「未记录」——后者听上去像系统漏了，
+                  人会去找那个丢掉的 ID；实际是提交的人选了不挂，那是个有效的答案。 */}
+              {/* 分隔符写成表达式：JSX 会把「· 换行 缩进」末尾那段空白连同换行一起吃掉，
+                  直接换行写出来的是「·user_local」，中间那个空格在页面上不存在。 */}
+              {selected.execution_id ? `执行 ${shortId(selected.execution_id)}` : '没挂投放执行（这一轮没有对应的投放）'}
+              {' · '}
               {selected.confirmed_by || '某人'} 于 {selected.confirmed_at ? formatTime(selected.confirmed_at) : '（时间未记录）'} 提交
             </b></span>
           </div> : null}
 
-          {/* 经验条数这一行由沉淀区自己给——它就在「沉淀为待确认经验」那个按钮下面，
-              说的是刚刚按下去会发生什么。草稿态还没法沉淀，这里再挂一个永远是 0 的
+          {/* 经验条数这一行由「留成经验」那一段自己给——它就在那个按钮下面，
+              说的是刚刚按下去会发生什么。草稿态还留不成经验，这里再挂一个永远是 0 的
               计数只会让人以为哪里出了问题。 */}
-          <DraftPanel report={selected} projectId={currentProject.id} onChanged={() => { void load() }}/>
+          {/* 提交成功要有回执。在「本轮」里提交完，这份立刻从列表消失、选中跳到
+              另一份草稿——不说一句的话，人看到的是「我点了提交，然后我那份没了」。
+              而提交恰恰是这一页唯一不可逆的动作，最不该让人怀疑它有没有成。
+
+              回执里用窗口指认这一份，不用 reportTitle：传给 onSubmitted 的是**提交前**
+              那一份，摘要是这次提交才写上去的，它身上还没有——套 reportTitle 会对着一份
+              刚提交完的复盘说「草稿，提交时写摘要」。 */}
+          <DraftPanel report={selected} projectId={currentProject.id}
+            onChanged={() => { void load() }}
+            onSubmitted={submitted => {
+              const window = submitted.window_start && submitted.window_end
+                ? `${formatDay(submitted.window_start)} ~ ${formatDay(submitted.window_end)} 这一轮的复盘`
+                : '这份复盘'
+              setNotice(view === 'current'
+                ? `已提交，${window}冻住了，不能再改。它已经不在「本轮」里——去「全部复盘」能看到它，也是在那里把它的结论留成经验。`
+                : `已提交，${window}冻住了，不能再改。下面可以把它的结论留成经验。`)
+            }}/>
         </> : <div className="panel-empty">左边选一份复盘，看这一轮记了什么、系统补了什么。</div>}
         {notice ? <div className="inline-notice" role="status">{notice}</div> : null}
       </aside>
     </div>
   </StateBoundary>
+}
+
+/**
+ * 一份复盘在列表和详情里怎么称呼。
+ *
+ * 摘要是提交时写的，草稿本来就还没有——对草稿说「还没写摘要」像是在指人漏了什么，
+ * 而他压根还没到能写的那一步。已提交的没有摘要才是真的少了东西，但也不能再补了，
+ * 所以这里退回到窗口：至少「7 月 1 日 ~ 7 月 14 日那份」还能把它认出来。
+ */
+function reportTitle(report: ApiInsightReport): string {
+  if (report.summary) return report.summary
+  const window = report.window_start && report.window_end
+    ? `${formatDay(report.window_start)} ~ ${formatDay(report.window_end)}`
+    : ''
+  if (report.status !== 'confirmed') {
+    return window ? `${window} 这一轮（草稿，提交时写摘要）` : '这一轮（草稿，提交时写摘要）'
+  }
+  return window ? `${window} 这一轮（提交时没写摘要）` : '（提交时没写摘要）'
 }
 
 function countPinned(report: ApiInsightReport): number {

@@ -1970,7 +1970,13 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .prelaunch-row > span:first-child b { font-size: 11px; }
 .prelaunch-row > span:first-child small { margin-top: 5px; color: var(--muted); font-size: 9px; }
 .prelaunch-row > span:last-child { display: flex; align-items: center; gap: 5px; color: var(--success); font-weight: 650; }
+/* 右栏没东西可放时整页并成一栏。留着一条空栏的话，主栏永远只有三分之二宽，
+   而那三分之一里什么都没有。 */
+.prelaunch-workspace.is-solo { grid-template-columns: minmax(0, 1fr); }
+.prelaunch-workspace.is-solo .prelaunch-main { border-right: 0; }
 .prelaunch-detail { padding: 22px; }
+.prelaunch-detail-head { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.prelaunch-detail-head .section-label { margin-bottom: 0; }
 .prelaunch-detail h3 { margin-top: 7px; font-size: 17px; line-height: 1.4; }
 .prelaunch-detail > p { margin-top: 6px; color: var(--muted); font-size: 10px; }
 .prelaunch-fact { display: grid; grid-template-columns: 24px 1fr; gap: 9px; padding: 16px 0; border-bottom: 1px solid var(--line); }
@@ -2053,6 +2059,11 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .freeze-pick small { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; }
 .freeze-pick select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 10px; }
 .freeze-pick select:focus { border-color: var(--cobalt); outline: none; }
+.freeze-pick input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 10px; }
+.freeze-pick input:focus { border-color: var(--cobalt); outline: none; }
+/* 控件后面那一句是补充说明，得往下贴；控件前面那一句是标题，往上贴。 */
+.freeze-pick input + small, .freeze-pick select + small { margin: 5px 0 0; line-height: 1.6; }
+.freeze-pick-warn { color: var(--danger); }
 /* 经验修订表单。字段多，两列排；输入框沿用 .experience-reason 的口径，
    免得同一屏里出现两种粗细的框。 */
 .experience-revise { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
@@ -6078,18 +6089,26 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 
 /* 总览。左右两栏不只是分类，是两种所有权，所以中间那道竖线要看得见。 */
 .assets-overview { display: grid; gap: 18px; padding: 20px 24px 24px; }
-.assets-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 1px solid var(--line); background: var(--surface); }
-.assets-column { min-width: 0; padding: 16px 18px; border-right: 1px solid var(--line); }
-.assets-column:last-child { border-right: 0; }
+.assets-panel { border: 1px solid var(--line); background: var(--surface); }
+.assets-column { min-width: 0; padding: 16px 18px; }
+/* 外部证据在总览上只剩这一条去处：报个数、说清它算不算在结论里，然后让路。 */
+.assets-crosslink { display: flex; width: 100%; gap: 10px; align-items: center; padding: 12px 16px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 10px; text-align: left; }
+.assets-crosslink > span { margin-right: auto; }
+.assets-crosslink:hover { background: var(--subtle); color: var(--text); }
 .assets-column-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
 .assets-column-head .section-label { margin-bottom: 0; margin-right: auto; }
 .assets-column-lead { margin-top: 8px; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .assets-mini-list { display: grid; margin: 10px 0 0; padding: 0; list-style: none; }
 .assets-mini-list > li { border-bottom: 1px solid var(--line); }
 .assets-mini-list > li:last-child { border-bottom: 0; }
-.assets-mini-list button, .assets-mini-list > li > span { display: grid; width: 100%; gap: 2px; padding: 8px 6px; background: transparent; text-align: left; }
-.assets-mini-list b { font-size: 10px; }
+/* 标题一列吃掉剩下的宽度，状态贴右边。两样东西排一行，八条素材只占八行——
+   状态挂在第二行的话，同样的清单要占十六行，一屏就装不下了。 */
+.assets-mini-list button, .assets-mini-list > li > span { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; gap: 10px; align-items: center; padding: 8px 6px; background: transparent; text-align: left; }
+.assets-mini-list b { min-width: 0; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .assets-mini-list small { color: var(--muted); font-size: 9px; }
+.assets-mini-tag { font-size: 9px; font-style: normal; white-space: nowrap; color: var(--muted); }
+.assets-mini-tag.tone-ready { color: var(--success); }
+.assets-mini-tag.tone-bad { color: var(--danger); }
 .assets-mini-list button:hover { background: var(--subtle); }
 .assets-mini-list button.active { background: var(--cobalt-soft); color: var(--cobalt-dark); }
 .assets-column .prelaunch-boundary { margin: 10px 0 0; }
@@ -6115,19 +6134,18 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 /* 落点行：上面两栏说「有什么」，这一行说「其中能真的拿去解释的有几条」。 */
 .assets-converge { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 13px 18px; border: 1px solid var(--line); background: var(--cobalt-soft); color: var(--cobalt-dark); font-size: 11px; }
 .assets-converge > svg { color: var(--cobalt); }
-.assets-converge > span { margin-right: auto; }
-.assets-converge b { font-size: 15px; }
+.assets-converge > span { margin-right: auto; font-size: 12px; }
 
-/* 三个队列。顺序就是优先级，红色那条永远第一。 */
-.assets-queues { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.assets-queue { display: grid; align-content: start; gap: 7px; padding: 14px 15px; border: 1px solid var(--line); border-top: 2px solid var(--line-strong); background: var(--surface); }
-.assets-queue.urgent { border-top-color: var(--danger); background: oklch(.985 .012 25); }
-.assets-queue.urgent strong { color: var(--danger); }
-.assets-queue-head { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
-.assets-queue-head strong { font-size: 12px; }
-.assets-queue-head .secondary-button { height: 26px; padding: 0 10px; font-size: 9px; }
-.assets-queue > p { color: var(--muted); font-size: 9px; line-height: 1.65; }
-.assets-queue > small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+/* 要处理的事。一件一行，一件也没有时这一块整个不渲染——不留空盒子，
+   否则「什么都没有」也会占掉一块地方，等于四个 0 换了个样子。 */
+.assets-alerts { display: grid; gap: 8px; }
+.assets-alert { display: flex; flex-wrap: wrap; gap: 11px; align-items: center; padding: 11px 15px; border: 1px solid var(--line); border-left: 3px solid var(--warning); background: oklch(.985 .028 88); font-size: 11px; }
+.assets-alert > svg { flex: none; color: var(--warning); }
+.assets-alert > span { margin-right: auto; }
+.assets-alert.urgent { border-left-color: var(--danger); background: oklch(.985 .012 25); }
+.assets-alert.urgent > svg { color: var(--danger); }
+.assets-alert .secondary-button { height: 27px; padding: 0 11px; font-size: 9px; }
+.assets-alert-detail { display: grid; gap: 4px; padding: 0 18px; color: var(--muted); font-size: 9px; line-height: 1.55; }
 
 /* 找相似。 */
 .similar-view { display: grid; padding: 18px 24px 24px; }
@@ -6164,6 +6182,12 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .external-purpose { padding: 2px 8px; border-radius: 999px; background: var(--cobalt-soft); color: var(--cobalt-dark); font-size: 9px; font-weight: 650; }
 /* 到期日单独一行、不缩成灰字：原件被清掉之前，这是唯一的提醒。 */
 .external-retention { color: var(--warning); font-size: 9px; font-weight: 650; }
+/* 变量列表是这条证据的实际内容。原件被清掉之后它就是全部，所以给它正文的颜色，
+   不缩成灰字——灰字读起来像元信息，而这几行才是人当初收它的理由。 */
+.external-features { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 2px 0 0; padding: 0; list-style: none; }
+.external-features > li { padding: 2px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--subtle); color: var(--text); font-size: 9px; }
+.external-features > li > b { margin-right: 5px; color: var(--muted); font-weight: 650; }
+.external-empty-features { color: var(--warning) !important; }
 .external-form { display: grid; align-content: start; gap: 11px; padding: 16px; }
 .external-form label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
 .external-form input, .external-form select, .external-form textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; }
@@ -6187,6 +6211,27 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .asset-detail-lower .feature-stack { margin: 14px 0; }
 .asset-detail-lower .feature-stack b { display: inline-flex; align-items: baseline; gap: 3px; }
 .asset-detail-lower .feature-stack small { color: var(--muted); font-size: 8px; }
+/* 同一条创意的历版。当前这一版加重，否则一列「第 N 版」里看不出自己在哪。 */
+.asset-lineage { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.asset-lineage ol { display: grid; gap: 5px; margin: 8px 0 0; padding-left: 16px; }
+.asset-lineage li { color: var(--muted); font-size: 10px; line-height: 1.6; }
+.asset-lineage li.current { color: var(--text); font-weight: 650; }
+
+/* 台账。它不催人做事，所以没有队列、没有红点，只有搜索框和一条条记录。 */
+.assets-ledger { display: grid; gap: 12px; }
+.assets-ledger-search { display: flex; gap: 8px; align-items: center; }
+.assets-ledger-search input { flex: 1; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 10px; }
+.assets-ledger-search button { height: 30px; padding: 0 14px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); color: var(--text); font-size: 10px; cursor: pointer; }
+.assets-ledger-list { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; background: var(--line); }
+/* 三列：缩略图、文字、按钮。文字那列吃掉剩下的宽度，长标题在里面省略号。 */
+.assets-ledger-list > li { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; background: var(--surface); }
+.ledger-thumb { width: 64px; height: 36px; border-radius: 4px; background: var(--subtle); object-fit: cover; }
+.ledger-thumb-empty { display: grid; place-items: center; color: var(--muted); }
+.assets-ledger-list > li > div { display: grid; gap: 3px; min-width: 0; }
+.assets-ledger-list strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.assets-ledger-list small { color: var(--muted); font-size: 9px; }
+.assets-ledger-list button { height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); color: var(--text); font-size: 9px; white-space: nowrap; cursor: pointer; }
+.assets-ledger > button { justify-self: center; height: 30px; padding: 0 16px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); color: var(--text); font-size: 10px; cursor: pointer; }
 
 /* 三来源里少的那一档：derived 是量出来的，颜色和人标的分开，但同属可归因。 */
 .content-layer.derived { color: var(--cobalt); font-weight: 650; }
@@ -6214,9 +6259,14 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
    又不至于弱到像被禁用了——它仍然是可以参考的。 */
 .experience-card-soft { border-style: dashed; }
 .experience-review-flag { padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); font-size: 9px; font-weight: 650; }
+/* 版本标记是中性信息，不是警告：用灰底，别和「该看一眼了」抢注意力。 */
+.experience-lineage-flag { padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); font-size: 9px; font-weight: 650; }
 .experience-scope { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .experience-scope small { margin-left: 4px; font-size: 9px; }
 .experience-caveat { margin: 8px 0 0; padding: 7px 10px; background: color-mix(in srgb, var(--warning) 8%, transparent); color: var(--text-1); font-size: 10px; line-height: 1.6; }
+/* 缺格提示比档位提醒轻一档：档位说的是「这条结论靠不靠得住」，缺格说的是
+   「这条经验还没写完」。用同样的警示底色会让两件事看上去一样严重。 */
+.experience-gaps { margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .experience-trail-toggle { height: auto; margin-top: 9px; font-size: 10px; }
 .experience-trail-toggle svg { transition: transform .12s ease; }
 .experience-trail-toggle svg.rotated { transform: rotate(90deg); }
@@ -6230,6 +6280,17 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .evidence-trail p { margin: 0 0 4px; font-size: 10px; line-height: 1.6; }
 .evidence-trail ul { margin: 0; padding-left: 16px; font-size: 10px; line-height: 1.7; }
 .evidence-trail .panel-empty { padding: 0; text-align: left; font-size: 10px; }
+/* 「按哪一版标准判的」比同段其他行轻一档：它是查证时才要看的出处，不是结论本身。
+   里面那枚 .threshold-stamp 是 11px，比这一行还大，单独压回来对齐。 */
+/* 「留的是哪一条发现」。下拉排在文本框上面：先选依据、再改措辞，顺序反过来的话
+   人会先写完一句话，然后没有任何理由回头去挑发现。 */
+.harvest-source { display: grid; gap: 4px; margin-top: 10px; }
+.harvest-source small { color: var(--muted); font-size: 9px; }
+.harvest-source select { height: 28px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11px; }
+.harvest-source select:focus { outline: none; border-color: var(--cobalt); }
+.harvest-hint { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.evidence-threshold, .insight-card-threshold { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.evidence-threshold .threshold-stamp, .insight-card-threshold .threshold-stamp { margin-left: 0; font-size: 10px; line-height: inherit; }
 /* 反例给一点底色：填了这一格的经验才是真被人推敲过的，不能和别的段落一样平。 */
 .evidence-counterexamples { padding: 8px 10px; background: var(--subtle); }
 /* 「抄到别处」把要抄走的那句话原样摆出来。摆出来而不是只给一个按钮：
@@ -6283,6 +6344,14 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .insight-card-action { margin: 9px 0 0; padding: 8px 10px; background: var(--cobalt-soft); color: var(--cobalt-dark); font-size: 10px; line-height: 1.6; }
 .pattern-conclusions { margin: 9px 0 0; padding-left: 16px; font-size: 10px; line-height: 1.7; }
 
+/* 「反复出现的」与「目前只算得上单次」两组之间的小标题。带一句解释，
+   否则人只看到两堆卡片，不知道凭什么分的。 */
+.pattern-group-head { margin: 6px 0 -2px; }
+.pattern-group-head p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+/* 名字没进特征体系的提醒。用警示底色而不是灰字：这不是补充说明，
+   是「这一行的次数可能是错的」。 */
+.pattern-ungoverned { margin: 8px 0 0; padding: 7px 9px; background: var(--subtle); color: var(--muted); font-size: 10px; line-height: 1.6; border-left: 2px solid var(--warning); }
+
 /* 「凭什么」和「用进 Brief」并排。两个都是次级按钮，谁也不抢——一个是查证，
    一个是动作，页面不替人决定先做哪个。 */
 .insight-card-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
@@ -6298,7 +6367,6 @@ button.prelaunch-row.active { background: var(--cobalt-soft); box-shadow: inset 
 .cite-error { display: inline-flex; align-items: center; gap: 4px; color: var(--danger); font-size: 10px; }
 
 @media (max-width: 1180px) {
-  .assets-queues { grid-template-columns: minmax(0, 1fr); }
   .external-columns { grid-template-columns: minmax(0, 1fr); }
   .external-list { border-right: 0; border-bottom: 1px solid var(--line); }
 }

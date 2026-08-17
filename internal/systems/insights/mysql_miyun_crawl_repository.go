@@ -355,7 +355,7 @@ func (r MySQLRepository) MarkMiyunMaterialImporting(ctx context.Context, value M
 func (r MySQLRepository) CompleteMiyunMaterialImport(ctx context.Context, completion MiyunMaterialImportCompletion) (MiyunMaterial, error) {
 	value := completion.Material
 	if value.ImportStatus != MiyunMaterialImportDownloading || completion.ExpectedVersion != value.Version || completion.Result.AssetRef.Validate() != nil ||
-		completion.InsightAsset.SourceKind != AssetSourceExternal || completion.InsightAsset.PlatformAssetID != string(completion.Result.AssetRef.AssetID) ||
+		completion.InsightAsset.SourceKind != AssetSourceMiyun || completion.InsightAsset.PlatformAssetID != string(completion.Result.AssetRef.AssetID) ||
 		completion.InsightAsset.PlatformAssetVersion != completion.Result.AssetRef.Version {
 		return MiyunMaterial{}, ErrInvalidRequest
 	}

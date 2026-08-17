@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CircleAlert } from 'lucide-react'
+import { CircleAlert, CircleHelp, X } from 'lucide-react'
 import { useProject } from '../../../context/ProjectContext'
 import { api, type ApiInsightAsset } from '../../../data/api'
 import type { DataState } from '../../../types'
@@ -11,6 +11,7 @@ import { ExternalView } from './ExternalView'
 import { FeatureView } from './FeatureView'
 import { ImportFromCreative } from './ImportFromCreative'
 import { IntakeView } from './IntakeView'
+import { LedgerView } from './LedgerView'
 import { OverviewView } from './OverviewView'
 import { SimilarView } from './SimilarView'
 
@@ -24,13 +25,18 @@ import { SimilarView } from './SimilarView'
  * 另外补了两件原来没有的：按变量重叠找相似素材（❓「算不出来」的升级通道），
  * 以及把平台外的素材作为**证据**收进来。
  */
-export type AssetsView = 'overview' | 'intake' | 'features' | 'similar' | 'external'
+export type AssetsView = 'overview' | 'ledger' | 'intake' | 'features' | 'similar' | 'external'
 
 const headings: Record<AssetsView, { label: string; title: string; lead: string }> = {
   overview: {
     label: 'ASSETS',
     title: '手上有哪些素材，它们还差什么才能进复盘',
-    lead: '左边是平台内的（躺在素材库里），右边是外部证据（洞察自己存的，有到期日）。下面三个队列是还差的那几样。',
+    lead: '这一屏只讲平台内素材，外部证据在它自己那一页。要你处理的事会跳到最上面一行，没跳就是没事。',
+  },
+  ledger: {
+    label: 'LEDGER',
+    title: '平台里一共有哪些素材',
+    lead: '创意做的每一张图、每一版剪辑都记在这儿。绝大多数永远不会投流——它们不进队列、不催你做事。真要投的那几条，点「拉进分析」。',
   },
   intake: {
     label: 'DATA INTAKE',
@@ -54,9 +60,14 @@ const headings: Record<AssetsView, { label: string; title: string; lead: string 
   },
 }
 
-export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnalysis }: {
+export function AssetsPage({ state, view, objectId, onOpenView, onOpenLibrary, onOpenAnalysis }: {
   state: DataState
   view: AssetsView
+  /**
+   * 路由上带的素材 ID。别处指名把人送到某一条素材上时用——目前只有米云素材页会带，
+   * 它把刚导进来的那条素材直接送到「变量」里去判形态。
+   */
+  objectId?: string
   /** 切到另一个二级视图。传的是侧栏上的那个中文名，不是 AssetsView 的键。 */
   onOpenView: (view: string) => void
   onOpenLibrary: () => void
@@ -73,6 +84,9 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
   const [importing, setImporting] = useState(false)
   // 登记成功后加一，让总览和这里的素材清单都重新取一次数。
   const [reloadKey, setReloadKey] = useState(0)
+  // 「这一页怎么读」以前是常驻的一整栏，占掉三分之一屏宽，讲的是只在第一次
+  // 用到的事。收进标题旁那个问号里：想看的时候还在，不想看的时候屏幕是空的。
+  const [helping, setHelping] = useState(false)
 
   // 窗口和分析页同一套算法：外部素材的留存期从窗口结束日算起，两屏各算一套的话，
   // 同一天导进来的两条素材会有两个到期日。
@@ -85,15 +99,16 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
   useEffect(() => {
     if (!currentProject.id) return
     let active = true
-    void api.listInsightAssets(currentProject.id, {})
+    // 同上：右栏这份清单喂的是登记表单和详情面板，也只要分析对象。
+    void api.listInsightAssets(currentProject.id, { roles: ['analysis'] })
       .then(page => { if (active) setAssets(page.items) })
       .catch(() => { if (active) setAssets([]) })
     return () => { active = false }
   }, [currentProject.id, reloadKey])
 
   // 换视图就把选中的素材放开：详情面板留在那儿，人会以为新视图说的还是这一条。
-  // 登记表单同理：它只属于总览那一屏。
-  useEffect(() => { setSelectedId(''); setIndexing(false); setImporting(false) }, [view])
+  // 登记表单同理：它只属于总览那一屏。说明也一起收起来——每一屏的说明各不相同。
+  useEffect(() => { setSelectedId(''); setIndexing(false); setImporting(false); setHelping(false) }, [view])
 
   const heading = headings[view]
   const selected = assets.find(asset => asset.id === selectedId)
@@ -101,10 +116,14 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
   // 数据接入和变量这两段是整页委托过去的，它们自带工具条和两栏布局。
   // 再套一层壳会得到两个标题、两条工具条，人分不清哪条是当前这一屏的。
   if (view === 'intake') return <IntakeView state={state}/>
-  if (view === 'features') return <FeatureView state={state}/>
+  if (view === 'features') return <FeatureView state={state} focusAssetId={objectId}/>
+
+  // 右栏只在真有东西要放的时候才占位置。四样都没有时整页并成一栏——
+  // 这一屏的主角是那份清单，不是旁边那段说明。
+  const detail = importing || indexing || Boolean(selected) || helping
 
   return <StateBoundary state={state} onRetry={() => {}}>
-    <div className="prelaunch-workspace">
+    <div className={detail ? 'prelaunch-workspace' : 'prelaunch-workspace is-solo'}>
       <section className="prelaunch-main">
         <div className="core-flow-toolbar">
           <div>
@@ -112,6 +131,11 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
             <h2>{heading.title}</h2>
             <p>当前 Project：{currentProject.name}。{heading.lead}</p>
           </div>
+          <button type="button" className="icon-button" aria-label="这一页怎么读"
+            aria-pressed={helping}
+            onClick={() => { setHelping(open => !open); setSelectedId('') }}>
+            <CircleHelp size={17}/>
+          </button>
         </div>
 
         {view === 'overview' ? <OverviewView
@@ -123,11 +147,12 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
           onIndex={() => { setSelectedId(''); setImporting(false); setIndexing(true) }}
           onImport={() => { setSelectedId(''); setIndexing(false); setImporting(true) }}
           reloadKey={reloadKey}/> : null}
+        {view === 'ledger' ? <LedgerView onPromoted={() => setReloadKey(key => key + 1)}/> : null}
         {view === 'similar' ? <SimilarView/> : null}
         {view === 'external' ? <ExternalView window={window}/> : null}
       </section>
 
-      <aside className="prelaunch-detail">
+      {detail ? <aside className="prelaunch-detail">
         {importing
           ? <ImportFromCreative
             projectId={currentProject.id}
@@ -154,7 +179,11 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
           : selected
           ? <AssetDetail asset={selected} onOpenLibrary={onOpenLibrary}/>
           : <>
-            <span className="section-label">这一页怎么读</span>
+            <div className="prelaunch-detail-head">
+              <span className="section-label">这一页怎么读</span>
+              <button type="button" className="icon-button" aria-label="收起说明"
+                onClick={() => setHelping(false)}><X size={15}/></button>
+            </div>
             <h3>{heading.title}</h3>
             <p>{heading.lead}</p>
             <div className="prelaunch-boundary"><CircleAlert size={16}/><span>
@@ -166,8 +195,13 @@ export function AssetsPage({ state, view, onOpenView, onOpenLibrary, onOpenAnaly
               平台内素材的文件躺在创意模块的素材库里，洞察一个字节都没存。要改标题、换封面、
               加一版，都得回那边做。只有外部证据是洞察自己存的，也只有它们有到期日。
             </span></div>
+            <div className="prelaunch-boundary"><CircleAlert size={16}/><span>
+              <small>外部证据不算在结论里</small>
+              它们不进共享素材库、不能拿去投放、也不参与归因。收它们只有一个用处：
+              解释本轮结果时有个参照。
+            </span></div>
           </>}
-      </aside>
+      </aside> : null}
     </div>
   </StateBoundary>
 }

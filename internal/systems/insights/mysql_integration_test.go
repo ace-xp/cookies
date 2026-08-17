@@ -647,3 +647,93 @@ func TestDataIngestionAgainstMySQL(t *testing.T) {
 		t.Fatalf("批次读回来不完整：%#v", batches[0])
 	}
 }
+
+// TestReportDraftSlotAgainstMySQL 盯的是「复盘提交之后，同一个窗口还能不能再记一笔」。
+//
+// 这件事只有真 DDL 能验：内存仓库不带唯一键，怎么写都过。而唯一键正是那条死路的
+// 成因——已确认的报告如果还占着 (项目 + 执行 + 窗口)，PinFinding 找不到草稿又建不出
+// 草稿，重试三次后只会抛一个刷新也没用的版本冲突（PRD §15.3 要的是开下一份草稿）。
+func TestReportDraftSlotAgainstMySQL(t *testing.T) {
+	dsn := os.Getenv("COOKIES_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("COOKIES_TEST_MYSQL_DSN is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	organizationID := contract.OrganizationID("org_insights_slot_" + suffix)
+	projectID := contract.ProjectID("project_insights_slot_" + suffix)
+	userID := "user_insights_slot_" + suffix
+	actor := contract.ActorContext{
+		OrganizationID: organizationID,
+		Principal:      contract.Principal{Kind: contract.PrincipalUser, ID: userID},
+		Scopes:         []contract.Scope{"project.read", "project.write"},
+	}
+	t.Cleanup(func() { cleanupInsightsIntegration(t, db, organizationID, userID) })
+	if err := (identity.MySQLStore{DB: db}).EnsureLocalActor(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+	if err := (project.MySQLStore{DB: db}).EnsureLocalProject(ctx, actor, projectID); err != nil {
+		t.Fatal(err)
+	}
+
+	repository := insights.MySQLRepository{DB: db}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	// 记一笔建出来的草稿：没有投放执行，只有窗口。
+	draft := func(id string) insights.InsightReport {
+		return insights.InsightReport{
+			ID: id, OrganizationID: organizationID, ProjectID: projectID,
+			Status: insights.ReportDraft, Findings: []string{},
+			Digest:      []insights.ReportFinding{{Kind: "pinned", Text: "开场三秒", Origin: insights.OriginPinned}},
+			WindowStart: "2026-07-01", WindowEnd: "2026-07-31",
+			Version: 1, CreatedBy: userID, CreatedAt: now, UpdatedAt: now,
+		}
+	}
+
+	first, err := repository.CreateReport(ctx, draft("insightreport_slot_1_"+suffix))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 同一个窗口第二份草稿仍然要被挡住：并发的两次记一笔各建一份的话，
+	// 人记的东西会分散在两份草稿里，而屏幕上只看得见一份。
+	if _, err := repository.CreateReport(ctx, draft("insightreport_slot_2_"+suffix)); !errors.Is(err, insights.ErrInvalidState) {
+		t.Fatalf("同窗口第二份草稿应该被唯一键挡住，实际 err=%v", err)
+	}
+
+	// 提交，且不挂投放执行——执行是选填的，这正是最常见的一种提交。
+	submitted, err := repository.SubmitReport(ctx, insights.SubmitReportInput{
+		OrganizationID: organizationID, ProjectID: projectID, ReportID: first.ID,
+		ExpectedVersion: first.Version, ExecutionID: "", Summary: "七月这一轮",
+		Digest: first.Digest, ActorID: userID, At: now,
+	})
+	if err != nil || submitted.Status != insights.ReportConfirmed {
+		t.Fatalf("提交复盘 =%#v err=%v", submitted, err)
+	}
+
+	// 提交之后再记一笔：已确认的不算草稿，所以要能建出下一份草稿来。
+	if _, err := repository.FindDraftByWindow(ctx, organizationID, projectID, "2026-07-01", "2026-07-31"); !errors.Is(err, insights.ErrNotFound) {
+		t.Fatalf("已确认的报告不该被当成草稿，err=%v", err)
+	}
+	next, err := repository.CreateReport(ctx, draft("insightreport_slot_3_"+suffix))
+	if err != nil {
+		t.Fatalf("提交之后同窗口再记一笔应该开出新草稿，实际 err=%v", err)
+	}
+	found, err := repository.FindDraftByWindow(ctx, organizationID, projectID, "2026-07-01", "2026-07-31")
+	if err != nil || found.ID != next.ID {
+		t.Fatalf("再记一笔应该落在新草稿上：found=%s err=%v", found.ID, err)
+	}
+	// 老的那份还在，定格没被动过。
+	frozen, err := repository.GetReport(ctx, organizationID, projectID, first.ID)
+	if err != nil || frozen.Status != insights.ReportConfirmed || frozen.Summary != "七月这一轮" {
+		t.Fatalf("已提交的那份被动过了：%#v err=%v", frozen, err)
+	}
+}

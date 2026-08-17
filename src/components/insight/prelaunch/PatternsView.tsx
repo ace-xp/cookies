@@ -35,12 +35,15 @@ export function PatternsView() {
 
   useEffect(() => { void load() }, [load])
 
+  const repeated = patterns.filter(pattern => pattern.repeated)
+  const once = patterns.filter(pattern => !pattern.repeated)
+
   return <div className="experience-lookup">
     <div className="core-flow-toolbar">
       <div>
         <span className="section-label">PRE-LAUNCH · PATTERNS</span>
         <h2>哪些内容特征反复有效</h2>
-        <p>同一个特征被几条互相独立的结论提到，比只被提过一次可信得多。这一屏按次数排。</p>
+        <p>同一个特征被几条互相独立的结论提到，比只被提过一次可信得多。够得上「反复」的排在上面，其余的照样列出来，但不算数。</p>
       </div>
       <button className="secondary-button" disabled={listState === 'loading'}
         onClick={() => { void load() }}><RefreshCw size={15}/>刷新</button>
@@ -49,14 +52,40 @@ export function PatternsView() {
     {listState === 'loading' ? <p className="panel-empty">正在统计…</p> : null}
     {listState === 'error' ? <p className="panel-empty">{notice || '历史模式读取失败，请重试。'}</p> : null}
     {listState === 'ready' && !patterns.length ? <p className="panel-empty">
-      还没有反复出现的内容特征。要出现在这里，同一个特征得先被写进至少一条已确认、
-      能归因的经验的「内容依据」里——去「复盘」沉淀几条就有了。
+      还没有可统计的内容特征。要出现在这里，同一个特征得先被写进至少一条已确认、
+      能归因的经验的「内容依据」里——去「复盘」留下几条经验并确认，这里就有了。
     </p> : null}
 
+    {/* 分两栏陈列，而不是混在一起按次数排：整屏标题写着「反复有效」，
+        把「只被提过一次」的和「三条结论都提到」的排成一列，读的人会把整列
+        当成同一回事。 */}
+    {repeated.length ? <PatternGroup
+      title="反复出现的"
+      hint="被至少两条互相独立的结论提到，而且名字在特征体系里——同义写法已经合到一起算过了。"
+      patterns={repeated}/> : null}
+    {once.length ? <PatternGroup
+      title="目前只算得上单次"
+      hint="要么只被一条结论提到，要么名字没进特征体系。前者是次数不够，后者是同一个意思的几种写法可能被拆成了好几行，各自都没攒够。"
+      patterns={once}/> : null}
+  </div>
+}
+
+function PatternGroup({ title, hint, patterns }: {
+  title: string
+  hint: string
+  patterns: ApiFeaturePattern[]
+}) {
+  return <>
+    <div className="pattern-group-head">
+      <span className="section-label">{title}（{patterns.length}）</span>
+      <p>{hint}</p>
+    </div>
     {patterns.map(pattern => <article key={pattern.feature} className="experience-card">
       <header>
         <span className="insight-card-type">{pattern.card_count} 条结论提到</span>
-        <h4>{pattern.feature}</h4>
+        {/* 显示 label 不显示 feature：feature 是分桶键，入表的是 hook_type 这种
+            英文字段名，直接摆出来等于让人读数据库列名。 */}
+        <h4>{pattern.label || pattern.feature}</h4>
       </header>
       <p className="experience-scope">
         出现在：{pattern.channels.length ? pattern.channels.join('、') : '没写渠道'}
@@ -64,11 +93,15 @@ export function PatternsView() {
             会把一条本来能照着做的结论说弱。 */}
         <small>（最强的一条：{confidenceLabel[pattern.best_confidence]}）</small>
       </p>
+      {pattern.governed ? null : <p className="pattern-ungoverned">
+        这个名字没进特征体系，是复盘时手写的。它的同义写法会各占一行，
+        永远攒不到「反复」——去「设置 → 能力运营 → 特征体系」把这个词收进去。
+      </p>}
       <ul className="pattern-conclusions">
         {pattern.conclusions.map(item => <li key={item}>{item}</li>)}
       </ul>
     </article>)}
-  </div>
+  </>
 }
 
 const confidenceLabel: Record<ApiConfidenceLevel, string> = {

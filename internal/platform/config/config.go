@@ -183,6 +183,7 @@ type Provider struct {
 	MasterKeyVersion  string
 	OutputBucket      string
 	AllowInsecureHTTP bool
+	AllowDirectVideo  bool
 	ArkImage          ArkImage
 	ArkVideo          ArkVideo
 	ArkText           ArkText
@@ -207,6 +208,19 @@ type ArkVideo struct {
 	APIKey  string
 	Model   string
 	BaseURL string
+}
+
+// DefaultArkVideoBaseURL is Ark's public API base. It is applied when
+// COOKIES_ARK_VIDEO_BASE_URL is left empty so a local operator only has to
+// supply an API key and a model.
+const DefaultArkVideoBaseURL = "https://ark.cn-beijing.volces.com/api/v3"
+
+// ArkVideoDirect reports whether Seedance video generation reads its
+// credential straight from the environment instead of the encrypted
+// credential stored in MySQL. Direct mode keeps local setup to editing .env;
+// stored mode remains available for rotation-controlled deployments.
+func (p Provider) ArkVideoDirect() bool {
+	return p.VideoAdapter == "ark_video" && strings.TrimSpace(p.ArkVideo.APIKey) != ""
 }
 
 type OpenAIImage struct {
@@ -569,6 +583,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 			MasterKeyVersion:  valueOr(lookup, "COOKIES_PROVIDER_MASTER_KEY_VERSION", "v1"),
 			OutputBucket:      providerOutputBucket,
 			AllowInsecureHTTP: boolValueOr(lookup, "COOKIES_PROVIDER_ALLOW_INSECURE_HTTP", false),
+			AllowDirectVideo:  boolValueOr(lookup, "COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO", false),
 			ArkImage: ArkImage{
 				APIKey:  valueOr(lookup, "COOKIES_ARK_IMAGE_API_KEY", ""),
 				Model:   valueOr(lookup, "COOKIES_ARK_IMAGE_MODEL", ""),
@@ -577,7 +592,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 			ArkVideo: ArkVideo{
 				APIKey:  valueOr(lookup, "COOKIES_ARK_VIDEO_API_KEY", ""),
 				Model:   valueOr(lookup, "COOKIES_ARK_VIDEO_MODEL", ""),
-				BaseURL: valueOr(lookup, "COOKIES_ARK_VIDEO_BASE_URL", ""),
+				BaseURL: valueOr(lookup, "COOKIES_ARK_VIDEO_BASE_URL", DefaultArkVideoBaseURL),
 			},
 			ArkText: ArkText{
 				APIKey:  valueOr(lookup, "COOKIES_ARK_TEXT_API_KEY", ""),
@@ -627,6 +642,12 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 			ProjectID:      identityValues["project_id"],
 			Scopes:         splitCSV(identityValues["scopes"]),
 		}
+	}
+
+	// An empty COOKIES_ARK_VIDEO_BASE_URL means "use Ark's public API", so a
+	// local operator only has to paste a key and a model.
+	if strings.TrimSpace(config.Provider.ArkVideo.BaseURL) == "" {
+		config.Provider.ArkVideo.BaseURL = DefaultArkVideoBaseURL
 	}
 
 	if err := config.Validate(); err != nil {
@@ -792,8 +813,11 @@ func (c Config) Validate() error {
 	if c.Provider.TextAdapter != "fake" && c.Provider.TextAdapter != "adapter_gateway" && c.Provider.TextAdapter != "ark_text" {
 		return fmt.Errorf("COOKIES_PROVIDER_TEXT_ADAPTER must be fake, adapter_gateway, or ark_text")
 	}
-	if c.Provider.VideoAdapter != "fake" && c.Provider.VideoAdapter != "adapter_gateway" {
-		return fmt.Errorf("COOKIES_PROVIDER_VIDEO_ADAPTER must be fake or adapter_gateway; direct video providers are not allowed")
+	if c.Provider.VideoAdapter != "fake" && c.Provider.VideoAdapter != "adapter_gateway" && c.Provider.VideoAdapter != "ark_video" {
+		return fmt.Errorf("COOKIES_PROVIDER_VIDEO_ADAPTER must be fake, adapter_gateway, or ark_video")
+	}
+	if c.Provider.VideoAdapter == "ark_video" && !c.Provider.AllowDirectVideo {
+		return fmt.Errorf("ark_video requires explicit COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO=true; use adapter_gateway by default")
 	}
 	if c.Provider.AudioAdapter != "fake" && c.Provider.AudioAdapter != "volcengine_asr" {
 		return fmt.Errorf("COOKIES_PROVIDER_AUDIO_ADAPTER must be fake or volcengine_asr")
@@ -861,6 +885,18 @@ func (c Config) Validate() error {
 	if c.Provider.ImageAdapter == "ark_image" && (c.Environment != EnvironmentLocal || strings.TrimSpace(c.Provider.ArkImage.APIKey) == "" || strings.TrimSpace(c.Provider.ArkImage.Model) == "") {
 		return fmt.Errorf("ark_image is local-only and requires COOKIES_ARK_IMAGE_API_KEY and COOKIES_ARK_IMAGE_MODEL")
 	}
+	if c.Provider.VideoAdapter == "ark_video" && c.Environment != EnvironmentLocal {
+		return fmt.Errorf("ark_video is local-only in Phase 1")
+	}
+	if c.Provider.ArkVideoDirect() {
+		if strings.TrimSpace(c.Provider.ArkVideo.Model) == "" {
+			return fmt.Errorf("COOKIES_ARK_VIDEO_API_KEY requires COOKIES_ARK_VIDEO_MODEL")
+		}
+		base, err := url.Parse(c.Provider.ArkVideo.BaseURL)
+		if err != nil || base.Host == "" || (base.Scheme != "https" && !(base.Scheme == "http" && c.Provider.AllowInsecureHTTP)) {
+			return fmt.Errorf("COOKIES_ARK_VIDEO_BASE_URL must be an absolute HTTPS URL")
+		}
+	}
 	if c.Provider.ImageAdapter == "openai_image" && (c.Environment != EnvironmentLocal || strings.TrimSpace(c.Provider.OpenAIImage.APIKey) == "" || strings.TrimSpace(c.Provider.OpenAIImage.Model) == "" || strings.TrimSpace(c.Provider.OpenAIImage.BaseURL) == "") {
 		return fmt.Errorf("openai_image is local-only and requires COOKIES_OPENAI_IMAGE_API_KEY, COOKIES_OPENAI_IMAGE_MODEL, and COOKIES_OPENAI_IMAGE_BASE_URL")
 	}
@@ -897,11 +933,19 @@ func (c Config) Validate() error {
 			return fmt.Errorf("volcengine_speech requires API key, resource ID and default voice")
 		}
 	}
+	// ark_video only needs an output bucket when it reads its key from the
+	// encrypted store. With COOKIES_ARK_VIDEO_API_KEY set the adapter talks to
+	// Ark directly and keeps its outputs local.
 	usesGenerationBroker := c.Provider.ImageAdapter == "adapter_gateway" ||
 		c.Provider.TextAdapter == "adapter_gateway" ||
 		c.Provider.VideoAdapter == "adapter_gateway" ||
+		(c.Provider.VideoAdapter == "ark_video" && !c.Provider.ArkVideoDirect()) ||
 		c.Provider.SpeechAdapter == "minimax_speech"
-	usesCredentialBroker := usesGenerationBroker || c.Research.SeedEnabled
+	// ark_video always needs the master key, direct credential or not: the
+	// Settings page encrypts whatever the operator saves there, and the stored
+	// route takes precedence over the environment once it exists.
+	usesCredentialBroker := usesGenerationBroker || c.Research.SeedEnabled ||
+		c.Provider.VideoAdapter == "ark_video"
 	if usesCredentialBroker && (strings.TrimSpace(c.Provider.MasterKey) == "" || strings.TrimSpace(c.Provider.MasterKeyVersion) == "") {
 		return fmt.Errorf("configured Provider adapter requires COOKIES_PROVIDER_MASTER_KEY and COOKIES_PROVIDER_MASTER_KEY_VERSION")
 	}
