@@ -48,6 +48,45 @@ func secretField(service servicecatalog.Service) string {
 	return ""
 }
 
+// rowQuerier is the overlap between *sql.DB and *sql.Tx, so a connection is
+// resolved the same way inside and outside a transaction.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// resolveConnectionCode answers which connection this capability is served by
+// right now, which is not always the one the catalog names.
+//
+// The catalog's ConnectionCode is a default for a service nobody has configured
+// yet. A deployment is free to route several capabilities through one shared
+// gateway — that is how the 8091 environment is set up, where text, image,
+// video, vision and speech all resolve to a single adapter — and the page has
+// to read and write the connection the platform really calls. Going by the
+// catalog's code instead would report five working services as 未配置, and a
+// save would fork a second connection the router never looks at.
+func resolveConnectionCode(ctx context.Context, db rowQuerier, service servicecatalog.Service) (string, error) {
+	if service.ModelAlias == "" {
+		return service.ConnectionCode, nil
+	}
+	var code string
+	err := db.QueryRowContext(ctx, `SELECT connection.connection_code
+		FROM provider_model_routes route
+		JOIN provider_model_route_revisions route_revision ON route_revision.id = route.current_revision_id
+		JOIN provider_connections connection ON connection.id = route_revision.connection_id
+		WHERE route.capability = ? AND route.model_alias = ? AND route.organization_scope = '*'`,
+		service.Capability, service.ModelAlias).Scan(&code)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// No route, or one that points at a connection that no longer exists.
+		// Either way the catalog's default is where a first save should land.
+		return service.ConnectionCode, nil
+	case err != nil:
+		return "", err
+	default:
+		return code, nil
+	}
+}
+
 // GetServiceConfiguration reads the current stored revision. The credential is
 // decrypted only to build a mask; the plaintext never leaves this function.
 func (s MySQLGatewayConfigStore) GetServiceConfiguration(ctx context.Context, organizationID contract.OrganizationID, code string) (ServiceConfiguration, error) {
@@ -73,11 +112,15 @@ func (s MySQLGatewayConfigStore) GetServiceConfiguration(ctx context.Context, or
 		verificationText sql.NullString
 		outcome          sql.NullString
 	)
-	err := s.DB.QueryRowContext(ctx, `SELECT connection.id, revision.base_url, connection.version, connection.updated_at,
+	connectionCode, err := resolveConnectionCode(ctx, s.DB, service)
+	if err != nil {
+		return ServiceConfiguration{}, err
+	}
+	err = s.DB.QueryRowContext(ctx, `SELECT connection.id, revision.base_url, connection.version, connection.updated_at,
 			connection.last_verified_at, connection.last_verification_message, connection.last_verification_outcome
 		FROM provider_connections connection
 		JOIN provider_connection_revisions revision ON revision.id = connection.current_revision_id
-		WHERE connection.connection_code = ?`, service.ConnectionCode).Scan(
+		WHERE connection.connection_code = ?`, connectionCode).Scan(
 		&connectionID, &baseURL, &version, &updatedAt, &verifiedAt, &verificationText, &outcome)
 	if errors.Is(err, sql.ErrNoRows) {
 		return config, nil
@@ -186,7 +229,7 @@ func (s MySQLGatewayConfigStore) VerifyServiceConfiguration(ctx context.Context,
 	if name := secretField(service); name != "" {
 		secret = normalized.Values[name]
 		if secret == "" {
-			stored, resolveErr := s.resolveStoredSecret(ctx, service.ConnectionCode)
+			stored, resolveErr := s.resolveStoredSecret(ctx, service)
 			if resolveErr != nil {
 				return servicecatalog.Result{}, ServiceConfigurationInputError{Message: "还没有保存过密钥，请先填写"}
 			}
@@ -227,7 +270,7 @@ func (s MySQLGatewayConfigStore) ListServiceModels(ctx context.Context, organiza
 	if name := secretField(service); name != "" {
 		secret = strings.TrimSpace(input.Values[name])
 		if secret == "" {
-			stored, resolveErr := s.resolveStoredSecret(ctx, service.ConnectionCode)
+			stored, resolveErr := s.resolveStoredSecret(ctx, service)
 			if resolveErr != nil {
 				return nil, servicecatalog.Result{}, ServiceConfigurationInputError{Message: "还没有保存过密钥，请先填写"}
 			}
@@ -243,7 +286,15 @@ func (s MySQLGatewayConfigStore) ListServiceModels(ctx context.Context, organiza
 	return models, result, nil
 }
 
-func (s MySQLGatewayConfigStore) resolveStoredSecret(ctx context.Context, connectionCode string) (string, error) {
+// resolveStoredSecret takes the service rather than a connection code so the
+// key it returns belongs to the connection the capability is actually on. A
+// shared gateway's key lives on that gateway's row, not on the private one the
+// catalog would have named.
+func (s MySQLGatewayConfigStore) resolveStoredSecret(ctx context.Context, service servicecatalog.Service) (string, error) {
+	connectionCode, err := resolveConnectionCode(ctx, s.DB, service)
+	if err != nil {
+		return "", err
+	}
 	var connectionID string
 	if err := s.DB.QueryRowContext(ctx,
 		`SELECT id FROM provider_connections WHERE connection_code = ?`, connectionCode).Scan(&connectionID); err != nil {
@@ -332,22 +383,32 @@ func (s MySQLGatewayConfigStore) writeServiceRevision(ctx context.Context, input
 // lockOrCreateConnection resolves the connection by its natural key and takes a
 // row lock, so two concurrent saves cannot both pass the version check.
 func lockOrCreateConnection(ctx context.Context, transaction *sql.Tx, service servicecatalog.Service, expectedVersion *int64) (string, error) {
+	// Where this capability is served from can differ from the catalog's
+	// default, so the save lands on the shared gateway the platform actually
+	// calls rather than forking a private connection beside it. Resolving
+	// before the lock leaves a window in which another save repoints the route;
+	// the version check below is what closes it, since a shared connection
+	// carries one version for everyone on it.
+	connectionCode, err := resolveConnectionCode(ctx, transaction, service)
+	if err != nil {
+		return "", err
+	}
 	var (
 		connectionID   string
 		currentVersion int64
 	)
-	err := transaction.QueryRowContext(ctx,
+	err = transaction.QueryRowContext(ctx,
 		`SELECT id, version FROM provider_connections WHERE connection_code = ? FOR UPDATE`,
-		service.ConnectionCode).Scan(&connectionID, &currentVersion)
+		connectionCode).Scan(&connectionID, &currentVersion)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		connectionID = generatedConnectionID(service.ConnectionCode)
+		connectionID = generatedConnectionID(connectionCode)
 		// Version starts at 0 because the update below increments it, so the
 		// first stored configuration reads back as version 1.
 		if _, err = transaction.ExecContext(ctx, `INSERT INTO provider_connections
 			(id, connection_code, connection_type, current_revision_id, status, version)
 			VALUES (?, ?, ?, NULL, 'enabled', 0)`,
-			connectionID, service.ConnectionCode, service.ConnectionType); err != nil {
+			connectionID, connectionCode, service.ConnectionType); err != nil {
 			return "", err
 		}
 		return connectionID, nil

@@ -241,3 +241,149 @@ func TestSaveServiceConfigurationPointsRouteAtNewRevision(t *testing.T) {
 		t.Fatalf("the route does not point at what was just saved: model=%q base_url=%q", upstreamModel, baseURL)
 	}
 }
+
+// sharedGatewayCode names a connection no catalog entry claims, which is the
+// point: it stands for the shared adapter a live deployment routes several
+// capabilities through.
+const sharedGatewayCode = "shared-gateway-test"
+
+// seedSharedGateway builds the shape the 8091 environment is in — one
+// connection serving a capability whose catalog entry names a different
+// connection entirely — so the tests below exercise the real arrangement
+// rather than the one the catalog would have created on a blank database.
+func seedSharedGateway(t *testing.T, db *sql.DB, code, baseURL, upstreamModel string) servicecatalog.Service {
+	t.Helper()
+	service, found := servicecatalog.Find(code)
+	if !found {
+		t.Fatalf("unknown service %q", code)
+	}
+	cleanSharedGateway(t, db, service)
+	t.Cleanup(func() { cleanSharedGateway(t, db, service) })
+
+	revisionID := sharedGatewayCode + "_r1"
+	routeID := generatedRouteID(service.ModelAlias)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO provider_connections (id, connection_code, connection_type, current_revision_id, status, version)
+			VALUES (?, ?, ?, NULL, 'enabled', 1)`, []any{sharedGatewayCode, sharedGatewayCode, service.ConnectionType}},
+		{`INSERT INTO provider_connection_revisions (id, connection_id, revision_number, base_url, created_by)
+			VALUES (?, ?, 1, ?, 'seed')`, []any{revisionID, sharedGatewayCode, baseURL}},
+		{`UPDATE provider_connections SET current_revision_id = ? WHERE id = ?`, []any{revisionID, sharedGatewayCode}},
+		{`INSERT INTO provider_model_routes (id, organization_id, capability, model_alias, current_revision_id, status)
+			VALUES (?, NULL, ?, ?, NULL, 'enabled')`, []any{routeID, service.Capability, service.ModelAlias}},
+		{`INSERT INTO provider_model_route_revisions
+			(id, route_id, revision_number, connection_id, connection_revision_id, upstream_model)
+			VALUES (?, ?, 1, ?, ?, ?)`, []any{routeID + "_r1", routeID, sharedGatewayCode, revisionID, upstreamModel}},
+		{`UPDATE provider_model_routes SET current_revision_id = ? WHERE id = ?`, []any{routeID + "_r1", routeID}},
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(t.Context(), statement.query, statement.args...); err != nil {
+			t.Fatalf("seed shared gateway: %v", err)
+		}
+	}
+	return service
+}
+
+func cleanSharedGateway(t *testing.T, db *sql.DB, service servicecatalog.Service) {
+	t.Helper()
+	_, _ = db.Exec(`UPDATE provider_model_routes SET current_revision_id = NULL WHERE model_alias = ?`, service.ModelAlias)
+	_, _ = db.Exec(`DELETE FROM provider_model_route_revisions WHERE connection_id = ?`, sharedGatewayCode)
+	_, _ = db.Exec(`DELETE FROM provider_model_routes WHERE model_alias = ?`, service.ModelAlias)
+	_, _ = db.Exec(`DELETE FROM provider_credentials WHERE connection_id = ?`, sharedGatewayCode)
+	_, _ = db.Exec(`UPDATE provider_connections SET current_revision_id = NULL WHERE id = ?`, sharedGatewayCode)
+	_, _ = db.Exec(`DELETE FROM provider_connection_revisions WHERE connection_id = ?`, sharedGatewayCode)
+	_, _ = db.Exec(`DELETE FROM provider_connections WHERE id = ?`, sharedGatewayCode)
+}
+
+// Reading by the catalog's connection code reports a capability that is live
+// and serving traffic as 未配置, because its route points somewhere else. The
+// page has to follow the route.
+func TestGetServiceConfigurationFollowsTheRouteToASharedConnection(t *testing.T) {
+	store := newServiceConfigurationTestStore(t)
+	seedSharedGateway(t, store.DB, "model.text", "https://shared.example.com/v1", "doubao-shared")
+
+	config, err := store.GetServiceConfiguration(t.Context(), "org_local", "model.text")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !config.Configured {
+		t.Fatal("a capability routed through a shared gateway is configured, not blank")
+	}
+	if config.Values["base_url"] != "https://shared.example.com/v1" {
+		t.Fatalf("expected the shared gateway's address, got %q", config.Values["base_url"])
+	}
+	if config.Values["model"] != "doubao-shared" {
+		t.Fatalf("expected the routed model, got %q", config.Values["model"])
+	}
+}
+
+// Saving onto a shared gateway must edit that gateway. Creating the catalog's
+// own connection instead would write a row the router never reads: the save
+// reports success and the platform keeps calling the old address.
+func TestSaveServiceConfigurationEditsTheSharedConnectionRatherThanForkingOne(t *testing.T) {
+	store := newServiceConfigurationTestStore(t)
+	service := seedSharedGateway(t, store.DB, "model.text", "https://shared.example.com/v1", "doubao-shared")
+
+	saved, err := store.SaveServiceConfiguration(t.Context(), "org_local", "operator@example.com", ServiceConfigurationInput{
+		Code:   "model.text",
+		Values: map[string]string{"base_url": "https://shared.example.com/v2", "model": "doubao-next", "api_key": "sk-shared"},
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if saved.Values["base_url"] != "https://shared.example.com/v2" {
+		t.Fatalf("the save did not take on the shared gateway: %q", saved.Values["base_url"])
+	}
+
+	var forked int
+	if err := store.DB.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM provider_connections WHERE connection_code = ?`, service.ConnectionCode).Scan(&forked); err != nil {
+		t.Fatalf("count forked connections: %v", err)
+	}
+	if forked != 0 {
+		t.Fatalf("the save forked %q, a connection the router never reads", service.ConnectionCode)
+	}
+
+	var routedTo string
+	if err := store.DB.QueryRowContext(t.Context(), `SELECT connection.connection_code
+		FROM provider_model_routes route
+		JOIN provider_model_route_revisions route_revision ON route_revision.id = route.current_revision_id
+		JOIN provider_connections connection ON connection.id = route_revision.connection_id
+		WHERE route.model_alias = ?`, service.ModelAlias).Scan(&routedTo); err != nil {
+		t.Fatalf("resolve route: %v", err)
+	}
+	if routedTo != sharedGatewayCode {
+		t.Fatalf("the route moved off the shared gateway to %q", routedTo)
+	}
+}
+
+// The stored key lives on the connection the capability is actually on. Looking
+// it up by the catalog's code finds nothing, and the page then demands a
+// re-entry of a key that is already saved and working.
+func TestVerifyServiceConfigurationUsesTheSharedConnectionsStoredKey(t *testing.T) {
+	store := newServiceConfigurationTestStore(t)
+	seedSharedGateway(t, store.DB, "model.text", "https://shared.example.com/v1", "doubao-shared")
+	if _, err := store.SaveServiceConfiguration(t.Context(), "org_local", "operator@example.com", ServiceConfigurationInput{
+		Code:   "model.text",
+		Values: map[string]string{"base_url": "https://shared.example.com/v1", "model": "doubao-shared", "api_key": "sk-already-stored"},
+	}); err != nil {
+		t.Fatalf("seed save: %v", err)
+	}
+
+	var probedSecret string
+	store.ServiceProber = func(_ context.Context, _, _, secret string) servicecatalog.Result {
+		probedSecret = secret
+		return servicecatalog.Result{Outcome: servicecatalog.OutcomeOK, Message: "test probe"}
+	}
+	if _, err := store.VerifyServiceConfiguration(t.Context(), "org_local", ServiceConfigurationInput{
+		Code:   "model.text",
+		Values: map[string]string{"base_url": "https://shared.example.com/v1", "model": "doubao-shared"},
+	}); err != nil {
+		t.Fatalf("verify with an omitted secret: %v", err)
+	}
+	if probedSecret != "sk-already-stored" {
+		t.Fatalf("expected the shared gateway's stored key, got %q", probedSecret)
+	}
+}
