@@ -112,9 +112,12 @@ var services = []Service{
 		Capability: "video.generate", ModelAlias: "cookies.video.standard",
 		ConnectionType: "ark", ConnectionCode: "ark-seedance",
 		Fields: modelFields,
+		// ARK_API_KEY and ARK_BASE_URL used to be listed here. Nothing has read
+		// them for a long time — they survive only in .env.example — so the page
+		// was sending the operator to edit variables with no effect.
 		EnvKeys: []string{
 			"COOKIES_PROVIDER_VIDEO_ADAPTER", "COOKIES_PROVIDER_ALLOW_DIRECT_VIDEO",
-			"ARK_API_KEY", "ARK_BASE_URL",
+			"COOKIES_ARK_VIDEO_API_KEY", "COOKIES_ARK_VIDEO_MODEL", "COOKIES_ARK_VIDEO_BASE_URL",
 		},
 	},
 	{
@@ -207,12 +210,27 @@ var services = []Service{
 		},
 	},
 	{
+		// The brand-film sound generator is built once at boot from these three
+		// values and never consults provider_connections, so an editable form
+		// here would save successfully and change nothing.
+		Code: "sound_asset", DisplayName: "AI 音效", Tier: TierReadOnly, RestartRequired: true,
+		Impact: "品牌片的背景音与音效生成",
+		EnvKeys: []string{
+			"COOKIES_PROVIDER_SOUND_ASSET_ADAPTER", "COOKIES_SOUND_ASSET_ENDPOINT",
+			"COOKIES_SOUND_ASSET_API_KEY", "COOKIES_SOUND_ASSET_MODEL",
+		},
+	},
+	{
 		Code: "storage.tos", DisplayName: "TOS 对象存储", Tier: TierReadOnly, RestartRequired: true,
 		Impact: "素材上传与全部文件读写",
 		EnvKeys: []string{
 			"COOKIES_BLOB_PROVIDER", "COOKIES_FILESYSTEM_BLOB_ROOT",
 			"COOKIES_TOS_ENDPOINT", "COOKIES_TOS_REGION", "COOKIES_TOS_BUCKET",
 			"COOKIES_TOS_ACCESS_KEY", "COOKIES_TOS_SECRET_KEY", "COOKIES_TOS_SECURITY_TOKEN",
+			// Uploads, quarantine and generated output each land in their own
+			// bucket. Listing only COOKIES_TOS_BUCKET hid three of the four.
+			"COOKIES_TOS_ASSETS_BUCKET", "COOKIES_TOS_QUARANTINE_BUCKET",
+			"COOKIES_PROVIDER_OUTPUT_BUCKET",
 		},
 	},
 	{
@@ -309,6 +327,8 @@ func ExemptEnvKeys() []string {
 		"COOKIES_STRATEGY_CREATIVE_TASK_PLANNING_ENABLED", "COOKIES_STRATEGY_CREATIVE_TASK_PROMPT_VERSION",
 		"COOKIES_STRATEGY_PACKAGE_TO_CREATIVE_ENABLED", "COOKIES_STRATEGY_QUICK_VIRAL_REMAKE_ENABLED",
 		"COOKIES_STRATEGY_PROMPT_VERSION", "COOKIES_STRATEGY_ORGANIZATION_ALLOWLIST",
+		"COOKIES_STRATEGY_CONVERSATION_PROMPT_VERSION", "COOKIES_STRATEGY_REVIEW_PROMPT_VERSION",
+		"COOKIES_STRATEGY_REVISE_PROMPT_VERSION", "COOKIES_STRATEGY_REPAIR_PROMPT_VERSION",
 		"COOKIES_STRATEGY_TEXT_MODEL_ALIAS", "COOKIES_STRATEGY_LITE_TEXT_MODEL_ALIAS",
 		"COOKIES_STRATEGY_DEEP_REVIEW_MODEL_ALIAS",
 		"COOKIES_CREATIVE_DIRECTION_PLANNING_ENABLED", "COOKIES_CREATIVE_DIRECTION_PLANNER_MODEL_ALIAS",

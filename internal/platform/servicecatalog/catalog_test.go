@@ -1,18 +1,18 @@
 package servicecatalog
 
 import (
-	"bufio"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
 func TestAllServicesHaveRequiredFields(t *testing.T) {
 	services := All()
-	if len(services) != 16 {
-		t.Fatalf("expected 16 catalog entries, got %d", len(services))
+	if len(services) != 17 {
+		t.Fatalf("expected 17 catalog entries, got %d", len(services))
 	}
 	seen := map[string]bool{}
 	for _, service := range services {
@@ -98,9 +98,14 @@ func TestFindRejectsUnknownCode(t *testing.T) {
 }
 
 // TestEveryEnvKeyIsAccountedFor is the guard against adding a new external
-// dependency and forgetting to register it. Every key in .env.example must
-// either belong to a catalog entry or be listed as exempt (database, admin
+// dependency and forgetting to register it. Every variable the platform reads
+// must either belong to a catalog entry or be listed as exempt (database, admin
 // account, master keys, local paths, feature flags).
+//
+// It reads config.go rather than .env.example on purpose. .env.example is
+// documentation and drifts both ways: it went stale on keys nothing reads any
+// more, and it never listed COOKIES_SOUND_ASSET_*, so an entire external
+// service stayed invisible to this guard. The Go source is what actually runs.
 func TestEveryEnvKeyIsAccountedFor(t *testing.T) {
 	registered := map[string]bool{}
 	for _, service := range All() {
@@ -114,7 +119,7 @@ func TestEveryEnvKeyIsAccountedFor(t *testing.T) {
 	for _, key := range ExemptEnvKeys() {
 		registered[key] = true
 	}
-	for _, key := range readEnvExampleKeys(t) {
+	for _, key := range configEnvKeys(t) {
 		if !registered[key] {
 			t.Errorf("%s is read from the environment but belongs to no catalog entry and is not exempt", key)
 		}
@@ -122,44 +127,44 @@ func TestEveryEnvKeyIsAccountedFor(t *testing.T) {
 }
 
 // The mirror of the test above: a catalog entry must not point at a variable
-// that no longer exists, or the page would tell the operator to edit a key
-// that does nothing.
+// nothing reads, or the page sends the operator to edit a key that does
+// nothing. ARK_API_KEY was exactly that — documented, configured, dead.
 func TestCatalogDoesNotReferenceUnknownEnvKeys(t *testing.T) {
 	known := map[string]bool{}
-	for _, key := range readEnvExampleKeys(t) {
+	for _, key := range configEnvKeys(t) {
 		known[key] = true
 	}
 	for _, service := range All() {
 		for _, key := range service.EnvKeys {
 			if !known[key] {
-				t.Errorf("%s references %s, which is not in .env.example", service.Code, key)
+				t.Errorf("%s references %s, which the platform never reads", service.Code, key)
 			}
 		}
 	}
 }
 
-func readEnvExampleKeys(t *testing.T) []string {
+// configEnvKeys is every COOKIES_-prefixed variable named in the configuration
+// package. Keys named only in an error message count: they are still keys the
+// operator can set, so the catalog has to have an opinion about them.
+var configEnvKeyPattern = regexp.MustCompile(`"(COOKIES_[A-Z0-9_]+)"`)
+
+func configEnvKeys(t *testing.T) []string {
 	t.Helper()
-	file, err := os.Open(filepath.Join("..", "..", "..", ".env.example"))
+	source, err := os.ReadFile(filepath.Join("..", "config", "config.go"))
 	if err != nil {
-		t.Fatalf("open .env.example: %v", err)
+		t.Fatalf("read config.go: %v", err)
 	}
-	defer file.Close()
+	seen := map[string]bool{}
 	keys := []string{}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+	for _, match := range configEnvKeyPattern.FindAllStringSubmatch(string(source), -1) {
+		if seen[match[1]] {
 			continue
 		}
-		name, _, found := strings.Cut(line, "=")
-		if !found {
-			continue
-		}
-		keys = append(keys, strings.TrimSpace(name))
+		seen[match[1]] = true
+		keys = append(keys, match[1])
 	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("scan .env.example: %v", err)
+	if len(keys) == 0 {
+		t.Fatal("found no environment keys in config.go — the pattern or the path is wrong")
 	}
 	return keys
 }
