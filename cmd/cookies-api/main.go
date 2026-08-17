@@ -832,7 +832,15 @@ func main() {
 		runtimeHandlers[creative.AINativeStoryboardJobKind] = creativeService.HandleAINativeStoryboardJob
 		var speechSynthesizer provider.SpeechSynthesizer = provider.FakeSpeechAdapter{}
 		if cfg.Provider.SpeechAdapter == "volcengine_speech" {
-			speechSynthesizer, err = provider.NewVolcengineSpeechAdapter(provider.VolcengineSpeechConfig{
+			speechCipher, cipherErr := provider.NewAESGCMCredentialCipher(cfg.Provider.MasterKey, cfg.Provider.MasterKeyVersion)
+			if cipherErr != nil {
+				log.Fatalf("configure Volcengine speech credential encryption: %v", cipherErr)
+			}
+			speechRoutes := provider.MySQLGatewayConfigStore{DB: db, Cipher: speechCipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP}
+			// Resolved per call, so a save in the settings page takes effect
+			// without a restart. The .env values stay as the fallback for
+			// deployments that never open the page.
+			speechSynthesizer, err = provider.NewRoutedVolcengineSpeechAdapter(speechRoutes, speechRoutes, provider.VolcengineSpeechConfig{
 				Endpoint: cfg.Provider.VolcengineSpeech.Endpoint, APIKey: cfg.Provider.VolcengineSpeech.APIKey,
 				ResourceID: cfg.Provider.VolcengineSpeech.ResourceID, DefaultVoice: cfg.Provider.VolcengineSpeech.DefaultVoice,
 			})

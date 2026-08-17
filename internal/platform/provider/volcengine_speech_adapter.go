@@ -7,14 +7,26 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/shikanon/cookies/internal/platform/contract"
 )
 
-const defaultVolcengineSpeechEndpoint = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+// volcengineSpeechSynthesisPath is where synthesis lives on the upstream. The
+// settings page asks the operator for a host, so the path is appended here
+// rather than being something they have to know.
+const volcengineSpeechSynthesisPath = "/api/v3/tts/unidirectional"
+
+const defaultVolcengineSpeechEndpoint = "https://openspeech.bytedance.com" + volcengineSpeechSynthesisPath
+
+// VolcengineSpeechModelAlias is the logical name the stored route is filed
+// under. It is what the settings page writes and what this adapter resolves.
+const VolcengineSpeechModelAlias = "cookies.speech.volcengine"
 
 const volcengineSpeechTerminalCode = 20000000
 
@@ -27,6 +39,11 @@ type VolcengineSpeechConfig struct {
 }
 
 type VolcengineSpeechAdapter struct {
+	// routes and credentials are nil on the environment-only adapter. When set,
+	// they are consulted on every call, so a save in the settings page takes
+	// effect without a restart.
+	routes       SpeechRouteResolver
+	credentials  GatewayCredentialResolver
 	config       VolcengineSpeechConfig
 	client       *http.Client
 	newRequestID func() (string, error)
@@ -36,13 +53,108 @@ func NewVolcengineSpeechAdapter(config VolcengineSpeechConfig) (*VolcengineSpeec
 	if strings.TrimSpace(config.Endpoint) == "" {
 		config.Endpoint = defaultVolcengineSpeechEndpoint
 	}
-	if !strings.HasPrefix(config.Endpoint, "https://") && !strings.HasPrefix(config.Endpoint, "http://127.0.0.1") && !strings.HasPrefix(config.Endpoint, "http://localhost") {
-		return nil, fmt.Errorf("Volcengine speech endpoint must use HTTPS")
+	if err := validateVolcengineSpeechEndpoint(config.Endpoint); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(config.APIKey) == "" || strings.TrimSpace(config.ResourceID) == "" || strings.TrimSpace(config.DefaultVoice) == "" {
 		return nil, fmt.Errorf("Volcengine speech API key, resource ID and default voice are required")
 	}
 	return &VolcengineSpeechAdapter{config: config, client: &http.Client{Timeout: 2 * time.Minute}, newRequestID: randomSpeechRequestID}, nil
+}
+
+// NewRoutedVolcengineSpeechAdapter resolves the address, resource ID, and key
+// from the stored route on every call. fallback keeps deployments working that
+// never opened the settings page: with no route and an environment key, the
+// environment is used. The voice settings always come from fallback — they are
+// not part of what the page manages.
+func NewRoutedVolcengineSpeechAdapter(routes SpeechRouteResolver, credentials GatewayCredentialResolver, fallback VolcengineSpeechConfig) (*VolcengineSpeechAdapter, error) {
+	if routes == nil || credentials == nil {
+		return nil, fmt.Errorf("Volcengine speech route and credential resolvers are required")
+	}
+	if strings.TrimSpace(fallback.DefaultVoice) == "" {
+		return nil, fmt.Errorf("Volcengine speech default voice is required")
+	}
+	if strings.TrimSpace(fallback.Endpoint) != "" {
+		if err := validateVolcengineSpeechEndpoint(fallback.Endpoint); err != nil {
+			return nil, err
+		}
+	}
+	return &VolcengineSpeechAdapter{
+		routes: routes, credentials: credentials, config: fallback,
+		client: &http.Client{Timeout: 2 * time.Minute}, newRequestID: randomSpeechRequestID,
+	}, nil
+}
+
+func validateVolcengineSpeechEndpoint(endpoint string) error {
+	if strings.HasPrefix(endpoint, "https://") ||
+		strings.HasPrefix(endpoint, "http://127.0.0.1") ||
+		strings.HasPrefix(endpoint, "http://localhost") {
+		return nil
+	}
+	return fmt.Errorf("Volcengine speech endpoint must use HTTPS")
+}
+
+// volcengineSpeechTarget is the resolved answer to "where do I send this, with
+// which key, as which resource".
+type volcengineSpeechTarget struct {
+	endpoint   string
+	apiKey     string
+	resourceID string
+}
+
+// resolve prefers the stored route and falls back to the environment. A route
+// that resolves but cannot produce a credential is not silently replaced by the
+// environment: that would mask a broken configuration behind stale values.
+func (a *VolcengineSpeechAdapter) resolve(ctx context.Context, organizationID contract.OrganizationID) (volcengineSpeechTarget, error) {
+	if a.routes != nil {
+		route, err := a.routes.ResolveSpeechRoute(ctx, organizationID, VolcengineSpeechModelAlias)
+		switch {
+		case err == nil:
+			credential, credErr := a.credentials.ResolveGatewayCredential(ctx, route.CredentialID, route.CredentialVersion)
+			if credErr != nil {
+				return volcengineSpeechTarget{}, SpeechProviderError{
+					Code: "capability_unavailable", Message: credErr.Error(), Retryable: false,
+				}
+			}
+			return volcengineSpeechTarget{
+				endpoint:   volcengineSpeechEndpoint(route.BaseURL),
+				apiKey:     credential,
+				resourceID: route.UpstreamModel,
+			}, nil
+		case !errors.Is(err, ErrGatewayRouteNotFound):
+			return volcengineSpeechTarget{}, SpeechProviderError{
+				Code: "capability_unavailable", Message: err.Error(), Retryable: false,
+			}
+		}
+	}
+
+	if strings.TrimSpace(a.config.APIKey) == "" || strings.TrimSpace(a.config.ResourceID) == "" {
+		return volcengineSpeechTarget{}, SpeechProviderError{
+			Code:    "capability_unavailable",
+			Message: "火山语音还没有配置，请在系统设置的外部服务里填写地址与密钥",
+		}
+	}
+	endpoint := a.config.Endpoint
+	if strings.TrimSpace(endpoint) == "" {
+		endpoint = defaultVolcengineSpeechEndpoint
+	}
+	return volcengineSpeechTarget{
+		endpoint: endpoint, apiKey: a.config.APIKey, resourceID: a.config.ResourceID,
+	}, nil
+}
+
+// volcengineSpeechEndpoint accepts either a host or a full synthesis URL, so an
+// operator who pastes the address from the vendor's docs and one who pastes
+// just the host both end up calling the same place.
+func volcengineSpeechEndpoint(base string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(base), "/")
+	if trimmed == "" {
+		return defaultVolcengineSpeechEndpoint
+	}
+	if strings.HasSuffix(trimmed, volcengineSpeechSynthesisPath) {
+		return trimmed
+	}
+	return trimmed + volcengineSpeechSynthesisPath
 }
 
 func randomSpeechRequestID() (string, error) {
@@ -85,9 +197,12 @@ func (a *VolcengineSpeechAdapter) Synthesize(ctx context.Context, input SpeechSy
 	if err := input.Validate(); err != nil {
 		return SpeechSynthesisResult{}, err
 	}
+	target, err := a.resolve(ctx, input.OrganizationID)
+	if err != nil {
+		return SpeechSynthesisResult{}, err
+	}
 	requestID := strings.TrimSpace(input.RequestID)
 	if requestID == "" {
-		var err error
 		requestID, err = a.newRequestID()
 		if err != nil {
 			return SpeechSynthesisResult{}, err
@@ -109,13 +224,13 @@ func (a *VolcengineSpeechAdapter) Synthesize(ctx context.Context, input SpeechSy
 	if err != nil {
 		return SpeechSynthesisResult{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, a.config.Endpoint, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return SpeechSynthesisResult{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Api-Key", a.config.APIKey)
-	request.Header.Set("X-Api-Resource-Id", a.config.ResourceID)
+	request.Header.Set("X-Api-Key", target.apiKey)
+	request.Header.Set("X-Api-Resource-Id", target.resourceID)
 	request.Header.Set("X-Api-Request-Id", requestID)
 	response, err := a.client.Do(request)
 	if err != nil {
@@ -126,7 +241,7 @@ func (a *VolcengineSpeechAdapter) Synthesize(ctx context.Context, input SpeechSy
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		return SpeechSynthesisResult{}, classifyVolcengineSpeechError(response.StatusCode, string(message))
 	}
-	result := SpeechSynthesisResult{Codec: input.Format, SampleRate: input.SampleRate, OriginalText: input.Text, WordTimings: []SpeechWordTiming{}, ProviderRequestID: response.Header.Get("X-Tt-Logid"), ModelAndVoiceSnapshot: a.config.ResourceID + "/" + voice}
+	result := SpeechSynthesisResult{Codec: input.Format, SampleRate: input.SampleRate, OriginalText: input.Text, WordTimings: []SpeechWordTiming{}, ProviderRequestID: response.Header.Get("X-Tt-Logid"), ModelAndVoiceSnapshot: target.resourceID + "/" + voice}
 	decoder := json.NewDecoder(response.Body)
 	for {
 		var chunk volcengineSpeechChunk

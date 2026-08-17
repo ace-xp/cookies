@@ -169,16 +169,9 @@ func readEnvExampleKeys(t *testing.T) []string {
 // two invented aliases (cookies.document.standard, cookies.research.standard)
 // that the platform never asks for — the real names carry an extra segment.
 func TestEveryModelAliasIsResolvedSomewhere(t *testing.T) {
-	// Volcengine speech still calls its upstream directly from
-	// creativeprovider rather than through a route. Task 8 of the external
-	// service plan moves it onto route resolution; until then this alias is
-	// declared but unresolved. Delete this entry once that lands — do not add
-	// to it, since every other name here would be a silent no-op save.
-	notYetRouted := map[string]bool{"cookies.speech.volcengine": true}
-
 	sources := goSourcesOutsideCatalog(t)
 	for _, service := range All() {
-		if service.ModelAlias == "" || notYetRouted[service.ModelAlias] {
+		if service.ModelAlias == "" {
 			continue
 		}
 		quoted := `"` + service.ModelAlias + `"`
