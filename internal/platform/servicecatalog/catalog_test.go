@@ -64,7 +64,7 @@ func TestEditableServicesHaveOneAddressAndAtMostOneSecret(t *testing.T) {
 		}
 		addresses, secrets := 0, 0
 		for _, field := range service.Fields {
-			if field.Name == "base_url" || field.Name == "endpoint" {
+			if field.IsAddress() {
 				addresses++
 			}
 			if field.Kind == FieldSecret {

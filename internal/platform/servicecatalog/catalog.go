@@ -35,6 +35,15 @@ type Field struct {
 	Help        string    `json:"help,omitempty"`
 }
 
+// IsAddress reports whether this field holds the upstream address. Two names
+// are in use because miyun's stored configuration already calls it endpoint and
+// renaming it would mean migrating live rows. The check lives here so the
+// storage layer and the validator cannot disagree about which field is the
+// address.
+func (f Field) IsAddress() bool {
+	return f.Name == "base_url" || f.Name == "endpoint"
+}
+
 // Service is one row on the settings page.
 type Service struct {
 	Code        string `json:"code"`
