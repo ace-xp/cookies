@@ -271,6 +271,9 @@ type MySQLGatewayConfigStore struct {
 	// configuration. Nil means the real per-service probe; tests inject a stub
 	// so they do not depend on the network.
 	ServiceProber func(ctx context.Context, code, address, secret string) servicecatalog.Result
+	// ServiceModelLister overrides how the settings page reads the upstream's
+	// model list. Nil means the real call; tests inject a stub.
+	ServiceModelLister func(ctx context.Context, code, address, secret string) ([]string, servicecatalog.Result)
 }
 
 type CapabilityStatus struct {

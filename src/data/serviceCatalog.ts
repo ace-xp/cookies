@@ -8,6 +8,32 @@ export interface ApiServiceField {
   required: boolean
   placeholder?: string
   help?: string
+  /** 候选值，不是白名单：填别的照样能存。 */
+  options?: string[]
+}
+
+export interface ApiServiceModels {
+  models: string[]
+  outcome: ProbeOutcome
+  message: string
+  upstream_message?: string
+}
+
+/**
+ * 下拉里该出现哪些值：上游读回来的排前面，目录里的候选补在后面，去重。
+ * 上游那份是这把密钥真能调的，所以它优先；目录那份是编进二进制的，会随
+ * 服务商上新而过时，只当兜底。
+ */
+export function mergeModelOptions(
+  fromUpstream: readonly string[] | undefined,
+  fromCatalog: readonly string[] | undefined,
+): string[] {
+  const merged: string[] = []
+  for (const value of [...(fromUpstream ?? []), ...(fromCatalog ?? [])]) {
+    const trimmed = value.trim()
+    if (trimmed !== '' && !merged.includes(trimmed)) merged.push(trimmed)
+  }
+  return merged
 }
 
 export interface ApiServiceProbe {
@@ -25,6 +51,8 @@ export interface ApiServiceConfiguration {
   fields: ApiServiceField[]
   env_keys: string[]
   restart_required: boolean
+  /** 这项上游能不能读出模型清单；读不出的（比如火山语音填的是资源 ID）不显示按钮。 */
+  models_listable?: boolean
   /** Set when the service is configured somewhere other than this page. */
   managed_note?: string
   configured: boolean

@@ -18,10 +18,11 @@ import {
   prepareKanonCommercePreroll,
   unsupportedKanonWrite,
 } from '../backend/kanon-api.js'
-import { serviceSubmitBody, summarizeServiceStatus } from './serviceCatalog'
+import { mergeModelOptions, serviceSubmitBody, summarizeServiceStatus } from './serviceCatalog'
 import type {
   ApiServiceConfiguration,
   ApiServiceField,
+  ApiServiceModels,
   ApiServiceProbe,
   ProbeOutcome,
   ServiceFieldKind,
@@ -31,8 +32,8 @@ import type {
 // Re-exported so src/data/api.ts stays the single import point for the
 // frontend; the pure helpers live in their own module only so the Node test
 // runner can load them without pulling in React.
-export { serviceSubmitBody, summarizeServiceStatus }
-export type { ApiServiceConfiguration, ApiServiceField, ApiServiceProbe, ProbeOutcome, ServiceFieldKind, ServiceSubmitBody }
+export { mergeModelOptions, serviceSubmitBody, summarizeServiceStatus }
+export type { ApiServiceConfiguration, ApiServiceField, ApiServiceModels, ApiServiceProbe, ProbeOutcome, ServiceFieldKind, ServiceSubmitBody }
 import type { CreativeIntakeStatus, CreativeTaskStatus } from '../contracts/creative'
 // 纯类型的循环引用：verdict.ts 反过来从这里取 ApiConfidenceLevel。
 // import type 会被 TS 完全擦除，运行时不成环。
@@ -6013,6 +6014,8 @@ export const api = {
     platformRequest<ApiServiceConfiguration>(`/provider/services/${encodeURIComponent(code)}`, 'PUT', body),
   verifyService: (code: string, body: ServiceSubmitBody) =>
     platformRequest<ApiServiceProbe>(`/provider/services/${encodeURIComponent(code)}/verification`, 'POST', body),
+  listServiceModels: (code: string, body: ServiceSubmitBody) =>
+    platformRequest<ApiServiceModels>(`/provider/services/${encodeURIComponent(code)}/models`, 'POST', body),
   getPublicInsightOverview: () => request<ApiPublicInsightOverview>('/public-insights/overview'),
   getPublicInsightFilters: () => request<ApiPublicInsightFilters>('/public-insights/filters'),
   listPublicInsightVideos: (input: {

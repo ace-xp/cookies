@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { LockKeyhole, PlugZap, RotateCcw, Save } from 'lucide-react'
-import { api, serviceSubmitBody, type ApiServiceConfiguration } from '../../data/api'
+import { ListChecks, LockKeyhole, PlugZap, RotateCcw, Save } from 'lucide-react'
+import { api, mergeModelOptions, serviceSubmitBody, type ApiServiceConfiguration } from '../../data/api'
 import { initialFormValues, readOnlyHint } from './serviceCatalogState'
 
 function formatCheckedAt(value?: string) {
@@ -17,6 +17,13 @@ function messageOf(cause: unknown, fallback: string) {
 // writeServiceConfigurationError 固定发出，按它的前缀识别；两边改文案要一起改。
 const conflictMarker = '配置已被其他人改动'
 
+// ClassifyHTTP 已经把上游原话拼进 message 了（「密钥无效……（上游说明：xxx）」），
+// upstream_message 是同一句话的原料。这里再拼一次就成了「（上游说明：xxx）（上游
+// 说：xxx）」，所以直接用 message。
+function probeMessage(probe: { message: string; upstream_message?: string }) {
+  return probe.message || probe.upstream_message || '检查失败'
+}
+
 export function ServiceEditor({
   service,
   onSaved,
@@ -28,7 +35,10 @@ export function ServiceEditor({
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [stale, setStale] = useState(false)
-  const [busy, setBusy] = useState<'' | 'verify' | 'save' | 'refresh'>('')
+  const [busy, setBusy] = useState<'' | 'verify' | 'save' | 'refresh' | 'models'>('')
+  // 上游读回来的模型清单。空数组和「还没读过」要分开：读过但上游一个都没给，
+  // 该说「上游没给清单」，而不是继续显示按钮好像没点过。
+  const [upstreamModels, setUpstreamModels] = useState<string[] | null>(null)
 
   // 服务端读回来的值是表单初值；正在编辑的内容不被覆盖，所以只在拿到新
   // 的一份配置时同步。这个 effect 在只读服务上也会跑（早退发生在它之后），
@@ -36,6 +46,7 @@ export function ServiceEditor({
   useEffect(() => {
     setValues(initialFormValues(service))
     setStale(false)
+    setUpstreamModels(null)
   }, [service])
 
   if (service.tier !== 'editable') {
@@ -54,9 +65,32 @@ export function ServiceEditor({
     try {
       const probe = await api.verifyService(service.code, body())
       if (probe.outcome === 'ok') setNotice(probe.message || '连通正常。')
-      else setError(probe.upstream_message ? `${probe.message}（上游说：${probe.upstream_message}）` : probe.message)
+      else setError(probeMessage(probe))
     } catch (cause) {
       setError(messageOf(cause, '测试失败'))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  // 读上游的模型清单。不需要先填对「模型名」——这个按钮存在的意义就是操作
+  // 的人还不知道该填什么，所以服务端那条路径只校验地址和密钥。
+  const loadModels = async () => {
+    setBusy('models')
+    setNotice('')
+    setError('')
+    try {
+      const listed = await api.listServiceModels(service.code, body())
+      if (listed.outcome !== 'ok') {
+        setError(probeMessage(listed))
+        return
+      }
+      setUpstreamModels(listed.models)
+      setNotice(listed.models.length > 0
+        ? `上游给出 ${listed.models.length} 个模型，展开「模型名」右侧的下拉挑一个。`
+        : '连通正常，但上游没有给出模型清单，请照服务商文档手填。')
+    } catch (cause) {
+      setError(messageOf(cause, '读取模型列表失败'))
     } finally {
       setBusy('')
     }
@@ -108,15 +142,28 @@ export function ServiceEditor({
       {service.fields.map(field => {
         const masked = service.masked_secrets[field.name]
         const secret = field.kind === 'secret'
+        // datalist 而不是 select：清单只是候选，服务商随时会上新型号，页面不
+        // 能因为编在二进制里的那份没更新就让人填不进去。
+        const options = secret ? [] : mergeModelOptions(
+          field.name === 'model' ? upstreamModels ?? undefined : undefined, field.options)
+        const listID = options.length > 0 ? `${service.code}-${field.name}-options` : undefined
+        const listable = field.name === 'model' && service.models_listable === true
         return <label key={field.name}>{field.label}
           <input
             type={secret ? 'password' : 'text'}
             autoComplete={secret ? 'off' : undefined}
+            list={listID}
             value={values[field.name] ?? ''}
             onChange={event => setValues(current => ({ ...current, [field.name]: event.target.value }))}
             placeholder={secret && masked ? `留空则沿用已保存的 ${masked}` : field.placeholder}
             required={field.required && !(secret && Boolean(masked))}
           />
+          {listID ? <datalist id={listID}>{options.map(option => <option key={option} value={option}/>)}</datalist> : null}
+          {listable
+            ? <button className="link-button" type="button" onClick={() => void loadModels()} disabled={busy !== ''}>
+                <ListChecks size={14}/>{busy === 'models' ? '读取中…' : '读取可用模型'}
+              </button>
+            : null}
           {field.help ? <small>{field.help}</small> : null}
         </label>
       })}

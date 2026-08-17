@@ -45,6 +45,10 @@ func serviceConfigurationView(service servicecatalog.Service, config provider.Se
 		"masked_secrets":      config.MaskedSecrets,
 		"credential_readable": config.CredentialReadable,
 		"version":             config.Version,
+		// Whether the page may offer a 「读取可用模型」 button. It is answered
+		// here rather than guessed in the browser, so the two sides cannot
+		// disagree about which upstreams have a model list to read.
+		"models_listable": service.Tier == servicecatalog.TierEditable && provider.SupportsModelListing(service.Code),
 	}
 	if service.ManagedNote != "" {
 		view["managed_note"] = service.ManagedNote
@@ -127,6 +131,34 @@ func (s *Server) verifyServiceConfiguration(w http.ResponseWriter, r *http.Reque
 	writerHeaderNoStore(w)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"outcome": string(result.Outcome), "message": result.Message,
+		"upstream_message": result.UpstreamMessage,
+	})
+}
+
+// listServiceModels answers with the model identifiers the submitted address
+// and credential can actually call, so the page offers a picker instead of a
+// text box the operator has to fill from memory. It writes nothing.
+func (s *Server) listServiceModels(w http.ResponseWriter, r *http.Request) {
+	if s.serviceConfigurations == nil {
+		s.notImplemented(w, r)
+		return
+	}
+	_, input, ok := s.readServiceConfigurationRequest(w, r)
+	if !ok {
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	models, result, err := s.serviceConfigurations.ListServiceModels(r.Context(), rc.Actor.OrganizationID, input)
+	if err != nil {
+		s.writeServiceConfigurationError(w, r, err)
+		return
+	}
+	if models == nil {
+		models = []string{}
+	}
+	writerHeaderNoStore(w)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"models": models, "outcome": string(result.Outcome), "message": result.Message,
 		"upstream_message": result.UpstreamMessage,
 	})
 }

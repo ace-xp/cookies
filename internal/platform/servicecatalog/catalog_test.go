@@ -194,6 +194,61 @@ func TestEveryModelAliasIsResolvedSomewhere(t *testing.T) {
 	}
 }
 
+// A suggested model identifier that does not exist upstream is worse than no
+// suggestion: the operator picks it from a list, trusts it, and finds out at
+// call time. This test cannot ask the vendor what exists, so it holds the next
+// best line — every option must be an identifier this repository has actually
+// run against, evidenced in code or in a design document. Recalling a plausible
+// name from memory is not allowed.
+func TestModelOptionsAreRealIdentifiers(t *testing.T) {
+	evidence := repositoryEvidence(t)
+	for _, service := range All() {
+		for _, field := range service.Fields {
+			for _, option := range field.Options {
+				if !strings.Contains(evidence, option) {
+					t.Errorf("%s offers model %q, which appears nowhere else in this repository — "+
+						"suggest only identifiers the platform has actually called", service.Code, option)
+				}
+			}
+		}
+	}
+}
+
+// repositoryEvidence is every Go source and document outside this package,
+// concatenated. Reading docs as well as code is deliberate: a model this
+// platform ran against during a research spike is real evidence even when no
+// test happens to name it.
+func repositoryEvidence(t *testing.T) string {
+	t.Helper()
+	var builder strings.Builder
+	for _, root := range []string{filepath.Join("..", "..", "..", "internal"), filepath.Join("..", "..", "..", "docs")} {
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() && entry.Name() == "servicecatalog" {
+				return fs.SkipDir
+			}
+			if entry.IsDir() || (!strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, ".md")) {
+				return nil
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			builder.Write(content)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", root, err)
+		}
+	}
+	if builder.Len() == 0 {
+		t.Fatal("found no sources to check model options against")
+	}
+	return builder.String()
+}
+
 func goSourcesOutsideCatalog(t *testing.T) []string {
 	t.Helper()
 	root := filepath.Join("..", "..", "..", "internal")

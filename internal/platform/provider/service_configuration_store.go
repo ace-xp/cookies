@@ -196,6 +196,53 @@ func (s MySQLGatewayConfigStore) VerifyServiceConfiguration(ctx context.Context,
 	return s.probeService(ctx, normalized.Code, address, secret), nil
 }
 
+// ListServiceModels reads the upstream's model list so the page can offer the
+// identifiers instead of asking the operator to recall one.
+//
+// It deliberately does not go through normalizeServiceConfigurationInput. That
+// one rejects a submission whose 模型名 is blank, which is exactly the state an
+// operator is in when they need this list; requiring a model name before you
+// may ask what the model names are is a loop with no way in.
+func (s MySQLGatewayConfigStore) ListServiceModels(ctx context.Context, organizationID contract.OrganizationID, input ServiceConfigurationInput) ([]string, servicecatalog.Result, error) {
+	if s.DB == nil {
+		return nil, servicecatalog.Result{}, fmt.Errorf("provider database is required")
+	}
+	service, found := servicecatalog.Find(input.Code)
+	if !found {
+		return nil, servicecatalog.Result{}, ServiceConfigurationInputError{
+			Message: fmt.Sprintf("未知的服务编码 %q", input.Code),
+		}
+	}
+	if service.Tier != servicecatalog.TierEditable {
+		return nil, servicecatalog.Result{}, ServiceConfigurationInputError{
+			Message: service.DisplayName + "不支持在页面上修改",
+		}
+	}
+
+	address, addressErr := normalizeAddress(strings.TrimSpace(input.Values[addressField(service)]), s.AllowInsecureHTTP)
+	if addressErr != nil {
+		return nil, servicecatalog.Result{}, ServiceConfigurationInputError{Message: "服务地址" + addressErr.Message}
+	}
+	secret := ""
+	if name := secretField(service); name != "" {
+		secret = strings.TrimSpace(input.Values[name])
+		if secret == "" {
+			stored, resolveErr := s.resolveStoredSecret(ctx, service.ConnectionCode)
+			if resolveErr != nil {
+				return nil, servicecatalog.Result{}, ServiceConfigurationInputError{Message: "还没有保存过密钥，请先填写"}
+			}
+			secret = stored
+		}
+	}
+
+	if s.ServiceModelLister != nil {
+		models, result := s.ServiceModelLister(ctx, input.Code, address, secret)
+		return models, result, nil
+	}
+	models, result := ListUpstreamModels(ctx, input.Code, address, secret)
+	return models, result, nil
+}
+
 func (s MySQLGatewayConfigStore) resolveStoredSecret(ctx context.Context, connectionCode string) (string, error) {
 	var connectionID string
 	if err := s.DB.QueryRowContext(ctx,

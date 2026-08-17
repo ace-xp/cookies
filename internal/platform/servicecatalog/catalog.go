@@ -33,6 +33,11 @@ type Field struct {
 	Required    bool      `json:"required"`
 	Placeholder string    `json:"placeholder,omitempty"`
 	Help        string    `json:"help,omitempty"`
+	// Options are candidate values offered in a picker. They are suggestions,
+	// not a whitelist: the field still accepts anything typed, because a list
+	// baked into the binary goes stale the moment the vendor ships a model.
+	// The live list from the upstream always wins over these.
+	Options []string `json:"options,omitempty"`
 }
 
 // IsAddress reports whether this field holds the upstream address. Two names
@@ -78,8 +83,25 @@ type Service struct {
 // model endpoint: an address, a model identifier, and a bearer token.
 var modelFields = []Field{
 	{Name: "base_url", Label: "服务地址", Kind: FieldText, Required: true, Placeholder: "https://ark.cn-beijing.volces.com/api/v3"},
-	{Name: "model", Label: "模型名", Kind: FieldText, Required: true, Help: "上游的模型标识，填错要等真正调用时才暴露"},
+	{Name: "model", Label: "模型名", Kind: FieldText, Required: true, Help: modelFieldHelp},
 	{Name: "api_key", Label: "API Key", Kind: FieldSecret, Required: false, Help: "留空则沿用已保存的密钥"},
+}
+
+const modelFieldHelp = "填错要等真正调用时才暴露。下拉里是本平台用过的型号；填好地址和密钥后点「读取可用模型」，能拉到这把密钥实际可调的全部型号。"
+
+// modelFieldsWith copies the shared shape and offers candidate identifiers on
+// the model field. Every identifier here is one this repository has actually
+// run against — TestModelOptionsAreRealIdentifiers holds that line, because a
+// name recalled from memory is how the page ends up pointing at something that
+// does not exist (see the ARK_API_KEY comment on model.video).
+func modelFieldsWith(options ...string) []Field {
+	fields := append([]Field(nil), modelFields...)
+	for i := range fields {
+		if fields[i].Name == "model" {
+			fields[i].Options = options
+		}
+	}
+	return fields
 }
 
 var services = []Service{
@@ -88,7 +110,7 @@ var services = []Service{
 		Impact:     "策略生成、文案撰写、创意脚本",
 		Capability: "text.generate", ModelAlias: "cookies.text.standard",
 		ConnectionType: "ark", ConnectionCode: "ark-text",
-		Fields: modelFields,
+		Fields: modelFieldsWith("doubao-seed-2-1-pro-260628", "doubao-seed-2-0-pro-260215"),
 		EnvKeys: []string{
 			"COOKIES_PROVIDER_TEXT_ADAPTER",
 			"COOKIES_ARK_TEXT_API_KEY", "COOKIES_ARK_TEXT_MODEL", "COOKIES_ARK_TEXT_BASE_URL",
@@ -99,7 +121,7 @@ var services = []Service{
 		Impact:     "图片生成、图文创意",
 		Capability: "image.generate", ModelAlias: "cookies.image.standard",
 		ConnectionType: "ark", ConnectionCode: "ark-image",
-		Fields: modelFields,
+		Fields: modelFieldsWith("doubao-seedream-5-0-pro-260628"),
 		EnvKeys: []string{
 			"COOKIES_PROVIDER_IMAGE_ADAPTER",
 			"COOKIES_ARK_IMAGE_API_KEY", "COOKIES_ARK_IMAGE_MODEL", "COOKIES_ARK_IMAGE_BASE_URL",
@@ -111,7 +133,10 @@ var services = []Service{
 		Impact:     "视频创作出片",
 		Capability: "video.generate", ModelAlias: "cookies.video.standard",
 		ConnectionType: "ark", ConnectionCode: "ark-seedance",
-		Fields: modelFields,
+		Fields: modelFieldsWith(
+			"doubao-seedance-2-0-fast-260128", "doubao-seedance-2-0-260128",
+			"doubao-seedance-1-0-pro-250528", "doubao-seedance-1-0-lite-t2v-250428",
+		),
 		// ARK_API_KEY and ARK_BASE_URL used to be listed here. Nothing has read
 		// them for a long time — they survive only in .env.example — so the page
 		// was sending the operator to edit variables with no effect.
@@ -157,7 +182,7 @@ var services = []Service{
 		Impact:     "需求分析的联网取证",
 		Capability: "research.web", ModelAlias: "cookies.research.web.standard",
 		ConnectionType: "ark", ConnectionCode: "ark-research-web",
-		Fields: modelFields,
+		Fields: modelFieldsWith("doubao-seed-2-1-pro-260628"),
 		EnvKeys: []string{
 			"COOKIES_RESEARCH_SEED_ENABLED", "COOKIES_RESEARCH_SEED_MODEL_ALIAS",
 			"COOKIES_RESEARCH_MCP_PROTOCOL_VERSION", "COOKIES_RESEARCH_MCP_ENV_ALLOWLIST",

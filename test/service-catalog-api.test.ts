@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { serviceSubmitBody, summarizeServiceStatus } from '../src/data/serviceCatalog'
+import { mergeModelOptions, serviceSubmitBody, summarizeServiceStatus } from '../src/data/serviceCatalog'
 
 test('空字符串的密钥字段不提交，保持沿用已存凭据', () => {
   const body = serviceSubmitBody(
@@ -37,4 +37,22 @@ test('状态汇总区分四态', () => {
     summarizeServiceStatus({ configured: true, last_probe: { outcome: 'unreachable', message: '' } }),
     '已配置但连不通',
   )
+})
+
+test('模型下拉：上游读到的排前面，目录候选补在后面', () => {
+  const merged = mergeModelOptions(
+    ['doubao-seedance-2-0-260128', 'doubao-seedance-9-9-new'],
+    ['doubao-seedance-2-0-fast-260128', 'doubao-seedance-2-0-260128'],
+  )
+  assert.deepEqual(merged, [
+    'doubao-seedance-2-0-260128',
+    'doubao-seedance-9-9-new',
+    'doubao-seedance-2-0-fast-260128',
+  ])
+})
+
+test('模型下拉：没读过上游时只剩目录候选，两边都空就是空', () => {
+  assert.deepEqual(mergeModelOptions(undefined, ['doubao-seedream-5-0-pro-260628']), ['doubao-seedream-5-0-pro-260628'])
+  assert.deepEqual(mergeModelOptions(undefined, undefined), [])
+  assert.deepEqual(mergeModelOptions([' '], ['']), [])
 })

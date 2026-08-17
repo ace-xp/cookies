@@ -360,6 +360,7 @@ type ServiceConfigurationStore interface {
 	GetServiceConfiguration(context.Context, contract.OrganizationID, string) (provider.ServiceConfiguration, error)
 	SaveServiceConfiguration(context.Context, contract.OrganizationID, string, provider.ServiceConfigurationInput) (provider.ServiceConfiguration, error)
 	VerifyServiceConfiguration(context.Context, contract.OrganizationID, provider.ServiceConfigurationInput) (servicecatalog.Result, error)
+	ListServiceModels(context.Context, contract.OrganizationID, provider.ServiceConfigurationInput) ([]string, servicecatalog.Result, error)
 }
 
 // New retains the bootstrap construction path for focused HTTP tests. The
@@ -407,6 +408,10 @@ func NewWithDependencies(dependencies Dependencies) *Server {
 	server.mux.Handle("GET /platform/v1/provider/services", server.requireAuthentication(http.HandlerFunc(server.listServiceConfigurations)))
 	server.mux.Handle("PUT /platform/v1/provider/services/{code}", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.saveServiceConfiguration))))
 	server.mux.Handle("POST /platform/v1/provider/services/{code}/verification", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.verifyServiceConfiguration))))
+	// Reading the model list is POST because it carries a candidate address and
+	// credential in the body; it is still read-only, and gated by the same scope
+	// as verification because it exercises someone's key against an upstream.
+	server.mux.Handle("POST /platform/v1/provider/services/{code}/models", server.requireAuthentication(server.requireScope("provider.configuration.write", http.HandlerFunc(server.listServiceModels))))
 	server.mux.Handle("POST /platform/v1/brands", server.requireAuthentication(server.requireScope("project.write", http.HandlerFunc(server.createBrand))))
 	server.mux.Handle("POST /platform/v1/projects", server.requireAuthentication(server.requireScope("project.write", http.HandlerFunc(server.createProject))))
 	server.mux.Handle("GET /platform/v1/projects", server.requireAuthentication(server.requireScope("project.read", http.HandlerFunc(server.listProjects))))
