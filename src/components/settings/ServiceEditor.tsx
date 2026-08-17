@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { LockKeyhole, PlugZap, RotateCcw, Save } from 'lucide-react'
 import { api, serviceSubmitBody, type ApiServiceConfiguration } from '../../data/api'
-import { readOnlyHint } from './serviceCatalogState'
+import { initialFormValues, readOnlyHint } from './serviceCatalogState'
 
 function formatCheckedAt(value?: string) {
   if (!value) return '尚未检查'
@@ -31,14 +31,10 @@ export function ServiceEditor({
   const [busy, setBusy] = useState<'' | 'verify' | 'save' | 'refresh'>('')
 
   // 服务端读回来的值是表单初值；正在编辑的内容不被覆盖，所以只在拿到新
-  // 的一份配置时同步。密钥字段永远从空开始，留空即沿用已存的。
+  // 的一份配置时同步。这个 effect 在只读服务上也会跑（早退发生在它之后），
+  // 所以取初值的活儿交给 initialFormValues，它不假设字段一定存在。
   useEffect(() => {
-    const next: Record<string, string> = {}
-    for (const field of service.fields) {
-      if (field.kind === 'secret') continue
-      next[field.name] = service.values[field.name] ?? service.environment_fallback?.[field.name] ?? ''
-    }
-    setValues(next)
+    setValues(initialFormValues(service))
     setStale(false)
   }, [service])
 

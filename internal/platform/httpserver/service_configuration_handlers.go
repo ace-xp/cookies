@@ -21,13 +21,24 @@ type serviceConfigurationBody struct {
 // serviceConfigurationView is the only shape a credential ever reaches the
 // browser in: a mask, never the key.
 func serviceConfigurationView(service servicecatalog.Service, config provider.ServiceConfiguration) map[string]any {
+	// Read-only services declare no fields, and a nil slice marshals to null.
+	// The page iterates this list, so null crashes the whole settings screen —
+	// send an empty array and the absence stays representable.
+	fields := service.Fields
+	if fields == nil {
+		fields = []servicecatalog.Field{}
+	}
+	envKeys := service.EnvKeys
+	if envKeys == nil {
+		envKeys = []string{}
+	}
 	view := map[string]any{
 		"code":                service.Code,
 		"display_name":        service.DisplayName,
 		"tier":                string(service.Tier),
 		"impact":              service.Impact,
-		"fields":              service.Fields,
-		"env_keys":            service.EnvKeys,
+		"fields":              fields,
+		"env_keys":            envKeys,
 		"restart_required":    service.RestartRequired,
 		"configured":          config.Configured,
 		"values":              config.Values,

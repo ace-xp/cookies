@@ -88,3 +88,27 @@ func TestProbeFailureMessageDropsTheSentinelPrefix(t *testing.T) {
 		t.Fatalf("the sentinel prefix reached the operator: %q", wrapped)
 	}
 }
+
+// A nil slice marshals to null, and the settings page iterates this list. One
+// null took the whole screen down with "service.fields is not iterable" during
+// the local acceptance run, so the absence of fields has to serialize as [].
+func TestServiceListViewSerializesMissingFieldsAsEmptyArray(t *testing.T) {
+	view := serviceConfigurationView(servicecatalogReadOnlyTestService(t), testServiceConfiguration(""))
+	fields, ok := view["fields"].([]servicecatalog.Field)
+	if !ok {
+		t.Fatalf("fields must always be a slice, got %T", view["fields"])
+	}
+	if fields == nil {
+		t.Fatal("a nil slice becomes null in JSON and crashes the page")
+	}
+	if len(fields) != 0 {
+		t.Fatalf("a read-only service declares no fields, got %d", len(fields))
+	}
+	payload, err := json.Marshal(view)
+	if err != nil {
+		t.Fatalf("marshal view: %v", err)
+	}
+	if strings.Contains(string(payload), `"fields":null`) {
+		t.Fatal("fields serialized as null")
+	}
+}
