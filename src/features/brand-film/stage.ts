@@ -22,9 +22,9 @@ export type BrandFilmStageFacts = {
 const definitions: Array<Pick<BrandFilmStageState, 'id' | 'label' | 'description'>> = [
   { id: 'brief', label: 'Brief 确认', description: '核对事实、卖点、限制与参考素材' },
   { id: 'concept', label: '创意方向', description: '比较并选择差异化叙事方向' },
-  { id: 'storyboard', label: '剧本分镜', description: '编辑剧本、旁白与镜头执行' },
+  { id: 'storyboard', label: '剧本分镜', description: '编辑剧本、声音意图与镜头执行' },
   { id: 'generation', label: '视频生成', description: '逐镜头生成、反馈与锁定' },
-  { id: 'audio', label: '声音导演', description: '编排旁白、音乐与音效' },
+  { id: 'audio', label: '声音导演', description: '编排音乐、环境氛围与镜头音效' },
 ]
 
 export function deriveBrandFilmStages(facts: BrandFilmStageFacts): BrandFilmStageState[] {

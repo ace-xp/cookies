@@ -184,12 +184,24 @@ type ViralPromptDraft struct {
 }
 
 type ViralGenerationSpec struct {
-	ModelAlias      string `json:"model_alias"`
-	DurationSeconds int    `json:"duration_seconds"`
-	AspectRatio     string `json:"aspect_ratio"`
-	Resolution      string `json:"resolution"`
-	CandidateCount  int    `json:"candidate_count"`
+	ModelAlias         string                  `json:"model_alias"`
+	DurationSeconds    int                     `json:"duration_seconds"`
+	AspectRatio        string                  `json:"aspect_ratio"`
+	Resolution         string                  `json:"resolution"`
+	CandidateCount     int                     `json:"candidate_count"`
+	ReferenceImageMode ViralReferenceImageMode `json:"reference_image_mode"`
 }
+
+// ViralReferenceImageMode records whether a frozen generation package sends a
+// visual reference to the model. The source asset remains traceable in the
+// input snapshot even when a policy-safe retry must omit it from submission.
+type ViralReferenceImageMode string
+
+const (
+	ViralReferenceImageModeReferenceImage         ViralReferenceImageMode = "reference_image"
+	ViralReferenceImageModeTextOnly               ViralReferenceImageMode = "text_only"
+	ViralReferenceImageModeTextOnlyOriginalPerson ViralReferenceImageMode = "text_only_original_person"
+)
 
 type ViralPromptPackage struct {
 	ContractVersion      string                            `json:"contract_version"`

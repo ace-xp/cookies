@@ -734,6 +734,7 @@ export async function getKanonCapabilities(): Promise<ApiProviderCapabilities> {
       model_alias: string
       upstream_model: string
       available: boolean
+      connection_type?: string
     }>
     credential?: { source?: 'environment' | 'workspace'; masked_api_key?: string }
     checked_at: string
@@ -745,6 +746,7 @@ export async function getKanonCapabilities(): Promise<ApiProviderCapabilities> {
       capability: item.capability,
       model: `${item.model_alias} → ${item.upstream_model}`,
       available: item.available,
+      connectionType: item.connection_type,
     })),
     credential: response.credential ? {
       source: response.credential.source,

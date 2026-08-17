@@ -47,7 +47,7 @@ func CompileBrandAudioMix(organizationID contract.OrganizationID, projectID cont
 
 func supportedAudioTrack(value string) bool {
 	switch strings.TrimSpace(value) {
-	case BrandAudioTrackVoiceover, BrandAudioTrackMusic, BrandAudioTrackSFX, BrandAudioTrackSource:
+	case BrandAudioTrackVoiceover, BrandAudioTrackAmbience, BrandAudioTrackMusic, BrandAudioTrackSFX, BrandAudioTrackSource:
 		return true
 	default:
 		return false

@@ -23,6 +23,8 @@ export interface ModelProviderConfig {
 interface ModelConfigValue {
   providers: ModelProviderConfig[]
   configuredCount: number
+  videoGenerationAvailable: boolean
+  videoGenerationManagedByGateway: boolean
   isLoading: boolean
   refresh: () => Promise<void>
   /** 视频生成模型的服务端配置，未读到时为 null。 */
@@ -41,6 +43,7 @@ const capabilityLabels: Record<string, string> = {
   'image.enhance': '图片增强',
   'image.generate': '图片生成',
   'research.web': '联网研究',
+	'audio.generate': 'AI 音乐与音效',
   'text.generate': '文本与策略',
   'video.enhance': '视频增强',
   'video.generate': '视频生成',
@@ -57,6 +60,8 @@ function summarizeCapabilities(capabilities: Array<{ capability: string; availab
 
 export function ModelConfigProvider({ children }: { children: ReactNode }) {
   const [providers, setProviders] = useState<ModelProviderConfig[]>([])
+  const [videoGenerationAvailable, setVideoGenerationAvailable] = useState(false)
+  const [videoGenerationManagedByGateway, setVideoGenerationManagedByGateway] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [videoConfig, setVideoConfig] = useState<ApiVideoModelConfiguration | null>(null)
   const [isVideoLoading, setIsVideoLoading] = useState(true)
@@ -64,6 +69,11 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
     setIsLoading(true)
     try {
       const capabilities = await api.getCapabilities()
+      const videoCapability = capabilities.capabilities.find(item =>
+        item.capability === 'video.generate' && item.model.includes('cookies.video.standard'),
+      )
+      setVideoGenerationAvailable(Boolean(videoCapability?.available))
+      setVideoGenerationManagedByGateway(videoCapability?.connectionType === 'adapter_gateway')
       setProviders([{
         id: 'ark',
         name: '模型能力网关',
@@ -74,6 +84,8 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
         lastVerifiedAt: capabilities.checkedAt,
       }])
     } catch {
+      setVideoGenerationAvailable(false)
+      setVideoGenerationManagedByGateway(false)
       setProviders([{ id: 'ark', name: '模型能力网关', description: '暂时无法连接模型服务', status: '未配置' }])
     } finally {
       setIsLoading(false)
@@ -82,6 +94,11 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
   useEffect(() => { void refresh() }, [refresh])
 
   const refreshVideoConfig = useCallback(async () => {
+    if (videoGenerationManagedByGateway) {
+      setVideoConfig(null)
+      setIsVideoLoading(false)
+      return
+    }
     setIsVideoLoading(true)
     try {
       setVideoConfig(await api.getVideoModelConfiguration())
@@ -90,8 +107,10 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsVideoLoading(false)
     }
-  }, [])
-  useEffect(() => { void refreshVideoConfig() }, [refreshVideoConfig])
+  }, [videoGenerationManagedByGateway])
+  useEffect(() => {
+    if (!isLoading) void refreshVideoConfig()
+  }, [isLoading, refreshVideoConfig])
 
   // 保存成功意味着服务端刚探通过一次，能力清单也随之变化，所以顺带刷一次。
   const saveVideoConfig = useCallback(async (input: ApiVideoModelConfigurationInput) => {
@@ -109,6 +128,8 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     providers,
     configuredCount: providers.filter(provider => provider.status === '已配置').length,
+    videoGenerationAvailable,
+    videoGenerationManagedByGateway,
     isLoading,
     refresh,
     videoConfig,
@@ -116,7 +137,7 @@ export function ModelConfigProvider({ children }: { children: ReactNode }) {
     refreshVideoConfig,
     saveVideoConfig,
     verifyVideoConfig,
-  }), [providers, isLoading, refresh, videoConfig, isVideoLoading, refreshVideoConfig, saveVideoConfig, verifyVideoConfig])
+  }), [providers, isLoading, videoGenerationAvailable, videoGenerationManagedByGateway, refresh, videoConfig, isVideoLoading, refreshVideoConfig, saveVideoConfig, verifyVideoConfig])
   return <ModelConfigContext.Provider value={value}>{children}</ModelConfigContext.Provider>
 }
 

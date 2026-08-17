@@ -134,6 +134,11 @@ func (s *Server) saveVideoConfiguration(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) writeVideoConfigurationError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, provider.ErrVideoConfigurationManagedExternally):
+		writeProblem(w, http.StatusConflict, contract.Error{
+			Code: "PROVIDER_CONFIGURATION_MANAGED_EXTERNALLY", Message: "视频路由由 Adapter Gateway 管理，请在网关控制面维护。",
+			RequestID: requestIDFrom(r.Context()), Retryable: false,
+		})
 	case errors.Is(err, provider.ErrVideoConfigurationConflict):
 		writeProblem(w, http.StatusConflict, contract.Error{
 			Code: "PROVIDER_CONFIGURATION_CONFLICT", Message: "配置已被其他人改动，请刷新后重试。",

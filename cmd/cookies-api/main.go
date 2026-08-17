@@ -792,6 +792,8 @@ func main() {
 					log.Fatalf("cookies.video.standard resolved forbidden video connection type %q", resolved.ConnectionType)
 				}
 				providerService.VideoRoutes = videoConfigStore
+				dependencies.ProviderVideoConfiguration = provider.GatewayManagedVideoConfigurationStore{Routes: videoConfigStore}
+				dependencies.ProviderVideoEnvironment = httpserver.ProviderVideoEnvironment{Configured: true}
 			} else {
 				providerService.VideoRoutes = videoConfigStore
 				providerService.VideoRouteOptional = cfg.Provider.ArkVideoDirect()
@@ -833,6 +835,14 @@ func main() {
 			routes := provider.MySQLGatewayConfigStore{DB: db, Cipher: cipher, AllowInsecureHTTP: cfg.Provider.AllowInsecureHTTP}
 			speechSynthesizer = provider.MiniMaxSpeechAdapter{Routes: routes, Credentials: routes, ModelAlias: provider.DefaultMiniMaxSpeechModelAlias, DefaultVoiceAlias: "cookies.voice.brand.warm_female"}
 			creativeService.BrandFilmSpeech = speechSynthesizer
+		}
+		if cfg.Provider.SoundAssetAdapter == "http" {
+			creativeService.BrandFilmSoundAssets = provider.HTTPSoundAssetGenerator{
+				Endpoint: cfg.Provider.SoundAsset.Endpoint,
+				APIKey:   cfg.Provider.SoundAsset.APIKey,
+				Model:    cfg.Provider.SoundAsset.Model,
+			}
+			log.Printf("Brand Film AI sound generation configured: model=%s", cfg.Provider.SoundAsset.Model)
 		}
 		creativeService.AINativeProductions = creativeRepository
 		creativeService.AINativeProductionScheduler = creative.JobRuntimeAINativeProductionScheduler{Store: runtimeStore}

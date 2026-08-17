@@ -34,10 +34,52 @@ type UpdateViralPromptRequest struct {
 	Dimensions       map[ViralPromptDimensionID]string `json:"dimensions"`
 }
 
+// UpdateViralInputRequest replaces the editable product facts before a new
+// reference analysis. Re-analysis is required so no prompt can outlive the
+// facts from which it was derived.
+type UpdateViralInputRequest struct {
+	ExpectedRevision int64    `json:"expected_revision"`
+	ProductName      string   `json:"product_name"`
+	SellingPoints    []string `json:"selling_points"`
+	CallToAction     string   `json:"call_to_action"`
+	UserInstruction  string   `json:"user_instruction"`
+}
+
 type ConfirmViralGenerationRequest struct {
 	ExpectedRevision            int64 `json:"expected_revision"`
 	ConfirmReferenceVideoRights bool  `json:"confirm_reference_video_rights"`
 	ConfirmReferenceImageRights bool  `json:"confirm_reference_image_rights"`
+}
+
+// RetryViralWithoutReferenceImageRequest explicitly acknowledges a model
+// rejection caused by a real-person visual reference. The retry keeps the
+// analyzed textual directions but never submits that reference image again.
+type RetryViralWithoutReferenceImageRequest struct {
+	ExpectedRevision int64 `json:"expected_revision"`
+}
+
+func (s Service) validateViralProductFacts(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, productName string) error {
+	reader, ok := s.Projects.(ProjectBusinessContextReader)
+	if !ok {
+		// Legacy test and migration adapters may only implement the minimal
+		// active-context contract. Production composition supplies the richer
+		// reader, where this check is mandatory.
+		return nil
+	}
+	business, err := reader.GetBusinessContext(ctx, actor, projectID)
+	if err != nil {
+		return err
+	}
+	if len(business.Products) == 0 {
+		return nil
+	}
+	canonical := strings.ToLower(strings.TrimSpace(productName))
+	for _, product := range business.Products {
+		if canonical != "" && canonical == strings.ToLower(strings.TrimSpace(product.Name)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("product_name must match a product in the current project profile")
 }
 
 func (s Service) AnalyzeViralRemake(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string) (TaskDetail, error) {
@@ -152,6 +194,67 @@ func (s Service) UpdateViralPrompt(ctx context.Context, actor contract.ActorCont
 	return s.Repository.GetTaskDetail(ctx, actor.OrganizationID, projectID, taskID)
 }
 
+func (s Service) UpdateViralInput(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, request UpdateViralInputRequest) (TaskDetail, error) {
+	detail, err := s.requireViralWorkspace(ctx, actor, projectID, taskID, true)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	viral := detail.VideoDraft.ViralRemake
+	if request.ExpectedRevision != detail.VideoDraft.Revision ||
+		(viral.Status != ViralWaitingForAnalysis && viral.Status != ViralAnalysisReady && viral.Status != ViralProviderFailed) {
+		return TaskDetail{}, ErrVersionConflict
+	}
+	if strings.TrimSpace(request.ProductName) == "" || len(request.ProductName) > 300 ||
+		strings.TrimSpace(request.CallToAction) == "" || len(request.CallToAction) > 300 ||
+		strings.TrimSpace(request.UserInstruction) == "" || len(request.UserInstruction) > 2000 {
+		return TaskDetail{}, fmt.Errorf("product_name, call_to_action and user_instruction are required")
+	}
+	if err := validateStringList("selling_points", request.SellingPoints, 12, 300); err != nil || len(request.SellingPoints) == 0 {
+		if err != nil {
+			return TaskDetail{}, err
+		}
+		return TaskDetail{}, fmt.Errorf("at least one selling_point is required")
+	}
+	if err := s.validateViralProductFacts(ctx, actor, projectID, request.ProductName); err != nil {
+		return TaskDetail{}, err
+	}
+	now := s.now()
+	input := viral.InputSnapshot
+	input.ProductName = strings.TrimSpace(request.ProductName)
+	input.SellingPoints = append([]string{}, request.SellingPoints...)
+	input.CallToAction = strings.TrimSpace(request.CallToAction)
+	input.UserInstruction = strings.TrimSpace(request.UserInstruction)
+	inputHash, err := contract.CanonicalJSONHash(input)
+	if err != nil {
+		return TaskDetail{}, fmt.Errorf("canonicalize viral remake input: %w", err)
+	}
+	next := *detail.VideoDraft
+	next.Revision++
+	next.CreatedAt = now
+	next.Prompt = "waiting for updated reference analysis"
+	next.CallToAction = input.CallToAction
+	updated := *viral
+	updated.Revision = next.Revision
+	updated.Status = ViralWaitingForAnalysis
+	updated.InputSnapshot = input
+	updated.InputHash = inputHash
+	updated.Analysis = nil
+	updated.PromptDraft = nil
+	updated.PromptPackage = nil
+	updated.Candidates = []ViralCandidate{}
+	updated.Readiness.GenerationReady = false
+	updated.Readiness.ProductionReady = false
+	updated.Readiness.Blockers = replaceBlockers(updated.Readiness.Blockers,
+		[]string{"analysis_snapshot", "confirmed_prompt_package", "provider_video_route"},
+		[]string{"analysis_snapshot", "confirmed_prompt_package", "provider_video_route"})
+	updated.UpdatedAt = now
+	next.ViralRemake = &updated
+	if _, err := s.ViralRemakes.ReviseVideoDraft(ctx, actor.OrganizationID, projectID, taskID, detail.VideoDraft.Revision, next, TaskInProgress); err != nil {
+		return TaskDetail{}, err
+	}
+	return s.Repository.GetTaskDetail(ctx, actor.OrganizationID, projectID, taskID)
+}
+
 func (s Service) ConfirmViralGeneration(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, request ConfirmViralGenerationRequest) (TaskDetail, error) {
 	detail, err := s.requireViralWorkspace(ctx, actor, projectID, taskID, true)
 	if err != nil {
@@ -173,6 +276,11 @@ func (s Service) ConfirmViralGeneration(ctx context.Context, actor contract.Acto
 	generation := ViralGenerationSpec{
 		ModelAlias: "cookies.video.standard", DurationSeconds: minInt(detail.VideoDraft.DurationSeconds, 15),
 		AspectRatio: "9:16", Resolution: "720p", CandidateCount: 1,
+	}
+	if input.ReferenceImage == nil {
+		generation.ReferenceImageMode = ViralReferenceImageModeTextOnly
+	} else {
+		generation.ReferenceImageMode = ViralReferenceImageModeReferenceImage
 	}
 	pkg := ViralPromptPackage{
 		ContractVersion: "creative-viral-prompt-package/v1", TaskID: taskID,
@@ -233,7 +341,7 @@ func (s Service) ViralProviderInput(ctx context.Context, actor contract.ActorCon
 		InputMode:          provider.VideoInputTextOnly,
 		ConditioningAssets: []provider.VideoConditioningAsset{},
 	}
-	if ref := viral.InputSnapshot.ReferenceImage; ref != nil {
+	if ref := viral.InputSnapshot.ReferenceImage; ref != nil && usesViralReferenceImage(viral.PromptPackage.GenerationSpec.ReferenceImageMode) {
 		input.InputMode = provider.VideoInputReferenceImage
 		input.ConditioningAssets = []provider.VideoConditioningAsset{{
 			Role:      provider.VideoConditioningReferenceImage,
@@ -243,30 +351,105 @@ func (s Service) ViralProviderInput(ctx context.Context, actor contract.ActorCon
 	return input, viral.PromptPackage.ContentHash, input.Validate()
 }
 
+func (s Service) RetryViralWithoutReferenceImage(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID string, request RetryViralWithoutReferenceImageRequest) (TaskDetail, error) {
+	detail, err := s.requireViralWorkspace(ctx, actor, projectID, taskID, true)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	viral := detail.VideoDraft.ViralRemake
+	if request.ExpectedRevision != detail.VideoDraft.Revision || viral.Status != ViralProviderFailed ||
+		viral.PromptPackage == nil || viral.InputSnapshot.ReferenceImage == nil || !hasViralReferenceImagePolicyRejection(viral.Candidates) {
+		return TaskDetail{}, ErrInvalidState
+	}
+	if viral.PromptPackage.GenerationSpec.ReferenceImageMode == ViralReferenceImageModeTextOnlyOriginalPerson {
+		return TaskDetail{}, ErrInvalidState
+	}
+	now := s.now()
+	pkg := *viral.PromptPackage
+	pkg.GenerationSpec.ReferenceImageMode = ViralReferenceImageModeTextOnlyOriginalPerson
+	pkg.CompositePrompt = viralTextOnlyOriginalPersonPrompt(pkg.CompositePrompt)
+	pkg.ConfirmedBy = actor.Principal.ID
+	pkg.ConfirmedAt = now
+	pkg.ContentHash = ""
+	hash, err := contract.CanonicalJSONHash(pkg)
+	if err != nil {
+		return TaskDetail{}, err
+	}
+	pkg.ContentHash = "sha256:" + hash
+	next := *detail.VideoDraft
+	next.Revision++
+	next.CreatedAt = now
+	next.Prompt = pkg.CompositePrompt
+	updated := *viral
+	updated.Revision = next.Revision
+	updated.Status = ViralGenerationReady
+	updated.PromptPackage = &pkg
+	updated.Readiness.GenerationReady = true
+	updated.Readiness.ProductionReady = false
+	updated.Readiness.Blockers = removeStrings(updated.Readiness.Blockers, "provider_video_route")
+	updated.UpdatedAt = now
+	next.ViralRemake = &updated
+	if _, err := s.ViralRemakes.ReviseVideoDraft(ctx, actor.OrganizationID, projectID, taskID, detail.VideoDraft.Revision, next, TaskInProgress); err != nil {
+		return TaskDetail{}, err
+	}
+	return s.Repository.GetTaskDetail(ctx, actor.OrganizationID, projectID, taskID)
+}
+
+func hasViralReferenceImagePolicyRejection(candidates []ViralCandidate) bool {
+	for i := len(candidates) - 1; i >= 0; i-- {
+		candidate := candidates[i]
+		if candidate.Status != ViralCandidateFailed {
+			continue
+		}
+		return candidate.ErrorCode == "REFERENCE_ASSET_CONTENT_REJECTED"
+	}
+	return false
+}
+
+func usesViralReferenceImage(mode ViralReferenceImageMode) bool {
+	// Empty is the pre-fallback serialized form. Keep those immutable packages
+	// behaviorally compatible until an explicit safe retry replaces them.
+	return mode == "" || mode == ViralReferenceImageModeReferenceImage
+}
+
+func viralTextOnlyOriginalPersonPrompt(prompt string) string {
+	const safetyDirective = "安全降级：不上传视觉参考图，也不要使用、模仿或复现任何参考图片中的真实人物。保留文字中已确认的场景、服装、镜头、节奏和氛围约束，生成一位原创、非特定身份的写实成年人。"
+	return strings.TrimSpace(prompt) + "\n" + safetyDirective
+}
+
 func (s Service) RegisterViralCandidateJob(ctx context.Context, actor contract.ActorContext, projectID contract.ProjectID, taskID, providerJobID string) (TaskDetail, error) {
 	detail, err := s.requireViralWorkspace(ctx, actor, projectID, taskID, true)
 	if err != nil {
 		return TaskDetail{}, err
 	}
 	viral := detail.VideoDraft.ViralRemake
-	if viral.PromptPackage == nil || viral.Status != ViralGenerationReady || strings.TrimSpace(providerJobID) == "" {
+	if viral.PromptPackage == nil || strings.TrimSpace(providerJobID) == "" ||
+		(viral.Status != ViralGenerationReady && viral.Status != ViralGenerating) {
 		return TaskDetail{}, ErrInvalidState
 	}
 	for _, candidate := range viral.Candidates {
 		if candidate.ProviderJobID == providerJobID {
-			return detail, nil
+			for _, productionJob := range detail.ProductionJobs {
+				if productionJob.ProviderJobID == providerJobID {
+					return detail, nil
+				}
+			}
+			if err := s.Repository.RegisterProductionJob(ctx, actor.OrganizationID, projectID, taskID, ProductionJob{
+				TaskID: taskID, Kind: "viral_candidate_" + candidate.ID, ProviderJobID: providerJobID, CreatedAt: s.now(),
+			}); err != nil {
+				return TaskDetail{}, err
+			}
+			return s.Repository.GetTaskDetail(ctx, actor.OrganizationID, projectID, taskID)
 		}
+	}
+	if viral.Status != ViralGenerationReady {
+		return TaskDetail{}, ErrInvalidState
 	}
 	candidateID, err := s.idGenerator()("viralcandidate")
 	if err != nil {
 		return TaskDetail{}, err
 	}
 	now := s.now()
-	if err := s.Repository.RegisterProductionJob(ctx, actor.OrganizationID, projectID, taskID, ProductionJob{
-		TaskID: taskID, Kind: "viral_candidate_" + candidateID, ProviderJobID: providerJobID, CreatedAt: now,
-	}); err != nil {
-		return TaskDetail{}, err
-	}
 	next := *detail.VideoDraft
 	next.Revision++
 	next.CreatedAt = now
@@ -282,6 +465,14 @@ func (s Service) RegisterViralCandidateJob(ctx context.Context, actor contract.A
 	updated.UpdatedAt = now
 	next.ViralRemake = &updated
 	if _, err := s.ViralRemakes.ReviseVideoDraft(ctx, actor.OrganizationID, projectID, taskID, detail.VideoDraft.Revision, next, TaskGenerating); err != nil {
+		return TaskDetail{}, err
+	}
+	if err := s.Repository.RegisterProductionJob(ctx, actor.OrganizationID, projectID, taskID, ProductionJob{
+		TaskID: taskID, Kind: "viral_candidate_" + candidateID, ProviderJobID: providerJobID, CreatedAt: now,
+	}); err != nil {
+		// The candidate draft is deliberately already durable. Retrying the
+		// same Provider job will hit the branch above and complete only this
+		// missing registration, rather than submit another paid job.
 		return TaskDetail{}, err
 	}
 	return s.Repository.GetTaskDetail(ctx, actor.OrganizationID, projectID, taskID)

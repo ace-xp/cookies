@@ -638,6 +638,16 @@ func (s *Server) materializeBrandFilmAudioAssets(w http.ResponseWriter, r *http.
 	s.writeBrandFilmResult(w, r, value, err)
 }
 
+func (s *Server) generateBrandFilmSoundAssets(w http.ResponseWriter, r *http.Request) {
+	var body creative.BrandFilmRevisionRequest
+	if !s.decodeBrandFilmCommand(w, r, &body) {
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	value, err := s.creative.GenerateBrandFilmSoundAssets(r.Context(), rc, contract.ProjectID(r.PathValue("project_id")), r.PathValue("task_id"), body)
+	s.writeBrandFilmResult(w, r, value, err)
+}
+
 func (s *Server) renderBrandFilmAudioPreview(w http.ResponseWriter, r *http.Request) {
 	var body creative.BrandFilmRevisionRequest
 	if !s.decodeBrandFilmCommand(w, r, &body) {
@@ -1707,6 +1717,25 @@ func (s *Server) updateViralPrompt(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, value)
 }
 
+func (s *Server) updateViralInput(w http.ResponseWriter, r *http.Request) {
+	if s.creative == nil {
+		s.notImplemented(w, r)
+		return
+	}
+	var body creative.UpdateViralInputRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.badRequest(w, r, err)
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	value, err := s.creative.UpdateViralInput(r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("task_id"), body)
+	if err != nil {
+		s.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
 func (s *Server) confirmViralGeneration(w http.ResponseWriter, r *http.Request) {
 	if s.creative == nil {
 		s.notImplemented(w, r)
@@ -1722,6 +1751,30 @@ func (s *Server) confirmViralGeneration(w http.ResponseWriter, r *http.Request) 
 	}
 	rc, _ := contract.RequestContextFrom(r.Context())
 	value, err := s.creative.ConfirmViralGeneration(r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("task_id"), body)
+	if err != nil {
+		s.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) retryViralWithoutReferenceImage(w http.ResponseWriter, r *http.Request) {
+	if s.creative == nil {
+		s.notImplemented(w, r)
+		return
+	}
+	if _, ok := idempotencyKey(w, r); !ok {
+		return
+	}
+	var body creative.RetryViralWithoutReferenceImageRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.badRequest(w, r, err)
+		return
+	}
+	rc, _ := contract.RequestContextFrom(r.Context())
+	value, err := s.creative.RetryViralWithoutReferenceImage(
+		r.Context(), rc.Actor, contract.ProjectID(r.PathValue("project_id")), r.PathValue("task_id"), body,
+	)
 	if err != nil {
 		s.writeServiceError(w, r, err)
 		return

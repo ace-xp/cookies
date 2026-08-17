@@ -672,6 +672,15 @@ paths:
       responses:
         '200': {description: Workspace whose active clips reference stable project AssetVersions.}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/creative/v1/projects/{project_id}/creative-tasks/{task_id}/brand-film:generate-sound-assets:
+    post:
+      operationId: generateBrandFilmSoundAssets
+      summary: Generate the current v2 music, ambience and SFX prompts through the configured Sound Asset Provider. Never falls back to Fixture media.
+      parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/TaskID'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/BrandFilmRevision'}
+      responses:
+        '200': {description: Workspace whose active clips reference AI-generated project AssetVersions.}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/creative/v1/projects/{project_id}/creative-tasks/{task_id}/brand-film:render-audio-preview:
     post:
       operationId: renderBrandFilmAudioPreview
@@ -1374,6 +1383,19 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/CreativeTaskDetail'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/creative/v1/projects/{project_id}/creative-tasks/{task_id}/viral-remake/input-draft:
+    patch:
+      operationId: updateCreativeViralRemakeInput
+      summary: Replace product facts before re-analyzing the reference; this invalidates any stale analysis and prompt package.
+      parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/TaskID'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateViralInputRequest'}
+      responses:
+        '200': {description: Input snapshot persisted and stale analysis cleared.}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/creative/v1/projects/{project_id}/creative-tasks/{task_id}/viral-remake/prompt-draft:
     patch:
       operationId: updateCreativeViralRemakePrompt
@@ -1399,6 +1421,19 @@ paths:
             schema: {$ref: '#/components/schemas/ConfirmViralGenerationRequest'}
       responses:
         '200': {description: PromptPackage frozen and generation readiness enabled.}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/creative/v1/projects/{project_id}/creative-tasks/{task_id}/viral-remake:retry-without-reference-image:
+    post:
+      operationId: retryCreativeViralRemakeWithoutReferenceImage
+      summary: After a real-person reference-image policy rejection, freeze a distinct text-only original-person PromptPackage for a new generation attempt.
+      parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/TaskID'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RetryViralWithoutReferenceImageRequest'}
+      responses:
+        '200': {description: A policy-safe text-only PromptPackage is frozen and ready to submit.}
         '409': {$ref: '#/components/responses/Conflict'}
   /api/creative/v1/projects/{project_id}/creative-tasks/{task_id}/viral-remake/candidates/{candidate_id}:submit-review:
     post:
@@ -1742,7 +1777,7 @@ components:
       additionalProperties: false
       required: [contract_version, plan_revision, master_duration_ms, visual_preview_asset_ref, blueprint_versions, variants, active_variant_id, active_mix_revision, generation_attempts, render_jobs, status, updated_at]
       properties:
-        contract_version: {const: creative-brand-audio-workspace/v1}
+        contract_version: {enum: [creative-brand-audio-workspace/v1, creative-brand-sound-design-workspace/v2]}
         plan_revision: {type: integer, minimum: 1}
         master_duration_ms: {type: integer, minimum: 12000}
         visual_preview_asset_ref: {type: object}
@@ -1761,7 +1796,7 @@ components:
       additionalProperties: false
       required: [op]
       properties:
-        op: {type: string, enum: [set_track_gain, set_track_muted, replace_clip_asset, set_clip_timing]}
+        op: {type: string, enum: [set_track_gain, set_track_muted, replace_clip_asset, set_clip_timing, set_clip_label, set_clip_gain, set_clip_fade, remove_clip, add_fixture_clip]}
         track_id: {type: string, minLength: 1}
         gain_db: {type: number, minimum: -96, maximum: 24}
         muted: {type: boolean}
@@ -1769,6 +1804,9 @@ components:
         asset_ref: {type: object}
         timeline_start_ms: {type: integer, minimum: 0}
         timeline_end_ms: {type: integer, minimum: 1}
+        label: {type: string, minLength: 1}
+        fade_in_ms: {type: integer, minimum: 0}
+        fade_out_ms: {type: integer, minimum: 0}
     AINativeReopenImpact:
       type: object
       additionalProperties: false
@@ -2128,6 +2166,20 @@ components:
             environment_atmosphere: {type: string, minLength: 1}
             camera_content: {type: string, minLength: 1}
             music_sound: {type: string, minLength: 1}
+    UpdateViralInputRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, product_name, selling_points, call_to_action, user_instruction]
+      properties:
+        expected_revision: {type: integer, minimum: 1}
+        product_name: {type: string, minLength: 1, maxLength: 300}
+        selling_points:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items: {type: string, minLength: 1, maxLength: 300}
+        call_to_action: {type: string, minLength: 1, maxLength: 300}
+        user_instruction: {type: string, minLength: 1, maxLength: 2000}
     ConfirmViralGenerationRequest:
       type: object
       additionalProperties: false
@@ -2136,6 +2188,12 @@ components:
         expected_revision: {type: integer, minimum: 1}
         confirm_reference_video_rights: {type: boolean, const: true}
         confirm_reference_image_rights: {type: boolean}
+    RetryViralWithoutReferenceImageRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_revision]
+      properties:
+        expected_revision: {type: integer, minimum: 1}
     FreezeCreativeVersionRequest:
       type: object
       additionalProperties: false

@@ -105,3 +105,18 @@ test('first-frame selection exposes its pending state and clears it on failure',
   assert.equal(state.selectingImageId, '')
   assert.equal(state.error, '候选批次已更新')
 })
+
+test('restoring a completed preroll never keeps a stale generation error', () => {
+  const completed = {
+    ...readyState(),
+    videoStatus: 'ready' as const,
+    output: { id: 'output-1', videoUrl: '/output.mp4', duration: 15 as const, createdAt: '2026-08-17T04:41:09Z' },
+    error: '所选视觉宫格因清晰写实人物被视频模型拒绝。',
+  }
+
+  const restored = shortDramaPrerollReducer(initialShortDramaPrerollState, { type: 'restore', state: completed })
+
+  assert.equal(restored.videoStatus, 'ready')
+  assert.equal(restored.output?.videoUrl, '/output.mp4')
+  assert.equal(restored.error, '')
+})

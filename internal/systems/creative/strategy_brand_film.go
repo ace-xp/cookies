@@ -211,7 +211,7 @@ func brandFilmAnalysisFromConfirmedBrief(brief BrandBriefReview, now time.Time) 
 		Mandatory: compactBrandFilmStrings(mandatory), Prohibited: compactBrandFilmStrings(prohibited),
 		ImageRequirements: brandFilmAssetRequirements(document.Route.AssetRequirements, "generation"),
 		VideoRequirements: []string{fmt.Sprintf("%ds · %s · %s", document.Route.Spec.TargetDurationSeconds, document.Route.Spec.AspectRatio, document.Route.Spec.Resolution)},
-		VoiceDirection:    firstBrandFilmNonEmpty(document.AudioIntent.VoiceDirection, document.AudioIntent.OverallMood, strings.Join(document.Communication.ToneConstraints, "、")),
+		SoundDesignIntent: SoundDesignIntent{MusicDirection: firstBrandFilmNonEmpty(document.AudioIntent.OverallMood, strings.Join(document.Communication.ToneConstraints, "、"), "克制、有品牌留白感的音乐"), SoundEffectFocus: []string{"镜头动作与产品材质", "转场与品牌定格"}, SourceAudioPolicy: "mute", Avoid: []string{"人声"}},
 		AssetCandidates:   assets, Uncertainties: compactBrandFilmStrings(uncertainties), Confirmed: true,
 		ConfirmedBy: brief.ConfirmedBy, ConfirmedAt: confirmedAt,
 		ModelAlias: "strategy.confirmed-brand-brief", ModelVersion: brief.ContentHash,

@@ -179,6 +179,7 @@ type Provider struct {
 	TextAdapter       string
 	AudioAdapter      string
 	SpeechAdapter     string
+	SoundAssetAdapter string
 	MasterKey         string
 	MasterKeyVersion  string
 	OutputBucket      string
@@ -190,6 +191,7 @@ type Provider struct {
 	OpenAIImage       OpenAIImage
 	VolcengineASR     VolcengineASR
 	VolcengineSpeech  VolcengineSpeech
+	SoundAsset        SoundAsset
 }
 
 type ArkImage struct {
@@ -247,6 +249,15 @@ type VolcengineSpeech struct {
 	APIKey       string
 	ResourceID   string
 	DefaultVoice string
+}
+
+// SoundAsset configures the optional provider-normalizer used for AI music,
+// ambience and sound-effect generation. It is intentionally independent from
+// TTS: a MiniMax speech credential cannot be used as an AI music credential.
+type SoundAsset struct {
+	Endpoint string
+	APIKey   string
+	Model    string
 }
 
 // MySQL contains only connection-pool configuration. No business module owns
@@ -579,6 +590,7 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 			TextAdapter:       valueOr(lookup, "COOKIES_PROVIDER_TEXT_ADAPTER", "fake"),
 			AudioAdapter:      valueOr(lookup, "COOKIES_PROVIDER_AUDIO_ADAPTER", "fake"),
 			SpeechAdapter:     valueOr(lookup, "COOKIES_PROVIDER_SPEECH_ADAPTER", "fake"),
+			SoundAssetAdapter: valueOr(lookup, "COOKIES_PROVIDER_SOUND_ASSET_ADAPTER", "disabled"),
 			MasterKey:         valueOr(lookup, "COOKIES_PROVIDER_MASTER_KEY", ""),
 			MasterKeyVersion:  valueOr(lookup, "COOKIES_PROVIDER_MASTER_KEY_VERSION", "v1"),
 			OutputBucket:      providerOutputBucket,
@@ -618,6 +630,11 @@ func FromLookup(lookup func(string) (string, bool)) (Config, error) {
 				APIKey:       valueOr(lookup, "COOKIES_VOLCENGINE_SPEECH_API_KEY", ""),
 				ResourceID:   valueOr(lookup, "COOKIES_VOLCENGINE_SPEECH_RESOURCE_ID", "seed-tts-2.0"),
 				DefaultVoice: valueOr(lookup, "COOKIES_VOLCENGINE_SPEECH_DEFAULT_VOICE", ""),
+			},
+			SoundAsset: SoundAsset{
+				Endpoint: valueOr(lookup, "COOKIES_SOUND_ASSET_ENDPOINT", ""),
+				APIKey:   valueOr(lookup, "COOKIES_SOUND_ASSET_API_KEY", ""),
+				Model:    valueOr(lookup, "COOKIES_SOUND_ASSET_MODEL", ""),
 			},
 		},
 	}
@@ -825,6 +842,9 @@ func (c Config) Validate() error {
 	if c.Provider.SpeechAdapter != "fake" && c.Provider.SpeechAdapter != "volcengine_speech" && c.Provider.SpeechAdapter != "minimax_speech" {
 		return fmt.Errorf("COOKIES_PROVIDER_SPEECH_ADAPTER must be fake, volcengine_speech, or minimax_speech")
 	}
+	if c.Provider.SoundAssetAdapter != "disabled" && c.Provider.SoundAssetAdapter != "http" {
+		return fmt.Errorf("COOKIES_PROVIDER_SOUND_ASSET_ADAPTER must be disabled or http")
+	}
 	if c.Strategy.RealProviderEnabled && c.Provider.TextAdapter != "adapter_gateway" && c.Provider.TextAdapter != "ark_text" {
 		return fmt.Errorf("COOKIES_STRATEGY_REAL_PROVIDER_ENABLED requires a real text adapter")
 	}
@@ -931,6 +951,15 @@ func (c Config) Validate() error {
 		}
 		if strings.TrimSpace(c.Provider.VolcengineSpeech.APIKey) == "" || strings.TrimSpace(c.Provider.VolcengineSpeech.ResourceID) == "" || strings.TrimSpace(c.Provider.VolcengineSpeech.DefaultVoice) == "" {
 			return fmt.Errorf("volcengine_speech requires API key, resource ID and default voice")
+		}
+	}
+	if c.Provider.SoundAssetAdapter == "http" {
+		endpoint, err := url.Parse(c.Provider.SoundAsset.Endpoint)
+		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" {
+			return fmt.Errorf("COOKIES_SOUND_ASSET_ENDPOINT must be an absolute HTTPS URL")
+		}
+		if strings.TrimSpace(c.Provider.SoundAsset.APIKey) == "" || strings.TrimSpace(c.Provider.SoundAsset.Model) == "" {
+			return fmt.Errorf("sound_asset http requires endpoint, API key and model")
 		}
 	}
 	// ark_video only needs an output bucket when it reads its key from the

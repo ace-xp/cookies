@@ -139,6 +139,12 @@ test('爆款视频复刻支持五维提示词拆解并生成复刻视频', async
 
   await page.getByLabel('源视频 Asset ID').fill('viral-source-e2e')
   await page.getByLabel('视频标题').fill('E2E 爆款源视频')
+  await page.locator('.viral-source-panel input[type="file"]').first().setInputFiles({
+    name: 'e2e-viral-source.mp4',
+    mimeType: 'video/mp4',
+    buffer: Buffer.from('e2e viral source fixture'),
+  })
+  await expect(page.locator('.viral-source-preview video')).toBeVisible()
   await page.getByLabel('上传参考图片').setInputFiles({
     name: 'e2e-reference-product.png',
     mimeType: 'image/png',
@@ -161,6 +167,8 @@ test('爆款视频复刻支持五维提示词拆解并生成复刻视频', async
   await expect(page.getByLabel('复刻视频总提示词')).toHaveValue(/文本指令优先约束内容改写：更年轻化/)
   await expect(page.getByLabel('复刻视频总提示词')).toHaveValue(/参考图片用于约束主体外观.*e2e-reference-product\.png/)
 
+  await page.getByLabel('我确认源视频拥有用于本次分析与原创广告生成的有效授权').check()
+  await page.getByLabel('我确认参考图片拥有用于本次分析与原创广告生成的有效授权').check()
   await page.getByRole('button', { name: '生成复刻视频' }).click()
   await expect(page.getByText(/复刻视频生成任务已创建|复刻视频生成完成/)).toBeVisible()
   await expect.poll(async () => {

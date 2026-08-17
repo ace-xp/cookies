@@ -48,7 +48,15 @@ func (s Service) RunBrandFilmQuality(ctx context.Context, actor contract.ActorCo
 	if request.ExpectedRevision != detail.VideoDraft.Revision || brand.Generation == nil || brand.Generation.PreviewAsset == nil || s.Assets == nil {
 		return TaskDetail{}, ErrInvalidState
 	}
-	preview, err := s.Assets.ReadForCreative(ctx, actor, projectID, *brand.Generation.PreviewAsset)
+	// A mixed audio preview is the delivery candidate once it exists. The locked
+	// visual preview remains the fallback for workspaces that have not entered
+	// sound design, preserving legacy tasks while making the quality/version
+	// trace point at the actual audible output.
+	previewRef := *brand.Generation.PreviewAsset
+	if brand.Audio != nil && brand.Audio.MixedPreview != nil {
+		previewRef = *brand.Audio.MixedPreview
+	}
+	preview, err := s.Assets.ReadForCreative(ctx, actor, projectID, previewRef)
 	if err != nil {
 		return TaskDetail{}, err
 	}
@@ -63,7 +71,7 @@ func (s Service) RunBrandFilmQuality(ctx context.Context, actor contract.ActorCo
 	}
 	now := s.now()
 	run := BrandFilmQualityRun{
-		ID: id, Revision: int64(len(brand.QualityRuns) + 1), PreviewAsset: *brand.Generation.PreviewAsset,
+		ID: id, Revision: int64(len(brand.QualityRuns) + 1), PreviewAsset: previewRef,
 		Status: "failed", Checks: checks, ManualChecks: []BrandFilmManualCheck{}, Metrics: brandFilmRunMetrics(*brand.Generation),
 		AutomaticPassed: passed, CreatedBy: actor.Principal.ID, CreatedAt: now, UpdatedAt: now,
 	}
@@ -246,7 +254,7 @@ func evaluateBrandFilmQuality(brand BrandFilmDraft, preview CreativeAssetSnapsho
 	add("mp4_h264", "technical", "film", fmt.Sprintf("mime=%s codec=%s", preview.MIMEType, preview.VideoCodec), "转码为 MP4/H.264", preview.MIMEType == "video/mp4" && (codec == "h264" || codec == "avc1"))
 	add("audio_track", "audio", "film", fmt.Sprintf("audio_codec=%s", preview.AudioCodec), "补齐统一口播或音乐音轨后重新合成", strings.TrimSpace(preview.AudioCodec) != "")
 	plan := brand.CurrentPlan()
-	copyPassed, musicPassed := plan != nil, plan != nil && strings.TrimSpace(plan.MusicDirection) != ""
+	copyPassed, musicPassed := plan != nil, plan != nil && (strings.TrimSpace(plan.MusicDirection) != "" || !plan.SoundDesignIntent.Empty())
 	if plan != nil {
 		copyText := strings.ToLower(plan.StorySummary)
 		for _, shot := range plan.Shots {
@@ -259,7 +267,7 @@ func evaluateBrandFilmQuality(brand BrandFilmDraft, preview CreativeAssetSnapsho
 		}
 	}
 	add("claim_compliance", "copy", "film", "script and on-screen copy checked against prohibited claims", "修改对应旁白或字幕后重新确认剧本", copyPassed)
-	add("music_direction", "audio", "film", "confirmed film plan contains a music direction", "补充音乐方向与授权说明", musicPassed)
+	add("music_direction", "audio", "film", "confirmed film plan contains a music or sound-design direction", "补充音乐方向与授权说明", musicPassed)
 	return checks
 }
 

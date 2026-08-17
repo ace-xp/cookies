@@ -1133,11 +1133,12 @@ func (testProjects) RequireActiveContext(_ context.Context, actor contract.Actor
 }
 
 type memoryRepository struct {
-	intakes  map[string]CreativeIntake
-	tasks    map[string]TaskDetail
-	renders  map[string]RenderJob
-	versions map[string]CreativeVersion
-	packages map[string]CreativePackage
+	intakes                  map[string]CreativeIntake
+	tasks                    map[string]TaskDetail
+	renders                  map[string]RenderJob
+	versions                 map[string]CreativeVersion
+	packages                 map[string]CreativePackage
+	registerProductionJobErr error
 }
 
 func (r *memoryRepository) CreateIntake(_ context.Context, intake CreativeIntake) (CreativeIntake, bool, error) {
@@ -1414,6 +1415,9 @@ func (r *memoryRepository) ReviseVideoDraft(_ context.Context, _ contract.Organi
 	return draft, nil
 }
 func (r *memoryRepository) RegisterProductionJob(_ context.Context, _ contract.OrganizationID, _ contract.ProjectID, taskID string, job ProductionJob) error {
+	if r.registerProductionJobErr != nil {
+		return r.registerProductionJobErr
+	}
 	value, ok := r.tasks[taskID]
 	if !ok {
 		return ErrNotFound

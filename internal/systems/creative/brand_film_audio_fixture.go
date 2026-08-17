@@ -30,6 +30,10 @@ func RenderBrandAudioFixtureWAV(trackType, seed string, durationMS int) ([]byte,
 		switch trackType {
 		case BrandAudioTrackMusic:
 			value = 0.22*math.Sin(2*math.Pi*baseFrequency*t) + 0.12*math.Sin(2*math.Pi*baseFrequency*1.5*t)
+		case BrandAudioTrackAmbience:
+			state = state*1664525 + 1013904223
+			noise := float64(int32(state)) / float64(math.MaxInt32)
+			value = 0.08*math.Sin(2*math.Pi*(baseFrequency*.18)*t) + noise*0.05
 		case BrandAudioTrackSFX:
 			state = state*1664525 + 1013904223
 			noise := float64(int32(state)) / float64(math.MaxInt32)

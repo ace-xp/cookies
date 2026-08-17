@@ -19,6 +19,14 @@ type ActiveProjectResolver interface {
 	RequireActiveContext(context.Context, contract.ActorContext, contract.ProjectID) (contract.ProjectContext, error)
 }
 
+// ProjectBusinessContextReader is optional during the transition from legacy
+// fixtures, but production project services provide it. Viral-remake product
+// facts must be bound to this human-readable project identity before they can
+// reach an immutable PromptPackage.
+type ProjectBusinessContextReader interface {
+	GetBusinessContext(context.Context, contract.ActorContext, contract.ProjectID) (contract.ProjectBusinessContext, error)
+}
+
 // StrategyPackageReader is Creative's sole dependency on Strategy. Its
 // implementation is composed at process startup and must return an immutable,
 // authorization-checked package snapshot rather than exposing Strategy tables.
@@ -111,6 +119,7 @@ type Service struct {
 	AudioMixRenderer                    media.AudioMixRenderer
 	AudioMixScheduler                   AudioMixRenderScheduler
 	BrandFilmSpeech                     provider.SpeechSynthesizer
+	BrandFilmSoundAssets                provider.SoundAssetGenerator
 	Composer                            media.VideoComposer
 	BrandFilmComposer                   media.SegmentComposer
 	RenderedAssets                      RenderedAssetWriter
@@ -429,6 +438,9 @@ func (s Service) CreateVideoTask(ctx context.Context, actor contract.ActorContex
 	}
 	if isDirectViralRemake {
 		manual := intake.Request.ManualViralRemake
+		if err := s.validateViralProductFacts(ctx, actor, projectID, manual.ProductName); err != nil {
+			return CreativeTask{}, err
+		}
 		snapshot := ViralRemakeInputSnapshot{
 			Source: intake.Source, SelectedRouteID: route.RouteID,
 			ReferenceVideo: request.SourceVideo, ReferenceImage: manual.ReferenceImage,

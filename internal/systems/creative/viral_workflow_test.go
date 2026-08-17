@@ -2,6 +2,8 @@ package creative
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +105,175 @@ func TestConfirmedViralPromptCreatesTraceableCandidateAndReview(t *testing.T) {
 		reviewed.VideoDraft.ViralRemake.Candidates[0].Status != ViralCandidateReviewed {
 		t.Fatalf("candidate was not submitted for review: %+v", reviewed.VideoDraft.ViralRemake)
 	}
+}
+
+func TestConfirmViralGenerationRequiresEveryReferencedAssetRight(t *testing.T) {
+	t.Parallel()
+	service, taskID := viralWorkflowTestService()
+	service.ViralAnalyzer = stubViralAnalyzer{result: completeViralAnalysisResult()}
+	repository := service.Repository.(*memoryRepository)
+	detail := repository.tasks[taskID]
+	referenceImage := contract.AssetVersionRef{AssetID: "asset_reference_image", Version: 1}
+	detail.VideoDraft.ViralRemake.InputSnapshot.ReferenceImage = &referenceImage
+	detail.VideoDraft.ViralRemake.InputSnapshot.ReferenceImageRights = RightsPending
+	repository.tasks[taskID] = detail
+	actor := testRequestContext().Actor
+	analyzed, err := service.AnalyzeViralRemake(context.Background(), actor, "project_1", taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.ConfirmViralGeneration(context.Background(), actor, "project_1", taskID, ConfirmViralGenerationRequest{
+		ExpectedRevision: analyzed.VideoDraft.Revision, ConfirmReferenceVideoRights: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "rights") {
+		t.Fatalf("error = %v, want missing reference-image authorization", err)
+	}
+}
+
+func TestRetryViralWithoutReferenceImageCreatesOriginalPersonGeneration(t *testing.T) {
+	t.Parallel()
+	service, taskID := viralWorkflowTestService()
+	service.ViralAnalyzer = stubViralAnalyzer{result: completeViralAnalysisResult()}
+	repository := service.Repository.(*memoryRepository)
+	detail := repository.tasks[taskID]
+	referenceImage := contract.AssetVersionRef{AssetID: "asset_real_person", Version: 1}
+	detail.VideoDraft.ViralRemake.InputSnapshot.ReferenceImage = &referenceImage
+	detail.VideoDraft.ViralRemake.InputSnapshot.ReferenceImageRights = RightsPending
+	repository.tasks[taskID] = detail
+	actor := testRequestContext().Actor
+	analyzed, err := service.AnalyzeViralRemake(context.Background(), actor, "project_1", taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := service.ConfirmViralGeneration(context.Background(), actor, "project_1", taskID, ConfirmViralGenerationRequest{
+		ExpectedRevision: analyzed.VideoDraft.Revision, ConfirmReferenceVideoRights: true, ConfirmReferenceImageRights: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input, _, err := service.ViralProviderInput(context.Background(), actor, "project_1", taskID); err != nil || input.InputMode != "reference_image" {
+		t.Fatalf("first attempt must retain the explicitly authorized reference image: input=%+v err=%v", input, err)
+	}
+	registered, err := service.RegisterViralCandidateJob(context.Background(), actor, "project_1", taskID, "providerjob_rejected_reference")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := service.ReconcileViralCandidate(context.Background(), actor, "project_1", taskID, contract.ProviderJob{
+		ID: "providerjob_rejected_reference", OrganizationID: "org_1", ProjectID: "project_1",
+		ProviderStatus: contract.ProviderJobFailed, ExecutionStatus: contract.JobFailed,
+		Error: &contract.JobError{Code: "REFERENCE_ASSET_CONTENT_REJECTED", Message: "real person reference rejected"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := service.RetryViralWithoutReferenceImage(context.Background(), actor, "project_1", taskID, RetryViralWithoutReferenceImageRequest{
+		ExpectedRevision: failed.VideoDraft.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viral := fallback.VideoDraft.ViralRemake
+	if viral.Status != ViralGenerationReady || !viral.Readiness.GenerationReady || viral.PromptPackage == nil ||
+		viral.PromptPackage.GenerationSpec.ReferenceImageMode != ViralReferenceImageModeTextOnlyOriginalPerson ||
+		viral.PromptPackage.ContentHash == confirmed.VideoDraft.ViralRemake.PromptPackage.ContentHash ||
+		!strings.Contains(viral.PromptPackage.CompositePrompt, "不上传视觉参考图") {
+		t.Fatalf("fallback must freeze a distinct text-only original-person package: %+v", viral.PromptPackage)
+	}
+	input, _, err := service.ViralProviderInput(context.Background(), actor, "project_1", taskID)
+	if err != nil || input.InputMode != "text_only" || len(input.ConditioningAssets) != 0 {
+		t.Fatalf("fallback must not submit the rejected image again: input=%+v err=%v", input, err)
+	}
+	if len(viral.Candidates) != 1 || viral.Candidates[0].ID != registered.VideoDraft.ViralRemake.Candidates[0].ID {
+		t.Fatalf("failed candidate lineage must remain visible after fallback: %+v", viral.Candidates)
+	}
+}
+
+func TestRegisterViralCandidateJobRecoversARegistrationFailureWithoutNewCandidate(t *testing.T) {
+	t.Parallel()
+	service, taskID := viralWorkflowTestService()
+	service.ViralAnalyzer = stubViralAnalyzer{result: completeViralAnalysisResult()}
+	actor := testRequestContext().Actor
+	analyzed, err := service.AnalyzeViralRemake(context.Background(), actor, "project_1", taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := service.ConfirmViralGeneration(context.Background(), actor, "project_1", taskID, ConfirmViralGenerationRequest{
+		ExpectedRevision: analyzed.VideoDraft.Revision, ConfirmReferenceVideoRights: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := service.Repository.(*memoryRepository)
+	repository.registerProductionJobErr = errors.New("temporary production-job persistence failure")
+	if _, err := service.RegisterViralCandidateJob(context.Background(), actor, "project_1", taskID, "providerjob_viral_retry"); err == nil {
+		t.Fatal("first registration must surface the injected persistence failure")
+	}
+	persisted, err := service.GetTaskDetail(context.Background(), actor, "project_1", taskID)
+	if err != nil || len(persisted.VideoDraft.ViralRemake.Candidates) != 1 || len(persisted.ProductionJobs) != 0 {
+		t.Fatalf("candidate must survive a failed job registration: detail=%+v err=%v", persisted, err)
+	}
+	repository.registerProductionJobErr = nil
+	recovered, err := service.RegisterViralCandidateJob(context.Background(), actor, "project_1", taskID, "providerjob_viral_retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered.VideoDraft.ViralRemake.Candidates) != 1 || len(recovered.ProductionJobs) != 1 ||
+		recovered.ProductionJobs[0].ProviderJobID != "providerjob_viral_retry" {
+		t.Fatalf("retry must complete the same candidate registration: %+v", recovered)
+	}
+	if confirmed.VideoDraft.ViralRemake.PromptPackage.ContentHash != recovered.VideoDraft.ViralRemake.Candidates[0].PromptHash {
+		t.Fatal("recovered candidate lost prompt lineage")
+	}
+}
+
+func TestUpdateViralInputInvalidatesStaleAnalysisAndPrompt(t *testing.T) {
+	t.Parallel()
+	service, taskID := viralWorkflowTestService()
+	service.ViralAnalyzer = stubViralAnalyzer{result: completeViralAnalysisResult()}
+	actor := testRequestContext().Actor
+	analyzed, err := service.AnalyzeViralRemake(context.Background(), actor, "project_1", taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.UpdateViralInput(context.Background(), actor, "project_1", taskID, UpdateViralInputRequest{
+		ExpectedRevision: analyzed.VideoDraft.Revision,
+		ProductName:      "修订后的目标产品", SellingPoints: []string{"可信卖点"},
+		CallToAction: "立即预约", UserInstruction: "仅复用节奏，重做产品表达",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viral := updated.VideoDraft.ViralRemake
+	if viral.Status != ViralWaitingForAnalysis || viral.Analysis != nil || viral.PromptDraft != nil ||
+		viral.PromptPackage != nil || len(viral.Candidates) != 0 || viral.Readiness.GenerationReady ||
+		viral.InputSnapshot.ProductName != "修订后的目标产品" || viral.InputHash == "input-hash" {
+		t.Fatalf("stale viral state was not cleared: %+v", viral)
+	}
+}
+
+func TestUpdateViralInputRejectsProductOutsideCurrentProjectProfile(t *testing.T) {
+	t.Parallel()
+	service, taskID := viralWorkflowTestService()
+	service.Projects = productBoundTestProjects{productName: "Approved Product"}
+	actor := testRequestContext().Actor
+	_, err := service.UpdateViralInput(context.Background(), actor, "project_1", taskID, UpdateViralInputRequest{
+		ExpectedRevision: 1, ProductName: "Unrelated Product", SellingPoints: []string{"Supported fact"},
+		CallToAction: "Learn more", UserInstruction: "Create an original ad",
+	})
+	if err == nil || !strings.Contains(err.Error(), "current project profile") {
+		t.Fatalf("error = %v, want project-product mismatch", err)
+	}
+}
+
+type productBoundTestProjects struct{ productName string }
+
+func (p productBoundTestProjects) RequireActiveContext(_ context.Context, actor contract.ActorContext, projectID contract.ProjectID) (contract.ProjectContext, error) {
+	brand := contract.BrandID("brand_1")
+	return contract.ProjectContext{OrganizationID: actor.OrganizationID, ProjectID: projectID, BrandID: &brand, ProductIDs: []contract.ProductID{"product_1"}, ProjectContextVersion: 1}, nil
+}
+
+func (p productBoundTestProjects) GetBusinessContext(_ context.Context, _ contract.ActorContext, projectID contract.ProjectID) (contract.ProjectBusinessContext, error) {
+	return contract.ProjectBusinessContext{ProjectID: projectID, Products: []contract.ProjectBusinessProduct{{ID: "product_1", Name: p.productName}}}, nil
 }
 
 func viralWorkflowTestService() (Service, string) {

@@ -92,6 +92,29 @@ func directBrandAudioBlueprint(plan BrandFilmPlanVersion, blueprint AudioBluepri
 	return blueprint
 }
 
+// directBrandSoundDesignBlueprint explains an AI sound-design plan without
+// introducing narration, voice profiles, or TTS-specific constraints.
+func directBrandSoundDesignBlueprint(plan BrandFilmPlanVersion, blueprint AudioBlueprintVersion) AudioBlueprintVersion {
+	blueprint.PlannerVersion = "brand-sound-design-director/v2"
+	blueprint.Status = "suggested"
+	blueprint.Decisions = append(blueprint.Decisions,
+		AudioDirectorDecision{ID: "decision_source_audio", Kind: "source_audio_policy", TargetID: "track_source_audio", Summary: "原视频声音默认按声音意图处理", Reason: "避免 Seedance 随机原声破坏统一品牌声音设计", Confidence: .95, Editable: true},
+		AudioDirectorDecision{ID: "decision_music_arc", Kind: "music_arc", TargetID: "track_music", Summary: "品牌音乐覆盖全片并在结尾收束", Reason: blueprint.MusicArc.Direction, Confidence: .9, Editable: true},
+		AudioDirectorDecision{ID: "decision_key_sfx_ducking", Kind: "key_sfx_ducking", TargetID: "track_music", Summary: "关键镜头音效出现时，品牌音乐自动让位", Reason: "保留产品露出、转场和品牌定格的声音重音，避免音乐遮盖关键质感", Confidence: .92, Editable: true},
+	)
+	for index, cue := range blueprint.SoundEffectCues {
+		blueprint.Decisions = append(blueprint.Decisions, AudioDirectorDecision{ID: fmt.Sprintf("decision_sound_%02d", index+1), Kind: "cue_placement", TargetID: cue.ID, Summary: fmt.Sprintf("%s 安排在 %.1f–%.1f 秒", cue.Label, float64(cue.StartMS)/1000, float64(cue.EndMS)/1000), Reason: cue.Reason, Confidence: .84, Editable: true})
+	}
+	for index, shot := range plan.Shots {
+		status, summary, suggestion := "pass", "镜头与声音事件已有语义对应", ""
+		if strings.TrimSpace(shot.Visual) == "" || strings.TrimSpace(shot.Purpose) == "" {
+			status, summary, suggestion = "warning", "镜头缺少足够的画面或目的信息，音效语义可能不准确", "补充画面与镜头目的后重新生成声音事件"
+		}
+		blueprint.SemanticChecks = append(blueprint.SemanticChecks, AudioSemanticCheck{ID: fmt.Sprintf("sound_semantic_shot_%02d", index+1), ShotID: shot.ID, Status: status, Summary: summary, Evidence: shot.Visual, Suggestion: suggestion})
+	}
+	return blueprint
+}
+
 func estimateMandarinNarrationDuration(text string, speed float64) int {
 	if speed <= 0 {
 		speed = 1
@@ -143,10 +166,10 @@ func buildImmersiveWaterVariant(source AudioMixVersion, visual contract.AssetVer
 	mix.ID, mix.VariantID, mix.ChangeSummary = fmt.Sprintf("audio_mix_immersive_%02d", source.Revision), variantID, "AI 声音导演：沉浸水感版"
 	for index := range mix.Tracks {
 		switch mix.Tracks[index].Type {
-		case BrandAudioTrackVoiceover:
-			mix.Tracks[index].GainDB = 1
 		case BrandAudioTrackMusic:
 			mix.Tracks[index].GainDB = -14
+		case BrandAudioTrackAmbience:
+			mix.Tracks[index].GainDB = -16
 		case BrandAudioTrackSFX:
 			mix.Tracks[index].GainDB = -4
 		}
@@ -158,6 +181,36 @@ func buildImmersiveWaterVariant(source AudioMixVersion, visual contract.AssetVer
 	}
 	mix.ContentHash = "sha256:" + hash
 	return AudioMixVariant{ID: variantID, Label: "沉浸水感版", VisualPreview: visual, VariantType: "tone", Language: "zh-CN", StylePreset: "immersive_water", SourceVariantID: source.VariantID, MixVersions: []AudioMixVersion{mix}, ActiveMixRevision: mix.Revision, Status: mix.Status}, nil
+}
+
+func buildYouthfulLightVariant(source AudioMixVersion, visual contract.AssetVersionRef, now time.Time) (AudioMixVariant, error) {
+	raw, err := json.Marshal(source)
+	if err != nil {
+		return AudioMixVariant{}, err
+	}
+	var mix AudioMixVersion
+	if err := json.Unmarshal(raw, &mix); err != nil {
+		return AudioMixVariant{}, err
+	}
+	variantID := "sound_treatment_youthful_light"
+	mix.ID, mix.VariantID, mix.ChangeSummary = fmt.Sprintf("audio_mix_youthful_%02d", source.Revision), variantID, "AI 声音导演：年轻轻快版"
+	for index := range mix.Tracks {
+		switch mix.Tracks[index].Type {
+		case BrandAudioTrackMusic:
+			mix.Tracks[index].GainDB = -12
+		case BrandAudioTrackAmbience:
+			mix.Tracks[index].GainDB = -24
+		case BrandAudioTrackSFX:
+			mix.Tracks[index].GainDB = -3
+		}
+	}
+	mix.ContentHash = ""
+	hash, err := contract.CanonicalJSONHash(mix)
+	if err != nil {
+		return AudioMixVariant{}, err
+	}
+	mix.ContentHash = "sha256:" + hash
+	return AudioMixVariant{ID: variantID, Label: "年轻轻快版", VisualPreview: visual, VariantType: "tone", Language: "und", StylePreset: "youthful_light", SourceVariantID: source.VariantID, MixVersions: []AudioMixVersion{mix}, ActiveMixRevision: mix.Revision, Status: mix.Status}, nil
 }
 
 func UpgradeBrandAudioDirector(workspace BrandAudioWorkspace, plan BrandFilmPlanVersion, now time.Time) (BrandAudioWorkspace, error) {

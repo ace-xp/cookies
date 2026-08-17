@@ -1624,6 +1624,36 @@ func TestGetViralRemakeWorkspaceRestoresPersistedDraft(t *testing.T) {
 	}
 }
 
+func TestRetryViralWithoutReferenceImageForwardsExpectedRevision(t *testing.T) {
+	t.Parallel()
+	actor := contract.ActorContext{
+		OrganizationID: "org_1",
+		Principal:      contract.Principal{Kind: contract.PrincipalUser, ID: "usr_1"},
+		Scopes:         []contract.Scope{creative.ScopeRead, creative.ScopeWrite},
+	}
+	resolver, err := identity.NewStaticResolver(actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &creativeManagerStub{}
+	server := NewWithDependencies(Dependencies{
+		Resolver: resolver, ProjectAuthorizer: identity.StaticProjectAuthorizer{ProjectID: "project_1"}, Creative: manager,
+	})
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/creative/v1/projects/project_1/creative-tasks/creative_task_viral/viral-remake:retry-without-reference-image",
+		strings.NewReader(`{"expected_revision":7}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "viral-safe-retry-7")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || manager.retryViralTaskID != "creative_task_viral" || manager.retryViralRequest.ExpectedRevision != 7 {
+		t.Fatalf("status=%d task=%q request=%+v body=%s", response.Code, manager.retryViralTaskID, manager.retryViralRequest, response.Body.String())
+	}
+}
+
 func TestRegenerateShortDramaCandidatesForwardsVersionedConfig(t *testing.T) {
 	t.Parallel()
 	actor := contract.ActorContext{
@@ -2584,6 +2614,8 @@ type creativeManagerStub struct {
 	getBrandWorkflowCalls              int
 	prepareBrandWorkflowCalls          int
 	prepareBrandWorkflowRequest        creative.PrepareStrategyBrandWorkflowRequest
+	retryViralTaskID                   string
+	retryViralRequest                  creative.RetryViralWithoutReferenceImageRequest
 }
 
 func (s *creativeManagerStub) CreateGamePrerollV2Workspace(context.Context, contract.RequestContext, contract.ProjectID, contract.IdempotencyKey, creative.CreateGamePrerollV2WorkspaceRequest) (creative.TaskDetail, error) {
@@ -2724,6 +2756,9 @@ func (s *creativeManagerStub) PrepareBrandFilmAudio(context.Context, contract.Ac
 func (s *creativeManagerStub) MaterializeBrandFilmAudioAssets(context.Context, contract.RequestContext, contract.ProjectID, string, creative.BrandFilmRevisionRequest) (creative.TaskDetail, error) {
 	return s.detail, nil
 }
+func (s *creativeManagerStub) GenerateBrandFilmSoundAssets(context.Context, contract.RequestContext, contract.ProjectID, string, creative.BrandFilmRevisionRequest) (creative.TaskDetail, error) {
+	return s.detail, nil
+}
 func (s *creativeManagerStub) UpdateBrandFilmAudioMix(context.Context, contract.ActorContext, contract.ProjectID, string, creative.UpdateBrandAudioMixRequest) (creative.TaskDetail, error) {
 	return s.detail, nil
 }
@@ -2823,7 +2858,14 @@ func (s *creativeManagerStub) AnalyzeViralRemake(context.Context, contract.Actor
 func (s *creativeManagerStub) UpdateViralPrompt(context.Context, contract.ActorContext, contract.ProjectID, string, creative.UpdateViralPromptRequest) (creative.TaskDetail, error) {
 	return s.detail, nil
 }
+func (s *creativeManagerStub) UpdateViralInput(context.Context, contract.ActorContext, contract.ProjectID, string, creative.UpdateViralInputRequest) (creative.TaskDetail, error) {
+	return s.detail, nil
+}
 func (s *creativeManagerStub) ConfirmViralGeneration(context.Context, contract.ActorContext, contract.ProjectID, string, creative.ConfirmViralGenerationRequest) (creative.TaskDetail, error) {
+	return s.detail, nil
+}
+func (s *creativeManagerStub) RetryViralWithoutReferenceImage(_ context.Context, _ contract.ActorContext, _ contract.ProjectID, taskID string, request creative.RetryViralWithoutReferenceImageRequest) (creative.TaskDetail, error) {
+	s.retryViralTaskID, s.retryViralRequest = taskID, request
 	return s.detail, nil
 }
 func (s *creativeManagerStub) ViralProviderInput(context.Context, contract.ActorContext, contract.ProjectID, string) (provider.VideoGenerationInput, string, error) {

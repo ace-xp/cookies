@@ -211,6 +211,34 @@ func TestPrepareBrandAudioFixtureAcceptsLegacyFourShotTimeline(t *testing.T) {
 	}
 }
 
+func TestPrepareBrandSoundDesignFixtureDoesNotRequireNarration(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	plan := brandAudioTestPlan(now)
+	plan.VoiceDirection = ""
+	for index := range plan.Shots {
+		plan.Shots[index].Voiceover = ""
+	}
+	plan.SoundDesignIntent = SoundDesignIntent{
+		MusicDirection:    "克制的水感电子氛围，结尾清晰收束",
+		SoundEffectFocus:  []string{"精华液流动", "产品定格"},
+		SourceAudioPolicy: "mute",
+		Avoid:             []string{"人声"},
+	}
+	workspace, err := PrepareBrandSoundDesignFixture(plan, contract.AssetVersionRef{AssetID: "asset_brand_preview", Version: 1}, "user_1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace.ContractVersion != BrandAudioWorkspaceV2 || workspace.CurrentMix().Track(BrandAudioTrackVoiceover) != nil || workspace.CurrentMix().Track(BrandAudioTrackAmbience) == nil {
+		t.Fatalf("unexpected v2 sound design workspace: %#v", workspace)
+	}
+	for _, variant := range workspace.Variants {
+		if variant.MixVersions[0].VariantID != variant.ID {
+			t.Fatalf("variant mix identity is inconsistent: %#v", variant)
+		}
+	}
+}
+
 func TestSelectBrandAudioVariantKeepsIndependentMixHistory(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
@@ -454,10 +482,10 @@ func TestMaterializeBrandAudioFixtureAssetsCreatesImmutableAssetBackedMix(t *tes
 		t.Fatal(err)
 	}
 	audio := workspace.VideoDraft.BrandFilm.Audio
-	if audio == nil || audio.ActiveRevision != 2 || len(audio.Attempts) != 7 || len(fixtureAssets.calls) != 7 {
+	if audio == nil || audio.ContractVersion != BrandAudioWorkspaceV2 || audio.ActiveRevision != 2 || len(audio.Attempts) != 5 || len(fixtureAssets.calls) != 5 {
 		t.Fatalf("materialized audio = %#v calls=%d", audio, len(fixtureAssets.calls))
 	}
-	if audio.Variants[0].MixVersions[0].Track(BrandAudioTrackVoiceover).Clips[0].FixtureURI == "" {
+	if audio.Variants[0].MixVersions[0].Track(BrandAudioTrackAmbience).Clips[0].FixtureURI == "" {
 		t.Fatal("A0 mix revision was mutated")
 	}
 	for _, track := range audio.CurrentMix().Tracks {
@@ -475,6 +503,71 @@ func TestMaterializeBrandAudioFixtureAssetsCreatesImmutableAssetBackedMix(t *tes
 
 type testBrandAudioAssetWriter struct {
 	calls []string
+}
+
+type testBrandSoundAssetGenerator struct {
+	calls []provider.SoundAssetGenerationInput
+}
+
+func (g *testBrandSoundAssetGenerator) GenerateSoundAsset(_ context.Context, input provider.SoundAssetGenerationInput) (provider.SoundAssetGenerationResult, error) {
+	if err := input.Validate(); err != nil {
+		return provider.SoundAssetGenerationResult{}, err
+	}
+	g.calls = append(g.calls, input)
+	audio, _, err := RenderBrandAudioFixtureWAV(input.TrackType, input.Prompt, input.DurationMS)
+	if err != nil {
+		return provider.SoundAssetGenerationResult{}, err
+	}
+	return provider.SoundAssetGenerationResult{Audio: audio, Codec: "wav", DurationMS: input.DurationMS, ProviderRequestID: "sound-request-" + input.TrackType, ProviderSnapshot: "test/sound-model/v1"}, nil
+}
+
+func TestGenerateBrandSoundAssetsPersistsRealProviderAttempts(t *testing.T) {
+	now := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+	plan := brandAudioTestPlan(now)
+	plan.VoiceDirection = ""
+	plan.MusicDirection = ""
+	plan.SoundDesignIntent = SoundDesignIntent{MusicDirection: "柔和的金色氛围音乐", SoundEffectFocus: []string{"蜜滴", "玻璃质地"}, SourceAudioPolicy: "mute", Avoid: []string{"人声"}}
+	workspace, err := PrepareBrandSoundDesignFixture(plan, contract.AssetVersionRef{AssetID: "visual", Version: 1}, "tester", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &testBrandAudioAssetWriter{}
+	generator := &testBrandSoundAssetGenerator{}
+	rc := contract.RequestContext{Actor: contract.ActorContext{OrganizationID: "org_1", Principal: contract.Principal{ID: "tester"}}}
+	generated, err := generateBrandSoundAssets(context.Background(), rc, "project_1", "task_1", workspace, writer, generator, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generator.calls) != 5 || len(generated.Attempts) != 5 || len(writer.calls) != 5 {
+		t.Fatalf("sound generation calls=%d attempts=%d ingests=%d", len(generator.calls), len(generated.Attempts), len(writer.calls))
+	}
+	if generated.CurrentMix().Track(BrandAudioTrackMusic).RightsStatus != "ai_generated" {
+		t.Fatalf("music rights status = %#v", generated.CurrentMix().Track(BrandAudioTrackMusic))
+	}
+	for _, attempt := range generated.Attempts {
+		if attempt.FixtureMode || attempt.ProviderSnapshot != "test/sound-model/v1" || attempt.OutputAssetRef == nil {
+			t.Fatalf("AI attempt = %#v", attempt)
+		}
+	}
+}
+
+func TestPrepareBrandSoundDesignFixtureProvidesThreeSoundTreatments(t *testing.T) {
+	now := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+	plan := brandAudioTestPlan(now)
+	plan.VoiceDirection, plan.MusicDirection = "", ""
+	plan.SoundDesignIntent = SoundDesignIntent{MusicDirection: "高级克制的金色氛围音乐", SoundEffectFocus: []string{"蜜滴", "玻璃质地"}, SourceAudioPolicy: "mute", Avoid: []string{"人声"}}
+	workspace, err := PrepareBrandSoundDesignFixture(plan, contract.AssetVersionRef{AssetID: "visual", Version: 1}, "tester", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workspace.Variants) != 3 {
+		t.Fatalf("variant count = %d", len(workspace.Variants))
+	}
+	for _, id := range []string{"sound_treatment_restrained_luxury", "sound_treatment_immersive_water", "sound_treatment_youthful_light"} {
+		if !hasBrandAudioVariant(workspace.Variants, id) {
+			t.Fatalf("missing sound treatment %s", id)
+		}
+	}
 }
 
 func (w *testBrandAudioAssetWriter) IngestDerivedAudio(_ context.Context, _ contract.RequestContext, projectID contract.ProjectID, derivationID string, content io.Reader, sizeBytes int64, mimeType string, _ []contract.ResourceRef) (contract.ProjectAssetRef, error) {

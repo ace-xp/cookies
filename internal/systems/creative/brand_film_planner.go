@@ -164,7 +164,7 @@ func (DeterministicBrandFilmPlanner) AnalyzeBrief(_ context.Context, _ contract.
 			Mandatory:     mandatory, Prohibited: prohibited,
 			ImageRequirements: []string{"使用已确认的商品正面图与品牌 Logo", "保持商品包装、文字和比例真实"},
 			VideoRequirements: []string{fmt.Sprintf("%s · %d 秒 · %s", source.Channel, source.Duration, source.AspectRatio), "品牌定格需保留清晰识别时间"},
-			VoiceDirection:    "克制、可信、清晰，品牌名与产品名按确认读法口播。",
+			SoundDesignIntent: SoundDesignIntent{MusicDirection: "克制、清晰、具有品牌留白感的轻奢音乐。", SoundEffectFocus: []string{"产品材质与使用动作", "镜头转场与品牌定格"}, SourceAudioPolicy: "mute", Avoid: []string{"人声", "夸张水花与嘈杂自然声"}},
 			AssetCandidates:   append([]BrandBriefAssetCandidate{}, source.AssetCandidates...),
 			Uncertainties:     []string{"商品正面图、Logo 与声音权利需在生成前确认"},
 			ModelAlias:        "fixture.deterministic", ModelVersion: "generic-brand-film-v1", PromptVersion: brandBriefPromptVersion, CreatedAt: now,
@@ -185,7 +185,7 @@ func (DeterministicBrandFilmPlanner) AnalyzeBrief(_ context.Context, _ contract.
 		Prohibited:        []string{"不得编造医学或绝对化功效", "不得生成错误 Logo、包装文字、价格或促销信息", "不得混入其他娇兰产品卖点"},
 		ImageRequirements: []string{"优先使用无水印商品正面图", "保留琥珀金瓶身、黑色瓶盖和原始标签比例", "Logo 与包装文字进入生产前必须人工确认"},
 		VideoRequirements: []string{"抖音 9:16，15 秒", "使用水感微距、暖金蜂巢与克制运镜", "结尾至少保留 2 秒稳定商品定格"},
-		VoiceDirection:    "温柔、克制的年轻成熟女声，中低语速，品牌名与“二十五倍蜂皇水”咬字清晰。",
+		SoundDesignIntent: SoundDesignIntent{MusicDirection: "高级、克制、流动感的轻奢音乐，结尾带清晰品牌收束。", SoundEffectFocus: []string{"蜂翼与花园空气感", "精华液流动", "金色光泽转场", "产品定格提示音"}, SourceAudioPolicy: "mute", Avoid: []string{"人声", "夸张水花", "嘈杂环境声"}},
 		AssetCandidates: []BrandBriefAssetCandidate{
 			{ID: "asset_product_front", Role: "product_front", Label: "25X 蜂皇水正面图", SourceLocator: "fixture://briefs/guerlain-25x-bee-water-v1#page=9&image=IM135", FixtureURI: "/assets/guerlain-25x-bee-water-product-front.png", RightsStatus: "needs_confirmation"},
 			{ID: "asset_brand_logo", Role: "logo", Label: "娇兰 Logo", SourceLocator: "fixture://briefs/guerlain-25x-bee-water-v1#page=1&image=IM17", FixtureURI: "/assets/guerlain-logo.png", RightsStatus: "needs_confirmation"},
@@ -252,7 +252,7 @@ func (DeterministicBrandFilmPlanner) GenerateFilmPlan(_ context.Context, _ contr
 		}
 		return BrandFilmPlanVersion{
 			Revision: revision, MasterDurationMS: source.Duration * 1000, ConceptID: concept.ID, Title: "《" + concept.Title + "》", StorySummary: concept.OneLiner,
-			VoiceDirection: analysis.VoiceDirection, MusicDirection: concept.SoundIdea, Shots: shots,
+			MusicDirection: concept.SoundIdea, SoundDesignIntent: SoundDesignIntent{MusicDirection: concept.SoundIdea, SoundEffectFocus: []string{"镜头动作与产品材质", "转场与品牌定格"}, SourceAudioPolicy: "mute", Avoid: []string{"人声"}}, Shots: shots,
 			ModelAlias: "fixture.deterministic", ModelVersion: "generic-brand-film-v1", PromptVersion: brandFilmPromptVersion, CreatedAt: now,
 		}, nil
 	}
@@ -263,7 +263,7 @@ func (DeterministicBrandFilmPlanner) GenerateFilmPlan(_ context.Context, _ contr
 	}
 	return BrandFilmPlanVersion{
 		Revision: revision, MasterDurationMS: 15000, ConceptID: concept.ID, Title: "《" + concept.Title + "》", StorySummary: concept.OneLiner,
-		VoiceDirection: "温柔、克制的年轻成熟女声，中低语速。", MusicDirection: concept.SoundIdea, Shots: shots,
+		MusicDirection: concept.SoundIdea, SoundDesignIntent: SoundDesignIntent{MusicDirection: concept.SoundIdea, SoundEffectFocus: []string{"蜂翼与水润空气感", "精华液流动", "金色光泽转场", "品牌定格"}, SourceAudioPolicy: "mute", Avoid: []string{"人声", "夸张水花"}}, Shots: shots,
 		ModelAlias: "fixture.deterministic", ModelVersion: "guerlain-brand-v1", PromptVersion: brandFilmPromptVersion, CreatedAt: now,
 	}, nil
 }

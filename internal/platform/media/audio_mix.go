@@ -185,16 +185,21 @@ func BuildAudioMixFilter(request AudioMixRequest) (string, string) {
 		}
 		return "[" + label + "]"
 	}
-	voice, music := bus("voiceover", "voicebus"), bus("music", "musicbus")
+	voice, ambience, music := bus("voiceover", "voicebus"), bus("ambience", "ambiencebus"), bus("music", "musicbus")
 	sfx, source := bus("sfx", "sfxbus"), bus("source_audio", "sourcebus")
-	if voice != "" && music != "" {
+	if sfx != "" && music != "" {
+		parts = append(parts, sfx+"asplit=2[sfxsidechain][sfxout]")
+		parts = append(parts, music+"[sfxsidechain]sidechaincompress=threshold=0.04:ratio=5:attack=12:release=260[duckedmusic]")
+		sfx = "[sfxout]"
+		music = "[duckedmusic]"
+	} else if voice != "" && music != "" {
 		parts = append(parts, voice+"asplit=2[voicesidechain][voiceout]")
 		parts = append(parts, music+"[voicesidechain]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[duckedmusic]")
 		voice = "[voiceout]"
 		music = "[duckedmusic]"
 	}
 	finalInputs := []string{}
-	for _, input := range []string{voice, music, sfx, source} {
+	for _, input := range []string{voice, ambience, music, sfx, source} {
 		if input != "" {
 			finalInputs = append(finalInputs, input)
 		}

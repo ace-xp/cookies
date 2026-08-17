@@ -45,7 +45,7 @@ const clearImagesAndVideo = {
 
 export function shortDramaPrerollReducer(state: ShortDramaPrerollState, action: ShortDramaPrerollAction): ShortDramaPrerollState {
   switch (action.type) {
-    case 'restore': return action.state
+    case 'restore': return action.state.output ? { ...action.state, videoStatus: 'ready', error: '' } : action.state
     case 'open-step': return { ...state, activeStep: action.step, error: '' }
     case 'source-selected': return { ...initialShortDramaPrerollState, source: action.source }
     case 'analysis-started': return { ...state, analysisStatus: 'loading', error: '' }

@@ -158,7 +158,7 @@ async function restoreState(projectId: string, detail: ApiShortDramaV2TaskDetail
     selectedImageId: selectedBoard?.id ?? selectedCandidate?.id ?? '',
     videoStatus: output ? 'ready' : workspace.active_stage === 'video_generating' ? 'loading' : workspace.video_error ? 'error' : 'idle',
     output,
-    error: workspace.video_error?.message ?? '',
+    error: output ? '' : workspace.video_error?.message ?? '',
   }
   if (session?.taskId === detail.task.id) {
     restored = {
@@ -359,6 +359,7 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
   const selectedHook = useMemo(() => state.hooks.find(item => item.id === state.selectedHookId) ?? null, [state.hooks, state.selectedHookId])
   const selectedImage = useMemo(() => state.images.find(item => item.id === state.selectedImageId) ?? null, [state.images, state.selectedImageId])
   const textOnlyFallback = workspace?.video_draft.short_drama_preroll_v2.generation_spec?.fallback_mode === 'text_only_realistic'
+  const fallbackNotice = textOnlyFallback && state.videoStatus !== 'ready' ? state.error : ''
   const sourceUrl = localPreviewUrl || state.source?.contentUrl || ''
   const outputCanvas = workspace?.video_draft.short_drama_preroll_v2.output_canvas
   const outputAspectLabel = outputCanvas ? `${outputCanvas.aspect_num}:${outputCanvas.aspect_den}` : (state.source?.width && state.source?.height ? `${state.source.width}:${state.source.height}` : '跟随源视频')
@@ -729,7 +730,8 @@ export function ShortDramaPrerollWorkspace({ onNotice, onOpenEditTask }: { onNot
 
     <main className="short-drama-v2-main">
       <header><div><span className="short-drama-v2-kicker">SHORT DRAMA · PREROLL LAB</span><h3>{steps.find(step => step.id === state.activeStep)?.label}</h3><p>{steps.find(step => step.id === state.activeStep)?.detail}</p></div><span className="short-drama-v2-autosave"><Check size={13}/>草稿自动保存</span></header>
-      {state.error ? <div className="short-drama-v2-error"><CircleAlert size={16}/>{state.error}</div> : null}
+      {state.error && !fallbackNotice ? <div className="short-drama-v2-error"><CircleAlert size={16}/>{state.error}</div> : null}
+      {fallbackNotice ? <div className="short-drama-v2-notice"><CircleAlert size={16}/><span><b>已切换为原创写实人物模式</b><small>原宫格不会再次提交给视频模型。点击“生成前贴视频”即可继续，完成后本提示会自动消失。</small></span></div> : null}
       {state.activeStep === 'understanding' ? <UnderstandingStage state={state} sourceUrl={sourceUrl} mediaLoading={mediaLoading} onAnalyze={() => void analyze()}/> : null}
       {state.activeStep === 'direction' ? <DirectionStage state={state} onSummary={value => dispatch({ type: 'summary-changed', value })} onSelect={id => { void selectHook(id) }}/> : null}
       {state.activeStep === 'first-frame' ? <FirstFrameStage state={state} outputAspectLabel={outputAspectLabel} onPrompt={value => dispatch({ type: 'image-prompt-changed', value })} onGenerate={() => void generateImages()} onRetry={id => { void retryImage(id) }} onSelect={id => { void selectImage(id) }}/> : null}

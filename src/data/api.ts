@@ -939,7 +939,8 @@ export type ApiBrandBriefAnalysis = {
   prohibited_claims: string[]
   image_requirements: string[]
   video_requirements: string[]
-  voice_direction: string
+  voice_direction?: string
+  sound_design_intent?: ApiSoundDesignIntent
   asset_candidates: ApiBrandBriefAssetCandidate[]
   uncertainties: string[]
   confirmed: boolean
@@ -950,6 +951,13 @@ export type ApiBrandBriefAnalysis = {
   route_revision_id?: string
   prompt_version: string
   created_at: string
+}
+
+export type ApiSoundDesignIntent = {
+  music_direction: string
+  sound_effect_focus: string[]
+  source_audio_policy: 'mute' | 'optional' | 'include'
+  avoid?: string[]
 }
 
 export type ApiBrandCreativeConcept = {
@@ -976,7 +984,7 @@ export type ApiBrandFilmShot = {
   action: string
   camera: string
   lighting: string
-  voiceover: string
+  voiceover?: string
   on_screen_text: string
   reference_role: string
   continuity_notes: string
@@ -988,8 +996,9 @@ export type ApiBrandFilmPlan = {
   concept_id: string
   title: string
   story_summary: string
-  voice_direction: string
-  music_direction: string
+  voice_direction?: string
+  music_direction?: string
+  sound_design_intent?: ApiSoundDesignIntent
   shots: ApiBrandFilmShot[]
   confirmed: boolean
   confirmed_by?: string
@@ -1022,7 +1031,7 @@ export type ApiBrandAudioClip = {
 
 export type ApiBrandAudioTrack = {
   id: string
-  type: 'source_audio' | 'voiceover' | 'music' | 'sfx'
+  type: 'source_audio' | 'voiceover' | 'ambience' | 'music' | 'sfx'
   role: string
   muted: boolean
   solo: boolean
@@ -1033,7 +1042,7 @@ export type ApiBrandAudioTrack = {
 }
 
 export type ApiBrandAudioWorkspace = {
-  contract_version: 'creative-brand-audio-workspace/v1'
+  contract_version: 'creative-brand-audio-workspace/v1' | 'creative-brand-sound-design-workspace/v2'
   plan_revision: number
   master_duration_ms: number
   visual_preview_asset_ref: ApiAssetVersionRef
@@ -1041,11 +1050,12 @@ export type ApiBrandAudioWorkspace = {
     revision: number
     plan_revision: number
     master_duration_ms: number
-    voice_profile: { voice_alias: string; language: string; direction: string; speed: number; volume: number; pitch: number; emotion: string }
-    narration_cues: Array<{ id: string; shot_id: string; start_ms: number; end_ms: number; text: string; reason: string; confidence: number; estimated_duration_ms: number; available_duration_ms: number; fit_status: 'fits' | 'spacious' | 'overrun'; suggested_text?: string }>
+    voice_profile?: { voice_alias: string; language: string; direction: string; speed: number; volume: number; pitch: number; emotion: string }
+    sound_design_intent?: ApiSoundDesignIntent
+    narration_cues?: Array<{ id: string; shot_id: string; start_ms: number; end_ms: number; text: string; reason: string; confidence: number; estimated_duration_ms: number; available_duration_ms: number; fit_status: 'fits' | 'spacious' | 'overrun'; suggested_text?: string }>
     music_arc: { start_ms: number; end_ms: number; direction: string }
-    sound_effect_cues: Array<{ id: string; shot_id: string; start_ms: number; end_ms: number; label: string; reason: string }>
-    pronunciations: Array<{ term: string; spoken_as: string; reason: string }>
+    sound_effect_cues: Array<{ id: string; shot_id: string; track_type?: 'ambience' | 'music' | 'sfx'; start_ms: number; end_ms: number; label: string; purpose?: string; prompt?: string; negative_prompt?: string; intensity?: 'subtle' | 'medium' | 'accent'; status?: 'planned' | 'generating' | 'ready' | 'failed' | 'removed'; reason: string }>
+    pronunciations?: Array<{ term: string; spoken_as: string; reason: string }>
     director_decisions: Array<{ id: string; kind: string; target_id: string; summary: string; reason: string; confidence: number; editable: boolean }>
     semantic_checks: Array<{ id: string; shot_id: string; status: 'pass' | 'warning'; summary: string; evidence: string; suggestion?: string }>
     planner_version: string
@@ -1117,6 +1127,11 @@ export type ApiBrandAudioMixOperation =
   | { op: 'set_track_muted'; track_id: string; muted: boolean }
   | { op: 'replace_clip_asset'; clip_id: string; asset_ref: ApiAssetVersionRef }
   | { op: 'set_clip_timing'; clip_id: string; timeline_start_ms: number; timeline_end_ms: number }
+  | { op: 'set_clip_label'; clip_id: string; label: string }
+  | { op: 'set_clip_gain'; clip_id: string; gain_db: number }
+  | { op: 'set_clip_fade'; clip_id: string; fade_in_ms: number; fade_out_ms: number }
+  | { op: 'remove_clip'; clip_id: string }
+  | { op: 'add_fixture_clip'; track_id: string; label: string; timeline_start_ms: number; timeline_end_ms: number }
 
 export type ApiBrandFilmGenerationAttempt = {
   id: string
@@ -3605,6 +3620,7 @@ export type ApiViralRemakeWorkspace = {
           aspect_ratio: string
           resolution: string
           candidate_count: number
+          reference_image_mode?: 'reference_image' | 'text_only' | 'text_only_original_person'
         }
         confirmed_by: string
         confirmed_at: string
@@ -3858,6 +3874,7 @@ export type ApiProviderCapabilities = {
     capability: string
     model: string
     available: boolean
+    connectionType?: string
   }>
   credential?: {
     source?: 'environment' | 'workspace'
@@ -4164,6 +4181,24 @@ export class CreativeApiError extends Error {
     super(message)
     this.name = 'CreativeApiError'
   }
+}
+
+// Browser retries must identify the same user intent. Do not use a clock or
+// random suffix here: those turn a network retry into a second paid job.
+function stableIdempotencyKey(scope: string, parts: readonly (string | number | undefined)[]) {
+  let hash = 0xcbf29ce484222325n
+  const prime = 0x100000001b3n
+  const mask = 0xffffffffffffffffn
+  for (const part of parts) {
+    const value = String(part ?? '')
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= BigInt(value.charCodeAt(index))
+      hash = (hash * prime) & mask
+    }
+    hash ^= 0x1fn
+    hash = (hash * prime) & mask
+  }
+  return `${scope}-${hash.toString(36)}`
 }
 
 async function creativeRequest<T>(path: string, method = 'GET', body?: unknown, headers?: Record<string, string>): Promise<T> {
@@ -4795,6 +4830,12 @@ async function createManualViralRemakeWorkspace(
   input: ApiCreateManualViralRemakeInput,
 ): Promise<ApiViralRemakeWorkspace> {
   const duration = Math.min(60, Math.max(4, Math.round(input.durationSeconds)))
+  const inputKey = stableIdempotencyKey('manual-viral', [
+    projectId, input.parentIntakeId, input.sourceVideo.asset_id, input.sourceVideo.version,
+    input.referenceImage?.asset_id, input.referenceImage?.version, input.productName,
+    ...input.sellingPoints, input.callToAction, input.userInstruction, input.objective,
+    input.audience, input.coreMessage, duration,
+  ])
   const intake = await creativeRequest<{ id: string }>(
     `/projects/${encodeURIComponent(projectId)}/creative-intakes`,
     'POST',
@@ -4835,7 +4876,7 @@ async function createManualViralRemakeWorkspace(
         reference_image_rights: input.referenceImage ? 'pending' : undefined,
       },
     },
-    { 'Idempotency-Key': `manual-viral-${Date.now()}-${Math.random().toString(36).slice(2)}` },
+    { 'Idempotency-Key': inputKey },
   )
   const task = await creativeRequest<{ id: string }>(
     `/projects/${encodeURIComponent(projectId)}/creative-intakes/${encodeURIComponent(intake.id)}:create-video-task`,
@@ -4851,6 +4892,7 @@ async function createManualViralRemakeWorkspace(
       prohibited_claims: ['不得复制原片受保护表达'],
       confirm_route: true,
     },
+    { 'Idempotency-Key': `${inputKey}-create-task` },
   )
   return creativeRequest<ApiViralRemakeWorkspace>(
     `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(task.id)}/viral-remake`,
@@ -5470,10 +5512,12 @@ async function getGamePrerollVideoJob(projectId: string, jobId: string): Promise
 }
 
 async function getLatestViralRemakeWorkspace(projectId: string): Promise<ApiViralRemakeWorkspace | null> {
-  const result = await creativeRequest<{ items: Array<{ id: string; performance_mode?: string; status: string }> }>(
+  const result = await creativeRequest<{ items: Array<Pick<ApiCreativeTaskSummary, 'id' | 'performance_mode' | 'status' | 'updated_at'>> }>(
     `/projects/${encodeURIComponent(projectId)}/creative-tasks?limit=100`,
   )
-  const task = result.items.find(item => item.performance_mode === 'viral_remake' && item.status !== 'archived')
+  const task = result.items
+    .filter(item => item.performance_mode === 'viral_remake' && item.status !== 'archived')
+    .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))[0]
   if (!task) return null
   return creativeRequest<ApiViralRemakeWorkspace>(
     `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(task.id)}/viral-remake`,
@@ -5486,12 +5530,37 @@ async function getViralRemakeWorkspace(projectId: string, taskId: string): Promi
   )
 }
 
-async function analyzeViralRemake(projectId: string, taskId: string): Promise<ApiViralRemakeWorkspace> {
+async function analyzeViralRemake(projectId: string, taskId: string, inputRevision: number): Promise<ApiViralRemakeWorkspace> {
   return creativeRequest<ApiViralRemakeWorkspace>(
     `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(taskId)}/viral-remake:analyze-reference`,
     'POST',
     undefined,
-    { 'Idempotency-Key': `viral-analysis-${taskId}-${Date.now()}` },
+    { 'Idempotency-Key': stableIdempotencyKey('viral-analysis', [projectId, taskId, inputRevision]) },
+  )
+}
+
+async function generateBrandFilmSoundAssets(projectId: string, taskId: string, expectedRevision: number) {
+  return creativeRequest<ApiBrandFilmWorkspace>(brandFilmPath(projectId, taskId, ':generate-sound-assets'), 'POST', {
+    expected_revision: expectedRevision,
+  }, { 'Idempotency-Key': `brand-film-sound-assets-${taskId}-${expectedRevision}` })
+}
+
+async function updateViralInput(
+  projectId: string,
+  taskId: string,
+  expectedRevision: number,
+  input: Pick<ApiCreateManualViralRemakeInput, 'productName' | 'sellingPoints' | 'callToAction' | 'userInstruction'>,
+): Promise<ApiViralRemakeWorkspace> {
+  return creativeRequest<ApiViralRemakeWorkspace>(
+    `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(taskId)}/viral-remake/input-draft`,
+    'PATCH',
+    {
+      expected_revision: expectedRevision,
+      product_name: input.productName,
+      selling_points: input.sellingPoints,
+      call_to_action: input.callToAction,
+      user_instruction: input.userInstruction,
+    },
   )
 }
 
@@ -5512,6 +5581,7 @@ async function confirmViralGeneration(
   projectId: string,
   taskId: string,
   expectedRevision: number,
+  confirmReferenceVideoRights: boolean,
   confirmReferenceImageRights: boolean,
 ): Promise<ApiViralRemakeWorkspace> {
   return creativeRequest<ApiViralRemakeWorkspace>(
@@ -5519,10 +5589,23 @@ async function confirmViralGeneration(
     'POST',
     {
       expected_revision: expectedRevision,
-      confirm_reference_video_rights: true,
+      confirm_reference_video_rights: confirmReferenceVideoRights,
       confirm_reference_image_rights: confirmReferenceImageRights,
     },
     { 'Idempotency-Key': `viral-confirm-${taskId}-${expectedRevision}` },
+  )
+}
+
+async function retryViralWithoutReferenceImage(
+  projectId: string,
+  taskId: string,
+  expectedRevision: number,
+): Promise<ApiViralRemakeWorkspace> {
+  return creativeRequest<ApiViralRemakeWorkspace>(
+    `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(taskId)}/viral-remake:retry-without-reference-image`,
+    'POST',
+    { expected_revision: expectedRevision },
+    { 'Idempotency-Key': stableIdempotencyKey('viral-text-only-retry', [projectId, taskId, expectedRevision]) },
   )
 }
 
@@ -5560,12 +5643,12 @@ function mapViralProviderJob(job: ApiProviderJobWire): ApiGenerationJob {
   }
 }
 
-async function createViralVideoJob(projectId: string, taskId: string): Promise<ApiGenerationJob> {
+async function createViralVideoJob(projectId: string, taskId: string, promptPackageHash: string): Promise<ApiGenerationJob> {
   const job = await creativeRequest<ApiProviderJobWire>(
     `/projects/${encodeURIComponent(projectId)}/creative-tasks/${encodeURIComponent(taskId)}:video-job`,
     'POST',
     {},
-    { 'Idempotency-Key': `viral-video-${taskId}-${Date.now()}` },
+    { 'Idempotency-Key': stableIdempotencyKey('viral-video', [projectId, taskId, promptPackageHash]) },
   )
   return mapViralProviderJob(job)
 }
@@ -6220,6 +6303,7 @@ export const api = {
   composeBrandFilmPreview,
   prepareBrandFilmAudio,
   materializeBrandFilmAudioAssets,
+  generateBrandFilmSoundAssets,
   updateBrandFilmAudioMix,
   selectBrandFilmAudioVariant,
   renderBrandFilmAudioPreview,
@@ -6275,8 +6359,10 @@ export const api = {
   getLatestViralRemakeWorkspace,
   getViralRemakeWorkspace,
   analyzeViralRemake,
+  updateViralInput,
   updateViralPrompt,
   confirmViralGeneration,
+  retryViralWithoutReferenceImage,
   createViralVideoJob,
   getViralVideoJob,
   submitViralCandidateReview,

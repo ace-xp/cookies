@@ -40,7 +40,41 @@ var (
 	// stored: either nothing was ever saved, or the master key changed and the
 	// stored ciphertext no longer decrypts.
 	ErrVideoConfigurationCredentialMissing = errors.New("video configuration has no stored credential")
+	// ErrVideoConfigurationManagedExternally tells the HTTP layer that this
+	// deployment deliberately exposes a read-only route managed by Adapter
+	// Gateway, rather than a broken self-managed Ark configuration surface.
+	ErrVideoConfigurationManagedExternally = errors.New("video configuration is managed by the adapter gateway")
 )
+
+// GatewayManagedVideoConfigurationStore makes the Settings read endpoint
+// useful in Adapter Gateway deployments without ever reading or overwriting
+// credentials owned by the upstream gateway.
+type GatewayManagedVideoConfigurationStore struct {
+	Routes VideoRouteResolver
+}
+
+func (s GatewayManagedVideoConfigurationStore) GetVideoConfiguration(ctx context.Context, organizationID contract.OrganizationID) (VideoConfiguration, error) {
+	if s.Routes == nil {
+		return VideoConfiguration{}, fmt.Errorf("adapter gateway video route resolver is required")
+	}
+	route, err := s.Routes.ResolveVideoRoute(ctx, organizationID, VideoModelAlias)
+	if err != nil {
+		return VideoConfiguration{}, err
+	}
+	return VideoConfiguration{
+		Configured: true, BaseURL: route.BaseURL, UpstreamModel: route.UpstreamModel,
+		CredentialReadable: false, Version: route.CredentialVersion,
+		LastVerificationMessage: "由 Adapter Gateway 管理；请在网关控制面维护凭据和路由。",
+	}, nil
+}
+
+func (GatewayManagedVideoConfigurationStore) VerifyVideoConfiguration(context.Context, contract.OrganizationID, VideoConfigurationInput) (VideoProbeResult, error) {
+	return VideoProbeResult{}, ErrVideoConfigurationManagedExternally
+}
+
+func (GatewayManagedVideoConfigurationStore) SaveVideoConfiguration(context.Context, contract.OrganizationID, VideoConfigurationInput) (VideoConfiguration, error) {
+	return VideoConfiguration{}, ErrVideoConfigurationManagedExternally
+}
 
 // VideoConfigurationInputError carries a message written for the operator
 // filling in the Settings page, so the HTTP layer can pass it through instead

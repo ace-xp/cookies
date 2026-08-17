@@ -29,6 +29,17 @@
   "$defs": {
     "sha256": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
     "stringList": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "soundDesignIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["music_direction", "sound_effect_focus", "source_audio_policy"],
+      "properties": {
+        "music_direction": {"type": "string", "minLength": 1},
+        "sound_effect_focus": {"$ref": "#/$defs/stringList"},
+        "source_audio_policy": {"enum": ["mute", "optional", "include"]},
+        "avoid": {"$ref": "#/$defs/stringList"}
+      }
+    },
     "modelMetadata": {
       "type": "object",
       "required": ["model_alias", "model_version", "prompt_version", "created_at"],
@@ -128,7 +139,8 @@
         {"$ref": "#/$defs/modelMetadata"},
         {
           "type": "object",
-          "required": ["revision", "summary", "audience", "core_message", "selling_points", "mandatory_elements", "prohibited_claims", "image_requirements", "video_requirements", "voice_direction", "asset_candidates", "uncertainties", "confirmed"],
+          "required": ["revision", "summary", "audience", "core_message", "selling_points", "mandatory_elements", "prohibited_claims", "image_requirements", "video_requirements", "asset_candidates", "uncertainties", "confirmed"],
+          "anyOf": [{"required": ["voice_direction"]}, {"required": ["sound_design_intent"]}],
           "properties": {
             "revision": {"type": "integer", "minimum": 1},
             "summary": {"type": "string", "minLength": 1},
@@ -140,6 +152,7 @@
             "image_requirements": {"$ref": "#/$defs/stringList"},
             "video_requirements": {"$ref": "#/$defs/stringList"},
             "voice_direction": {"type": "string", "minLength": 1},
+            "sound_design_intent": {"$ref": "#/$defs/soundDesignIntent"},
             "asset_candidates": {"type": "array", "items": {"$ref": "#/$defs/assetCandidate"}},
             "uncertainties": {"$ref": "#/$defs/stringList"},
             "confirmed": {"type": "boolean"},
@@ -184,7 +197,7 @@
     "shot": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "order", "start_second", "end_second", "purpose", "visual", "action", "camera", "lighting", "voiceover", "on_screen_text", "reference_role", "continuity_notes"],
+      "required": ["id", "order", "start_second", "end_second", "purpose", "visual", "action", "camera", "lighting", "on_screen_text", "reference_role", "continuity_notes"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "order": {"type": "integer", "minimum": 1},
@@ -206,7 +219,8 @@
         {"$ref": "#/$defs/modelMetadata"},
         {
           "type": "object",
-          "required": ["revision", "concept_id", "title", "story_summary", "voice_direction", "music_direction", "shots", "confirmed"],
+          "required": ["revision", "concept_id", "title", "story_summary", "shots", "confirmed"],
+          "anyOf": [{"required": ["voice_direction"]}, {"required": ["sound_design_intent"]}],
           "properties": {
             "revision": {"type": "integer", "minimum": 1},
             "master_duration_ms": {"type": "integer", "minimum": 1},
@@ -215,6 +229,7 @@
             "story_summary": {"type": "string", "minLength": 1},
             "voice_direction": {"type": "string", "minLength": 1},
             "music_direction": {"type": "string"},
+            "sound_design_intent": {"$ref": "#/$defs/soundDesignIntent"},
             "shots": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/shot"}},
             "confirmed": {"type": "boolean"},
             "confirmed_by": {"type": "string"},

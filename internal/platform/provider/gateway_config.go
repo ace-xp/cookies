@@ -272,6 +272,7 @@ type CapabilityStatus struct {
 	Capability           string    `json:"capability"`
 	ModelAlias           string    `json:"model_alias"`
 	UpstreamModel        string    `json:"upstream_model"`
+	ConnectionType       string    `json:"connection_type"`
 	Available            bool      `json:"available"`
 	CredentialConfigured bool      `json:"credential_configured"`
 	UpdatedAt            time.Time `json:"updated_at"`
@@ -284,7 +285,7 @@ func (s MySQLGatewayConfigStore) ListCapabilities(ctx context.Context, organizat
 	if s.DB == nil {
 		return nil, fmt.Errorf("provider database is required")
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT r.capability, r.model_alias, rr.upstream_model,
+	rows, err := s.DB.QueryContext(ctx, `SELECT r.capability, r.model_alias, rr.upstream_model, connection.connection_type,
 		EXISTS(
 			SELECT 1 FROM provider_credentials credential
 			WHERE credential.connection_id = rr.connection_id
@@ -307,7 +308,7 @@ func (s MySQLGatewayConfigStore) ListCapabilities(ctx context.Context, organizat
 	result := []CapabilityStatus{}
 	for rows.Next() {
 		var item CapabilityStatus
-		if err := rows.Scan(&item.Capability, &item.ModelAlias, &item.UpstreamModel, &item.CredentialConfigured, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.Capability, &item.ModelAlias, &item.UpstreamModel, &item.ConnectionType, &item.CredentialConfigured, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		item.Available = item.CredentialConfigured

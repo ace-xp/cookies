@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowRight,
   Check,
@@ -648,23 +648,31 @@ function ProjectMediaContext() {
   </section>
 }
 
+function latestViralCandidate(workspace?: ApiViralRemakeWorkspace | null) {
+  return [...(workspace?.video_draft.viral_remake.candidates ?? [])]
+    .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))[0]
+}
+
 function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: string) => void; handoffIntake?: ApiTaskStrategyCreativeIntake }) {
   const { currentProject, reloadProjects } = useProject()
-  const { providers } = useModelConfig()
+  const { videoGenerationAvailable, isLoading: isModelLoading } = useModelConfig()
   const [sourceAssetId, setSourceAssetId] = useState('source_video')
   const [sourceVersion, setSourceVersion] = useState(1)
   const [sourceTitle, setSourceTitle] = useState('30 秒爆款结构样本')
-  const [durationSeconds, setDurationSeconds] = useState(30)
+  const [durationSeconds] = useState(15)
   const [sourceFileName, setSourceFileName] = useState('')
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState('')
+  const [sourcePreviewUnavailable, setSourcePreviewUnavailable] = useState(false)
   const [referenceImageName, setReferenceImageName] = useState('')
   const [referenceImagePreviewUrl, setReferenceImagePreviewUrl] = useState('')
+  const [referenceImagePreviewUnavailable, setReferenceImagePreviewUnavailable] = useState(false)
+  const [candidatePreviewUrl, setCandidatePreviewUrl] = useState('')
   const [referenceImageAsset, setReferenceImageAsset] = useState<{ asset_id: string; version: number } | undefined>()
   const [userInstruction, setUserInstruction] = useState('保留原视频的强停留节奏，但改写为当前产品的原创广告表达。')
   const [productName, setProductName] = useState(currentProject.product)
-  const [sellingPoint, setSellingPoint] = useState('±0.01mm 精度')
-  const [secondSellingPoint, setSecondSellingPoint] = useState('98% 准时交付')
-  const [cta, setCta] = useState('预约获取打样方案')
+  const [sellingPoint, setSellingPoint] = useState('')
+  const [secondSellingPoint, setSecondSellingPoint] = useState('')
+  const [cta, setCta] = useState('')
   const [viralWorkspace, setViralWorkspace] = useState<ApiViralRemakeWorkspace | null>(null)
   const [analysis, setAnalysis] = useState<ApiHitAnalysis | null>(null)
   const [replicationPrompt, setReplicationPrompt] = useState<ApiVideoReplicationPrompt | null>(null)
@@ -672,12 +680,28 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
   const [confirmedBriefId, setConfirmedBriefId] = useState('')
   const [viralTaskId, setViralTaskId] = useState('')
   const [generationReady, setGenerationReady] = useState(false)
-  const [rightsConfirmed, setRightsConfirmed] = useState(false)
+  const [sourceRightsConfirmed, setSourceRightsConfirmed] = useState(false)
+  const [referenceImageRightsConfirmed, setReferenceImageRightsConfirmed] = useState(false)
   const [uploadingSource, setUploadingSource] = useState(false)
   const [uploadingReference, setUploadingReference] = useState(false)
   const [busyStep, setBusyStep] = useState<'analysis' | 'generate' | ''>('')
-  const configuredProvider = providers.find(provider => provider.status === '已配置')
+  const automaticFallbackKeyRef = useRef('')
   const isGenerating = job?.status === 'queued' || job?.status === 'running'
+  const viralInput = viralWorkspace?.video_draft.viral_remake.input_snapshot
+  const rightsConfirmed = sourceRightsConfirmed && (!referenceImageAsset || referenceImageRightsConfirmed)
+  const previewReadyForRights = Boolean(sourcePreviewUrl) && !sourcePreviewUnavailable
+    && (!referenceImageAsset || (Boolean(referenceImagePreviewUrl) && !referenceImagePreviewUnavailable))
+  const productFactsDirty = viralInput ? (
+    productName !== viralInput.product_name
+    || sellingPoint !== (viralInput.selling_points[0] ?? '')
+    || secondSellingPoint !== (viralInput.selling_points[1] ?? '')
+    || cta !== viralInput.call_to_action
+    || userInstruction !== viralInput.user_instruction
+  ) : false
+  const promptDirty = Boolean(replicationPrompt && viralWorkspace?.video_draft.viral_remake.prompt_draft
+    && replicationPrompt.dimensions.some(dimension => (
+      dimension.prompt.trim() !== (viralWorkspace.video_draft.viral_remake.prompt_draft?.dimensions[dimension.id] ?? '').trim()
+    )))
   const makeAsset = (assetId: string, version = 1) => ({ asset_id: assetId.trim(), version })
   useEffect(() => {
     let active = true
@@ -692,52 +716,130 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
       setViralTaskId(workspace.task.id)
       setViralWorkspace(workspace)
       setGenerationReady(workspace.video_draft.viral_remake.readiness.generation_ready)
-      setRightsConfirmed(
-        input.reference_video_rights === 'confirmed'
-        && (!input.reference_image || input.reference_image_rights === 'confirmed'),
-      )
+      setSourceRightsConfirmed(input.reference_video_rights === 'confirmed')
+      setReferenceImageRightsConfirmed(input.reference_image_rights === 'confirmed')
       setSourceAssetId(input.reference_video.asset_id)
       setSourceVersion(input.reference_video.version)
+      setSourceFileName(`Asset ${input.reference_video.asset_id} v${input.reference_video.version}`)
       setReferenceImageAsset(input.reference_image)
+      setReferenceImageName(input.reference_image ? `Asset ${input.reference_image.asset_id} v${input.reference_image.version}` : '')
       setProductName(input.product_name)
       setSellingPoint(input.selling_points[0] ?? '')
       setSecondSellingPoint(input.selling_points[1] ?? '')
       setCta(input.call_to_action)
       setUserInstruction(input.user_instruction)
       setReplicationPrompt(promptFromViralWorkspace(workspace, input.reference_video.asset_id, '', ''))
-      const latestCandidate = (workspace.video_draft.viral_remake.candidates ?? []).at(-1)
+      const latestCandidate = latestViralCandidate(workspace)
       if (latestCandidate) {
         void api.getViralVideoJob(currentProject.id, latestCandidate.provider_job_id).then(setJob).catch(() => undefined)
       }
+      void Promise.all([
+        api.getProjectAssetPreview(currentProject.id, input.reference_video).then(url => {
+          setSourcePreviewUrl(url)
+          setSourcePreviewUnavailable(false)
+        }).catch(() => {
+          setSourcePreviewUrl('')
+          setSourcePreviewUnavailable(true)
+        }),
+        input.reference_image
+          ? api.getProjectAssetPreview(currentProject.id, input.reference_image).then(url => {
+            setReferenceImagePreviewUrl(url)
+            setReferenceImagePreviewUnavailable(false)
+          }).catch(() => {
+            setReferenceImagePreviewUrl('')
+            setReferenceImagePreviewUnavailable(true)
+          })
+          : Promise.resolve().then(() => {
+            setReferenceImagePreviewUrl('')
+            setReferenceImagePreviewUnavailable(false)
+          }),
+      ]).then(() => undefined)
       onNotice(`已恢复爆款复刻任务 ${workspace.task.id.slice(0, 8)}，素材引用和手工输入未丢失。`)
     }).catch(() => undefined)
     return () => { active = false }
   }, [currentProject.id, onNotice])
   useEffect(() => () => {
-    if (sourcePreviewUrl) window.URL.revokeObjectURL(sourcePreviewUrl)
+    if (sourcePreviewUrl.startsWith('blob:')) window.URL.revokeObjectURL(sourcePreviewUrl)
   }, [sourcePreviewUrl])
   useEffect(() => () => {
-    if (referenceImagePreviewUrl) window.URL.revokeObjectURL(referenceImagePreviewUrl)
+    if (referenceImagePreviewUrl.startsWith('blob:')) window.URL.revokeObjectURL(referenceImagePreviewUrl)
   }, [referenceImagePreviewUrl])
   useEffect(() => {
-    if (!job || !isGenerating) return
-    const timer = window.setInterval(() => {
-      void api.getViralVideoJob(currentProject.id, job.id).then(next => {
+    if (!job) return
+    let active = true
+    const reconcileJob = () => {
+      void api.getViralVideoJob(currentProject.id, job.id).then(async next => {
+        if (!active) return
         setJob(next)
-        if (next.status === 'succeeded') {
-          void reloadProjects()
-          if (viralTaskId) {
-            void api.getViralRemakeWorkspace(currentProject.id, viralTaskId).then(workspace => {
-              setViralWorkspace(workspace)
-              setGenerationReady(workspace.video_draft.viral_remake.readiness.generation_ready)
-            }).catch(() => undefined)
-          }
-          onNotice('复刻视频生成完成，已作为新视频资产关联到当前 Project。')
+        if (next.status !== 'succeeded' && next.status !== 'failed' && next.status !== 'cancelled') return
+        if (next.status === 'succeeded') void reloadProjects()
+        if (!viralTaskId) {
+          if (next.status === 'succeeded') onNotice('复刻视频生成完成，已作为新视频资产关联到当前 Project。')
+          return
         }
-      }).catch(cause => onNotice(cause instanceof Error ? cause.message : '复刻视频任务状态读取失败。'))
-    }, 1500)
-    return () => window.clearInterval(timer)
+        const workspace = await api.getViralRemakeWorkspace(currentProject.id, viralTaskId)
+        if (!active) return
+        setViralWorkspace(workspace)
+        setGenerationReady(workspace.video_draft.viral_remake.readiness.generation_ready)
+        if (next.status === 'succeeded') {
+          onNotice('复刻视频生成完成，已作为新视频资产关联到当前 Project。')
+          return
+        }
+        const failedCandidate = latestViralCandidate(workspace)
+        if (next.status !== 'failed'
+          || failedCandidate?.status !== 'failed'
+          || failedCandidate.error_code !== 'REFERENCE_ASSET_CONTENT_REJECTED') return
+        const fallbackKey = `${viralTaskId}:${failedCandidate.id}`
+        if (automaticFallbackKeyRef.current === fallbackKey) return
+        automaticFallbackKeyRef.current = fallbackKey
+        setBusyStep('generate')
+        try {
+          const fallback = await api.retryViralWithoutReferenceImage(
+            currentProject.id,
+            viralTaskId,
+            workspace.video_draft.revision,
+          )
+          const promptPackageHash = fallback.video_draft.viral_remake.prompt_package?.content_hash
+          if (!promptPackageHash) throw new Error('自动降级未返回可提交的 PromptPackage。')
+          if (!active) return
+          setViralWorkspace(fallback)
+          setGenerationReady(true)
+          const created = await api.createViralVideoJob(currentProject.id, viralTaskId, promptPackageHash)
+          const refreshed = await api.getViralRemakeWorkspace(currentProject.id, viralTaskId)
+          if (!active) return
+          setJob(created)
+          setViralWorkspace(refreshed)
+          setGenerationReady(refreshed.video_draft.viral_remake.readiness.generation_ready)
+          onNotice('人物参考图未被模型接受，已自动改用原创写实人物继续生成；原始失败记录已保留用于追溯。')
+        } catch (cause) {
+          automaticFallbackKeyRef.current = ''
+          if (active) onNotice(cause instanceof Error ? cause.message : '人物参考图自动降级失败，请刷新后重试。')
+        } finally {
+          if (active) setBusyStep('')
+        }
+      }).catch(cause => {
+        if (active) onNotice(cause instanceof Error ? cause.message : '复刻视频任务状态读取失败。')
+      })
+    }
+    const timer = isGenerating ? window.setInterval(reconcileJob, 1500) : undefined
+    if (!isGenerating) reconcileJob()
+    return () => {
+      active = false
+      if (timer !== undefined) window.clearInterval(timer)
+    }
   }, [currentProject.id, job, isGenerating, reloadProjects, onNotice, viralTaskId])
+  const latestCandidate = latestViralCandidate(viralWorkspace)
+  useEffect(() => {
+    if (!latestCandidate?.output_asset_ref) {
+      setCandidatePreviewUrl('')
+      return
+    }
+    let active = true
+    void api.getProjectAssetPreview(currentProject.id, latestCandidate.output_asset_ref)
+      .then(url => { if (active) setCandidatePreviewUrl(url) })
+      .catch(() => { if (active) setCandidatePreviewUrl('') })
+    return () => { active = false }
+  }, [currentProject.id, latestCandidate?.output_asset_ref?.asset_id, latestCandidate?.output_asset_ref?.version])
   const composePrompt = (prompt: ApiVideoReplicationPrompt, dimensions = prompt.dimensions) => [
     `源视频参考：${prompt.source_title}${prompt.source_file_name ? `（${prompt.source_file_name}）` : ''}，Asset ${prompt.source_asset.asset_id} v${prompt.source_asset.version}。`,
     `多模态输入：源视频用于复刻节奏、镜头功能和声音结构；${prompt.user_instruction ? `文本指令优先约束内容改写：${prompt.user_instruction}；` : ''}${prompt.reference_image_name ? `参考图片用于约束主体外观、产品形态、色彩或构图气质：${prompt.reference_image_name}；` : ''}`,
@@ -745,15 +847,17 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
     '生成要求：视频参考负责节奏和镜头功能，图片参考负责主体视觉，文本指令负责内容改写和约束；三者冲突时以文本指令和版权安全为最高优先级。不复制原视频人物、商标、字幕、画面构图或受版权保护的表达。',
   ].join('\n')
   const handleSourceFile = async (file?: File) => {
-    if (sourcePreviewUrl) window.URL.revokeObjectURL(sourcePreviewUrl)
+    if (sourcePreviewUrl.startsWith('blob:')) window.URL.revokeObjectURL(sourcePreviewUrl)
     if (!file) {
       setSourceFileName('')
       setSourcePreviewUrl('')
+      setSourcePreviewUnavailable(false)
       return
     }
     setSourceFileName(file.name)
     setSourceTitle(file.name.replace(/\.[^.]+$/, '') || sourceTitle)
     setSourcePreviewUrl(window.URL.createObjectURL(file))
+    setSourcePreviewUnavailable(false)
     setUploadingSource(true)
     try {
       const ref = await api.uploadProjectAsset(currentProject.id, file)
@@ -764,7 +868,8 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
       setReplicationPrompt(null)
       setJob(null)
       setGenerationReady(false)
-      setRightsConfirmed(false)
+      setSourceRightsConfirmed(false)
+      setReferenceImageRightsConfirmed(false)
       onNotice(`源视频 ${file.name} 已上传并固定为 Asset ${ref.asset_id} v${ref.version}。`)
     } catch (cause) {
       onNotice(cause instanceof Error ? cause.message : '源视频上传失败。')
@@ -773,14 +878,16 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
     }
   }
   const handleReferenceImage = async (file?: File) => {
-    if (referenceImagePreviewUrl) window.URL.revokeObjectURL(referenceImagePreviewUrl)
+    if (referenceImagePreviewUrl.startsWith('blob:')) window.URL.revokeObjectURL(referenceImagePreviewUrl)
     if (!file) {
       setReferenceImageName('')
       setReferenceImagePreviewUrl('')
+      setReferenceImagePreviewUnavailable(false)
       return
     }
     setReferenceImageName(file.name)
     setReferenceImagePreviewUrl(window.URL.createObjectURL(file))
+    setReferenceImagePreviewUnavailable(false)
     setUploadingReference(true)
     try {
       const ref = await api.uploadProjectAsset(currentProject.id, file)
@@ -790,7 +897,8 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
       setReplicationPrompt(null)
       setJob(null)
       setGenerationReady(false)
-      setRightsConfirmed(false)
+      setSourceRightsConfirmed(false)
+      setReferenceImageRightsConfirmed(false)
       onNotice(`参考图片 ${file.name} 已上传并固定为 Asset ${ref.asset_id} v${ref.version}。`)
     } catch (cause) {
       onNotice(cause instanceof Error ? cause.message : '参考图片上传失败。')
@@ -810,16 +918,33 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
       onNotice('请先上传爆款源视频，系统需要真实的 AssetVersionRef。')
       return
     }
+    if (!productName.trim() || !sellingPoint.trim() || !cta.trim() || !userInstruction.trim()) {
+      onNotice('请填写目标产品、至少一个卖点、CTA 和文本指令，再开始拆解。')
+      return
+    }
     setBusyStep('analysis')
     try {
       let taskId = viralTaskId
+      let inputRevision = viralWorkspace?.video_draft.revision ?? 0
+      if (taskId && productFactsDirty && viralWorkspace) {
+        const updated = await api.updateViralInput(currentProject.id, taskId, viralWorkspace.video_draft.revision, {
+          productName,
+          sellingPoints: [sellingPoint, secondSellingPoint].filter(Boolean),
+          callToAction: cta,
+          userInstruction,
+        })
+        setViralWorkspace(updated)
+        setReplicationPrompt(null)
+        setGenerationReady(false)
+        inputRevision = updated.video_draft.revision
+      }
       if (!taskId) {
         const workspace = await api.createManualViralRemakeWorkspace(currentProject.id, {
           parentIntakeId: handoffIntake?.id,
           sourceVideo: makeAsset(sourceAssetId, sourceVersion),
           referenceImage: referenceImageAsset,
           productName,
-          sellingPoints: [sellingPoint, secondSellingPoint],
+          sellingPoints: [sellingPoint, secondSellingPoint].filter(Boolean),
           callToAction: cta,
           userInstruction,
           objective: handoffIntake?.request.objective || '复用高停留结构，生成当前产品的原创转化广告',
@@ -831,9 +956,10 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
         setViralTaskId(taskId)
         setViralWorkspace(workspace)
         setGenerationReady(workspace.video_draft.viral_remake.readiness.generation_ready)
+        inputRevision = workspace.video_draft.revision
         onNotice(`已创建并持久化爆款复刻任务 ${taskId.slice(0, 8)}，正在使用 Seed-2-pro 分析源视频。`)
       }
-      const workspace = await api.analyzeViralRemake(currentProject.id, taskId)
+      const workspace = await api.analyzeViralRemake(currentProject.id, taskId, inputRevision)
       const prompt = promptFromViralWorkspace(workspace, sourceTitle, sourceFileName, referenceImageName)
       if (!prompt) throw new Error('分析已返回，但没有生成可编辑的五维提示词。')
       setViralWorkspace(workspace)
@@ -852,34 +978,45 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
       onNotice('请先完成五维视觉理解拆解。')
       return
     }
-    if (!rightsConfirmed) {
+    if (!rightsConfirmed || !previewReadyForRights) {
       onNotice('请先确认源视频和参考图片具有可用于本次生成的授权。')
       return
     }
-    if (!configuredProvider) {
+    if (!videoGenerationAvailable) {
       onNotice('服务端尚未配置视频生成模型，无法生成复刻视频。')
+      return
+    }
+    if (productFactsDirty) {
+      onNotice('产品事实已修改，请先重新执行五维拆解，生成不会使用未分析的修改。')
       return
     }
     setBusyStep('generate')
     try {
-      const dimensions = Object.fromEntries(
-        replicationPrompt.dimensions.map(dimension => [dimension.id, dimension.prompt.trim()]),
-      ) as Record<ApiVideoPromptDimension['id'], string>
-      const updated = await api.updateViralPrompt(
-        currentProject.id,
-        viralTaskId,
-        viralWorkspace.video_draft.revision,
-        dimensions,
-      )
-      const confirmed = await api.confirmViralGeneration(
-        currentProject.id,
-        viralTaskId,
-        updated.video_draft.revision,
-        Boolean(referenceImageAsset),
-      )
+      let confirmed = viralWorkspace
+      let promptPackageHash = confirmed.video_draft.viral_remake.prompt_package?.content_hash
+      if (!promptPackageHash || promptDirty) {
+        const dimensions = Object.fromEntries(
+          replicationPrompt.dimensions.map(dimension => [dimension.id, dimension.prompt.trim()]),
+        ) as Record<ApiVideoPromptDimension['id'], string>
+        const updated = await api.updateViralPrompt(
+          currentProject.id,
+          viralTaskId,
+          viralWorkspace.video_draft.revision,
+          dimensions,
+        )
+        confirmed = await api.confirmViralGeneration(
+          currentProject.id,
+          viralTaskId,
+          updated.video_draft.revision,
+          sourceRightsConfirmed,
+          referenceImageRightsConfirmed,
+        )
+        promptPackageHash = confirmed.video_draft.viral_remake.prompt_package?.content_hash
+      }
       setViralWorkspace(confirmed)
       setGenerationReady(true)
-      const created = await api.createViralVideoJob(currentProject.id, viralTaskId)
+      if (!promptPackageHash) throw new Error('版权确认未返回已冻结的 PromptPackage，不能创建视频任务。')
+      const created = await api.createViralVideoJob(currentProject.id, viralTaskId, promptPackageHash)
       setJob(created)
       onNotice(created.status === 'succeeded'
         ? '复刻视频生成完成，候选视频已进入项目素材库。'
@@ -890,7 +1027,6 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
       setBusyStep('')
     }
   }
-  const latestCandidate = (viralWorkspace?.video_draft.viral_remake.candidates ?? []).at(-1)
   const submitCandidateReview = async () => {
     if (!viralTaskId || !latestCandidate) return
     setBusyStep('generate')
@@ -912,15 +1048,28 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
       <label className="viral-upload image">上传参考图片<input type="file" accept="image/png,image/jpeg" onChange={event => { void handleReferenceImage(event.target.files?.[0]) }}/><small>{uploadingReference ? '正在上传并写入项目素材库…' : referenceImageName || '图片用于约束主体外观、产品形态和视觉风格。'}</small></label>
       {referenceImagePreviewUrl ? <div className="viral-image-preview"><img src={referenceImagePreviewUrl} alt="参考图片预览"/><span>{referenceImageName}</span></div> : null}
       <label>文本指令<textarea className="viral-text-instruction" value={userInstruction} onChange={event => setUserInstruction(event.target.value)} placeholder="例如：更年轻化，突出夏季户外场景，避免出现原视频人物和 Logo。"/></label>
-      <label>源视频 Asset ID<input value={sourceAssetId} onChange={event => setSourceAssetId(event.target.value)}/></label>
-      <label>源视频版本<input type="number" min={1} value={sourceVersion} onChange={event => setSourceVersion(Number(event.target.value))}/></label>
-      <label>视频标题<input value={sourceTitle} onChange={event => setSourceTitle(event.target.value)}/></label>
-      <label>时长（秒）<input type="number" min={9} max={180} value={durationSeconds} onChange={event => setDurationSeconds(Number(event.target.value))}/></label>
+      <label>源视频 Asset ID<input value={sourceAssetId} disabled={Boolean(viralWorkspace)} onChange={event => setSourceAssetId(event.target.value)}/></label>
+      <label>源视频版本<input type="number" min={1} value={sourceVersion} disabled={Boolean(viralWorkspace)} onChange={event => setSourceVersion(Number(event.target.value))}/></label>
+      <label>视频标题<input value={sourceTitle} disabled={Boolean(viralWorkspace)} onChange={event => setSourceTitle(event.target.value)}/><small>{viralWorkspace ? '已分析任务的源素材已冻结；如需更换，请重新上传源视频。' : ''}</small></label>
+      <label>生成时长<input type="number" value={durationSeconds} readOnly aria-readonly="true"/><small>爆款复刻当前固定生成 15 秒；源视频仅用于拆解节奏与镜头功能。</small></label>
       <button className="primary-button full" disabled={busyStep === 'analysis' || uploadingSource || uploadingReference} onClick={() => void analyze()}><WandSparkles size={15}/>{busyStep === 'analysis' ? '保存任务与准备分析…' : '视觉理解拆解五维提示词'}</button>
     </aside>
     <section className="viral-dimension-panel">
       <div className="viral-dimension-hero"><div><span className="section-label">VLM PROMPT DNA</span><h3>{viralWorkspace?.video_draft.viral_remake.analysis_snapshot ? sourceTitle : '等待视觉理解模型拆解'}</h3><p>{viralWorkspace?.video_draft.viral_remake.analysis_snapshot ? '已将源视频拆为任务、画质风格、环境氛围、镜头内容和音乐音效五个可编辑提示词维度。' : '输入源视频后，系统会把爆款视频拆成可控的生成指令，再送入视频生成模型。'}</p></div><div><b>{replicationPrompt ? replicationPrompt.dimensions.length : 0}</b><small>Prompt 维度</small></div></div>
       <div className="viral-dimension-grid">{replicationPrompt ? replicationPrompt.dimensions.map(dimension => <article className="viral-dimension-card" key={dimension.id}><div><span>{dimension.label}</span><small>{dimension.evidence}</small></div><textarea aria-label={dimension.label} value={dimension.prompt} onChange={event => updateDimension(dimension.id, event.target.value)}/></article>) : ['任务目标类型', '画质&风格&光影规范', '环境氛围', '镜头画面内容', '音乐&音效'].map(label => <article className="viral-dimension-card empty" key={label}><div><span>{label}</span><small>等待模型输出</small></div><p>上传或填写源视频后点击拆解。</p></article>)}</div>
+      {latestCandidate ? <section className="viral-generated-result" aria-label="复刻视频生成结果">
+        <div className="viral-generated-result-heading"><div><span className="section-label">GENERATED VIDEO</span><h4>复刻视频结果</h4></div><small>候选 {latestCandidate.id.slice(0, 8)} · {latestCandidate.status}</small></div>
+        <div className="viral-candidate-summary">
+          {latestCandidate.output_asset_ref ? <small>已入库 Asset {latestCandidate.output_asset_ref.asset_id} v{latestCandidate.output_asset_ref.version}</small> : null}
+          {candidatePreviewUrl ? <video controls preload="metadata" src={candidatePreviewUrl} aria-label="复刻视频结果预览"/> : null}
+          {candidatePreviewUrl ? <a className="secondary-button" href={candidatePreviewUrl} download>下载候选视频</a> : null}
+          {latestCandidate.checks.map(check => <small key={check.code}>{check.passed ? '✓' : '×'} {check.message}</small>)}
+          {latestCandidate.error_message ? <small>{latestCandidate.error_code} · {latestCandidate.error_message}</small> : null}
+          {latestCandidate.status === 'succeeded' && latestCandidate.checks.every(check => check.passed)
+            ? <button className="secondary-button" disabled={busyStep === 'generate'} onClick={() => void submitCandidateReview()}>提交候选评审</button>
+            : null}
+        </div>
+      </section> : null}
     </section>
     <aside className="viral-generation-panel">
       <span className="section-label">复刻视频生成</span>
@@ -928,22 +1077,16 @@ function ViralRemixWorkspace({ onNotice, handoffIntake }: { onNotice: (message: 
       <label>卖点 1<input value={sellingPoint} onChange={event => setSellingPoint(event.target.value)}/></label>
       <label>卖点 2<input value={secondSellingPoint} onChange={event => setSecondSellingPoint(event.target.value)}/></label>
       <label>CTA<input value={cta} onChange={event => setCta(event.target.value)}/></label>
-      {!configuredProvider ? <div className="model-required"><CircleAlert size={15}/><span>服务端尚未配置视频生成模型。</span></div> : null}
+      {!isModelLoading && !videoGenerationAvailable ? <div className="model-required"><CircleAlert size={15}/><span>视频生成路由当前不可用，请联系网关管理员检查凭据或模型路由。</span></div> : null}
       {!confirmedBriefId ? <div className="model-required"><CircleAlert size={15}/><span>Strategy 尚未接线；当前任务明确使用 manual Intake，不伪造 Brief。</span></div> : null}
       {!generationReady ? <div className="model-required"><CircleAlert size={15}/><span>完成分析并确认提示词与素材授权后，系统会冻结 PromptPackage 再开始正式生成。</span></div> : null}
-      <label className="viral-rights-confirmation"><input type="checkbox" checked={rightsConfirmed} onChange={event => setRightsConfirmed(event.target.checked)}/><span>我确认源视频及参考图片可用于本次分析与原创广告生成</span></label>
+      {productFactsDirty ? <div className="model-required"><CircleAlert size={15}/><span>产品事实已修改；先重新执行五维拆解，旧提示词不会用于生成。</span></div> : null}
+      <label className="viral-rights-confirmation"><input type="checkbox" disabled={!sourcePreviewUrl || sourcePreviewUnavailable} checked={sourceRightsConfirmed} onChange={event => setSourceRightsConfirmed(event.target.checked)}/><span>我确认源视频拥有用于本次分析与原创广告生成的有效授权</span></label>
+      {referenceImageAsset ? <label className="viral-rights-confirmation"><input type="checkbox" disabled={!referenceImagePreviewUrl || referenceImagePreviewUnavailable} checked={referenceImageRightsConfirmed} onChange={event => setReferenceImageRightsConfirmed(event.target.checked)}/><span>我确认参考图片拥有用于本次分析与原创广告生成的有效授权</span></label> : null}
+      {!previewReadyForRights && viralWorkspace ? <div className="model-required"><CircleAlert size={15}/><span>需先恢复并预览全部参考素材，才能声明授权并生成。</span></div> : null}
       <label>复刻视频总提示词<textarea className="viral-composite-prompt" readOnly value={replicationPrompt?.composite_prompt ?? '五维拆解完成后自动生成总提示词。'}/></label>
-      <button className="primary-button full" disabled={!replicationPrompt || !rightsConfirmed || !configuredProvider || isGenerating || busyStep === 'generate'} onClick={() => void generateReplica()}><Video size={15}/>{isGenerating || busyStep === 'generate' ? '生成中…' : latestCandidate?.status === 'failed' ? '重试生成复刻视频' : '生成复刻视频'}</button>
+      <button className="primary-button full" disabled={!replicationPrompt || !rightsConfirmed || !previewReadyForRights || !videoGenerationAvailable || isModelLoading || productFactsDirty || isGenerating || busyStep === 'generate'} onClick={() => void generateReplica()}><Video size={15}/>{isGenerating || busyStep === 'generate' ? '生成中…' : latestCandidate?.status === 'failed' ? '重试生成复刻视频' : '生成复刻视频'}</button>
       {job ? <div className="inline-notice" role="status">复刻任务 {shortId(job.id)} · {job.status} · {job.model ?? '模型待分配'}{job.diagnostic ? ` · ${job.diagnostic}` : ''}</div> : null}
-      {latestCandidate ? <div className="viral-candidate-summary">
-        <b>候选 {latestCandidate.id.slice(0, 8)} · {latestCandidate.status}</b>
-        {latestCandidate.output_asset_ref ? <small>已入库 Asset {latestCandidate.output_asset_ref.asset_id} v{latestCandidate.output_asset_ref.version}</small> : null}
-        {latestCandidate.checks.map(check => <small key={check.code}>{check.passed ? '✓' : '×'} {check.message}</small>)}
-        {latestCandidate.error_message ? <small>{latestCandidate.error_code} · {latestCandidate.error_message}</small> : null}
-        {latestCandidate.status === 'succeeded' && latestCandidate.checks.every(check => check.passed)
-          ? <button className="secondary-button" disabled={busyStep === 'generate'} onClick={() => void submitCandidateReview()}>提交候选评审</button>
-          : null}
-      </div> : null}
       {replicationPrompt ? <div className="viral-safety-note"><ShieldCheck size={15}/><span>{replicationPrompt.model_directive}；只复刻结构与生成指令，不复制原片受保护表达。</span></div> : null}
     </aside>
   </div>
