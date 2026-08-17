@@ -321,7 +321,12 @@ func (s MySQLGatewayConfigStore) SaveServiceConfiguration(ctx context.Context, o
 	if err != nil {
 		return ServiceConfiguration{}, err
 	}
-	if probe.Outcome != servicecatalog.OutcomeOK {
+	// Unverified is not a failure, so it does not block the write. Refusing it
+	// would leave every capability behind an upstream without a /models
+	// endpoint readable but permanently uneditable, which is worse than saving
+	// a value nobody could check: a wrong host or a wrong key is still caught,
+	// and the page says plainly that this one was not checked.
+	if probe.Outcome != servicecatalog.OutcomeOK && probe.Outcome != servicecatalog.OutcomeUnverified {
 		return ServiceConfiguration{}, fmt.Errorf("%w: %s", ErrServiceProbeFailed, probe.Message)
 	}
 	if err := s.writeServiceRevision(ctx, normalized, changedBy, probe); err != nil {

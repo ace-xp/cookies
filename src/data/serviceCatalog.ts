@@ -1,5 +1,6 @@
 export type ServiceFieldKind = 'text' | 'secret'
-export type ProbeOutcome = 'ok' | 'auth_failed' | 'unreachable' | 'rejected'
+/** `unverified`：连得上，但这个上游没有能安全试探的接口，检查不出对错。 */
+export type ProbeOutcome = 'ok' | 'auth_failed' | 'unreachable' | 'rejected' | 'unverified'
 
 export interface ApiServiceField {
   name: string
@@ -88,9 +89,15 @@ export function serviceSubmitBody<Field extends Pick<ApiServiceField, 'name' | '
   return { values: submitted, expected_version: expectedVersion }
 }
 
+/**
+ * 「没法自动检查」要和「连不通」分开：前者不用管，后者得去修。混成一句会
+ * 让人去查一个根本不存在的故障。
+ */
 export function summarizeServiceStatus(
   config: Pick<ApiServiceConfiguration, 'configured' | 'last_probe'>,
-): '可用' | '已配置但连不通' | '未配置' {
+): '可用' | '已配置但连不通' | '已配置，没法自动检查' | '未配置' {
   if (!config.configured) return '未配置'
-  return config.last_probe.outcome === 'ok' ? '可用' : '已配置但连不通'
+  if (config.last_probe.outcome === 'ok') return '可用'
+  if (config.last_probe.outcome === 'unverified') return '已配置，没法自动检查'
+  return '已配置但连不通'
 }

@@ -64,7 +64,8 @@ export function ServiceEditor({
     setError('')
     try {
       const probe = await api.verifyService(service.code, body())
-      if (probe.outcome === 'ok') setNotice(probe.message || '连通正常。')
+      // unverified 不是失败，是「查不出来」：标红会让人去修一个不存在的故障。
+      if (probe.outcome === 'ok' || probe.outcome === 'unverified') setNotice(probeMessage(probe) || '连通正常。')
       else setError(probeMessage(probe))
     } catch (cause) {
       setError(messageOf(cause, '测试失败'))
@@ -81,6 +82,11 @@ export function ServiceEditor({
     setError('')
     try {
       const listed = await api.listServiceModels(service.code, body())
+      // 这个上游根本没有清单接口，跟填错了不是一回事，所以是提示不是报错。
+      if (listed.outcome === 'unverified') {
+        setNotice('这个上游不提供模型清单，请照服务商文档把模型名手填进去。')
+        return
+      }
       if (listed.outcome !== 'ok') {
         setError(probeMessage(listed))
         return
@@ -120,7 +126,9 @@ export function ServiceEditor({
     try {
       const saved = await api.saveService(service.code, body())
       onSaved(saved)
-      setNotice('已保存并立即生效。')
+      setNotice(saved.last_probe.outcome === 'unverified'
+        ? '已保存并立即生效。这项没法自动检查，请自己确认一次是否可用。'
+        : '已保存并立即生效。')
     } catch (cause) {
       const message = messageOf(cause, '保存失败')
       // 版本对不上只能刷新后重来；其它错误直接重试就行，所以只有这一种
@@ -135,7 +143,7 @@ export function ServiceEditor({
   return <div className="service-editor">
     <div className="secret-policy">
       <LockKeyhole size={18}/>
-      <div><b>密钥由服务端加密保存</b><p>保存前会先探一次连通性，探不通就不写入。页面只显示密钥末四位。</p></div>
+      <div><b>密钥由服务端加密保存</b><p>保存前会先探一次连通性：确实探出问题就不写入；有的上游没法探，那就照常保存并注明。页面只显示密钥末四位。</p></div>
     </div>
 
     <form className="provider-fields" onSubmit={submit}>

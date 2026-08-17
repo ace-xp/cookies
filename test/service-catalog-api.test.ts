@@ -26,7 +26,7 @@ test('填了的密钥字段照常提交', () => {
   assert.equal(body.expected_version, undefined)
 })
 
-test('状态汇总区分四态', () => {
+test('状态汇总区分五态', () => {
   assert.equal(summarizeServiceStatus({ configured: false, last_probe: { outcome: 'ok', message: '' } }), '未配置')
   assert.equal(summarizeServiceStatus({ configured: true, last_probe: { outcome: 'ok', message: '' } }), '可用')
   assert.equal(
@@ -36,6 +36,15 @@ test('状态汇总区分四态', () => {
   assert.equal(
     summarizeServiceStatus({ configured: true, last_probe: { outcome: 'unreachable', message: '' } }),
     '已配置但连不通',
+  )
+})
+
+// 「没查成」不能显示成「连不通」：后者会让人去修一个不存在的故障，而这类
+// 服务（比如共享网关，它没有 /v1/models）其实一直在正常干活。
+test('状态汇总把「没法自动检查」和「连不通」分开', () => {
+  assert.equal(
+    summarizeServiceStatus({ configured: true, last_probe: { outcome: 'unverified', message: '' } }),
+    '已配置，没法自动检查',
   )
 })
 

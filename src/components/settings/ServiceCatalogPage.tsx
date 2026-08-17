@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { Check, CircleAlert, RotateCcw } from 'lucide-react'
+import { Check, CircleAlert, CircleDashed, RotateCcw } from 'lucide-react'
 import { api, summarizeServiceStatus, type ApiServiceConfiguration } from '../../data/api'
 import { catalogLoadState } from './serviceCatalogState'
 import { ServiceEditor } from './ServiceEditor'
@@ -69,8 +69,13 @@ export function ServiceCatalogPage() {
               <tr className={open ? 'open' : ''} onClick={() => setOpenCode(open ? '' : service.code)}>
                 <td><b>{service.display_name}</b><small>{service.tier === 'editable' ? '可在页面修改' : '只读'}</small></td>
                 <td>
+                  {/* 「没法自动检查」既不是好也不是坏，给它一个不催人去修的中性图标。 */}
                   <span className={status === '可用' ? 'config-status configured' : 'config-status'}>
-                    {status === '可用' ? <Check size={14}/> : <CircleAlert size={14}/>} {status}
+                    {status === '可用'
+                      ? <Check size={14}/>
+                      : status === '已配置，没法自动检查'
+                        ? <CircleDashed size={14}/>
+                        : <CircleAlert size={14}/>} {status}
                   </span>
                 </td>
                 <td>{service.impact}</td>

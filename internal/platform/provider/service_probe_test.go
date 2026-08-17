@@ -82,6 +82,41 @@ func TestProbeServiceSendsMiyunSessionAsCookie(t *testing.T) {
 	}
 }
 
+// 复现 8091 上的共享网关：它照常提供 /v1/chat/completions，却没有 /v1/models。
+// 把这个 404 当成「地址填错了」，图片、视频、图片理解三项就会一律显示成坏的，
+// 又因为保存前必须探通，它们连改都改不了。
+func TestProbeServiceTreatsAMissingModelListAsUnverifiedRatherThanABadAddress(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("404 page not found"))
+	}))
+	defer upstream.Close()
+
+	result := ProbeService(context.Background(), "model.video", upstream.URL+"/v1", "sk-test")
+	if result.Outcome != servicecatalog.OutcomeUnverified {
+		t.Fatalf("expected unverified, got %q (%s)", result.Outcome, result.Message)
+	}
+}
+
+// 秘云探的是它自家文档写明的地址，这个 404 就是真的填错了，不能跟着放行。
+func TestProbeServiceStillCallsA404ABadAddressWhereThePathIsPromised(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer upstream.Close()
+
+	for _, code := range []string{"miyun", "volcengine_speech"} {
+		result := ProbeService(context.Background(), code, upstream.URL, "secret")
+		if result.Outcome != servicecatalog.OutcomeRejected {
+			t.Errorf("%s: expected rejected, got %q", code, result.Outcome)
+		}
+	}
+}
+
 // 上游只认带版本段的路径。地址填成网关根（不带 /v1）时，这里必须像
 // gateway_config.go 那样自己补上，否则一份能正常调用的配置会被报成
 // 「地址填错了」。

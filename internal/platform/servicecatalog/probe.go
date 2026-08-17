@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Outcome is the four-way classification every probe collapses to. The page
+// Outcome is the five-way classification every probe collapses to. The page
 // renders one sentence of guidance per outcome, so the operator always knows
 // the next action.
 type Outcome string
@@ -15,6 +15,11 @@ const (
 	OutcomeAuthFailed  Outcome = "auth_failed"
 	OutcomeUnreachable Outcome = "unreachable"
 	OutcomeRejected    Outcome = "rejected"
+	// OutcomeUnverified means the probe reached the upstream but learned
+	// nothing: the endpoint it can safely try is one this upstream does not
+	// implement. It is not a failure, and callers that gate on a clean probe
+	// must let it through — see Unverified.
+	OutcomeUnverified Outcome = "unverified"
 )
 
 // Result is what a probe reports. UpstreamMessage is kept separate from
@@ -32,7 +37,28 @@ const (
 	messageUnreachable = "地址填错，或服务器出不了网。请检查地址、检查服务器网络"
 	messageRejected    = "上游拒绝了这次请求，但没有给出说明"
 	messageNotFound    = "地址填错了：能连上服务器，但这个路径不存在"
+	messageUnverified  = "连得上，但这个服务没有可以试探的接口，检查不了对错。配置照常保存，请自己确认一次"
 )
+
+// Unverified reports that the upstream answered but the answer proves nothing.
+// It exists because the probe's endpoint is not always one the upstream owes
+// us: /models is an OpenAI convention that a compatible gateway may skip while
+// serving generation normally. Reading that 404 as a wrong address accused a
+// working configuration of being broken, and since a save has to probe clean
+// first, it also made that configuration impossible to edit.
+//
+// The cost is honest and worth naming: a base address whose path prefix is
+// wrong lands here too, because a 404 cannot tell the two apart. A wrong host
+// still reads as unreachable and a wrong key still reads as auth_failed, so
+// only this one case degrades from a verdict to a shrug.
+func Unverified(upstreamMessage string) Result {
+	trimmed := strings.TrimSpace(upstreamMessage)
+	message := messageUnverified
+	if trimmed != "" {
+		message += "（上游说明：" + trimmed + "）"
+	}
+	return Result{Outcome: OutcomeUnverified, Message: message, UpstreamMessage: trimmed}
+}
 
 // ClassifyHTTP maps an upstream status code to an outcome. upstreamMessage is
 // whatever human-readable explanation the upstream gave; it is carried through

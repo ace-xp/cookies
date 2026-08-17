@@ -82,6 +82,31 @@ func TestClassifyHTTPNotFoundPointsAtTheAddress(t *testing.T) {
 	}
 }
 
+// 「查不出来」必须和「查出来是坏的」分开。混成一个结果，操作的人会去修一个
+// 不存在的故障，而真正只是没接口可探的服务会被永远拦在保存之外。
+func TestUnverifiedIsNotAFailure(t *testing.T) {
+	result := Unverified("")
+	if result.Outcome != OutcomeUnverified {
+		t.Fatalf("expected unverified, got %q", result.Outcome)
+	}
+	if strings.Contains(result.Message, "地址填错") {
+		t.Fatalf("an unchecked service must not be accused of a wrong address: %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "检查不了") {
+		t.Fatalf("the message must say the check could not be made, got %q", result.Message)
+	}
+}
+
+func TestUnverifiedKeepsUpstreamWords(t *testing.T) {
+	result := Unverified("  404 page not found  ")
+	if result.UpstreamMessage != "404 page not found" {
+		t.Fatalf("upstream words were lost: %q", result.UpstreamMessage)
+	}
+	if !strings.Contains(result.Message, "404 page not found") {
+		t.Fatalf("display message must carry the upstream words, got %q", result.Message)
+	}
+}
+
 func TestClassifyHTTPTrimsUpstreamWhitespace(t *testing.T) {
 	result := ClassifyHTTP(400, "  配额已用尽  \n")
 	if result.UpstreamMessage != "配额已用尽" {
@@ -126,6 +151,7 @@ func TestEveryOutcomeHasAMessage(t *testing.T) {
 		ClassifyHTTP(401, ""),
 		ClassifyHTTP(500, ""),
 		ClassifyTransport(errors.New("boom")),
+		Unverified(""),
 	}
 	seen := map[Outcome]bool{}
 	for _, result := range cases {
@@ -134,7 +160,7 @@ func TestEveryOutcomeHasAMessage(t *testing.T) {
 		}
 		seen[result.Outcome] = true
 	}
-	for _, outcome := range []Outcome{OutcomeOK, OutcomeAuthFailed, OutcomeRejected, OutcomeUnreachable} {
+	for _, outcome := range []Outcome{OutcomeOK, OutcomeAuthFailed, OutcomeRejected, OutcomeUnreachable, OutcomeUnverified} {
 		if !seen[outcome] {
 			t.Errorf("no case produced outcome %q", outcome)
 		}

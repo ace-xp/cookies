@@ -22,12 +22,10 @@ const modelListLimit = 200
 // for those the page keeps the plain text box instead of showing an empty
 // picker that looks broken.
 func SupportsModelListing(code string) bool {
-	switch code {
-	case "miyun", "volcengine_speech":
-		return false
-	default:
-		return true
-	}
+	// Same fact as the probe's: this service is listable exactly when its probe
+	// already points at /models. Keeping one predicate means the button and the
+	// 404 handling can never disagree about which services have a list.
+	return probesTheModelList(code)
 }
 
 // ListUpstreamModels asks the upstream which models this credential may call.
@@ -59,8 +57,10 @@ func ListUpstreamModels(ctx context.Context, code, baseURL, secret string) ([]st
 	defer response.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(response.Body, probeMaxBodyBytes))
-	result := servicecatalog.ClassifyHTTP(response.StatusCode, extractUpstreamMessage(body))
+	result := classifyProbeResponse(code, response.StatusCode, extractUpstreamMessage(body))
 	if result.Outcome != servicecatalog.OutcomeOK {
+		// An unverified read lands here too: there is no list to return, and the
+		// page tells the operator to type the model name by hand.
 		return nil, result
 	}
 	return parseModelIdentifiers(body), result

@@ -160,6 +160,28 @@ func TestSaveServiceConfigurationDoesNotWriteWhenProbeFails(t *testing.T) {
 	}
 }
 
+// 探不出结果不是探失败。共享网关没有 /v1/models，如果这里也拦下来，挂在它
+// 上面的能力就成了只能看不能改。写进去，但如实记下这次没检查成。
+func TestSaveServiceConfigurationWritesWhenTheProbeCouldNotCheck(t *testing.T) {
+	store := newServiceConfigurationTestStore(t)
+	store.ServiceProber = func(context.Context, string, string, string) servicecatalog.Result {
+		return servicecatalog.Unverified("404 page not found")
+	}
+	saved, err := store.SaveServiceConfiguration(t.Context(), "org_local", "operator@example.com", ServiceConfigurationInput{
+		Code:   "model.text",
+		Values: map[string]string{"base_url": "https://gateway.example.com/v1", "model": "doubao-x", "api_key": "sk-unchecked"},
+	})
+	if err != nil {
+		t.Fatalf("an unverified probe must not block the write: %v", err)
+	}
+	if !saved.Configured {
+		t.Fatal("the configuration was not written")
+	}
+	if saved.LastProbe.Outcome != servicecatalog.OutcomeUnverified {
+		t.Fatalf("the page must be told the check did not happen, got %q", saved.LastProbe.Outcome)
+	}
+}
+
 // Spec 4.6: the revision records who made the change. The credential is not
 // part of that record.
 func TestSaveServiceConfigurationRecordsWhoChangedIt(t *testing.T) {

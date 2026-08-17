@@ -27,6 +27,21 @@ var versionSegment = regexp.MustCompile(`/v[0-9]+$`)
 // verified against the real upstreams during the acceptance run; a wrong one
 // shows up as "地址填错了" on a configuration that is actually fine, so fix it
 // here rather than loosening the classifier.
+// probesTheModelList reports whether this service's probe runs against the
+// OpenAI /models endpoint. That endpoint is a convention rather than an
+// obligation, so a 404 from it says nothing about the address — which is why
+// the answer decides whether a 404 is a verdict or a shrug. The two services
+// listed below probe an endpoint their own vendor documents, so a 404 there
+// really is a wrong address.
+func probesTheModelList(code string) bool {
+	switch code {
+	case "miyun", "volcengine_speech":
+		return false
+	default:
+		return true
+	}
+}
+
 func probeEndpoint(code, baseURL string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	switch code {
@@ -71,7 +86,17 @@ func ProbeService(ctx context.Context, code, baseURL, secret string) servicecata
 	defer response.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(response.Body, probeMaxBodyBytes))
-	return servicecatalog.ClassifyHTTP(response.StatusCode, extractUpstreamMessage(body))
+	return classifyProbeResponse(code, response.StatusCode, extractUpstreamMessage(body))
+}
+
+// classifyProbeResponse adds the one thing ClassifyHTTP cannot know: which
+// endpoint was tried. A 404 only means "wrong address" when the upstream was
+// obliged to answer that path.
+func classifyProbeResponse(code string, status int, upstreamMessage string) servicecatalog.Result {
+	if status == http.StatusNotFound && probesTheModelList(code) {
+		return servicecatalog.Unverified(upstreamMessage)
+	}
+	return servicecatalog.ClassifyHTTP(status, upstreamMessage)
 }
 
 // extractUpstreamMessage digs the upstream's own explanation out of the common

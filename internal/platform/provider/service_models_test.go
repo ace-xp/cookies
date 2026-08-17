@@ -89,6 +89,23 @@ func TestListUpstreamModelsAcceptsAnUpstreamWithNoList(t *testing.T) {
 	}
 }
 
+// 读不到清单不等于配错了。上游没有这个接口时，页面该说「手填」，不该说
+// 「地址填错了」——后者会让人去改一个本来正确的地址。
+func TestListUpstreamModelsReportsAMissingListAsUnverified(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer upstream.Close()
+
+	models, result := ListUpstreamModels(context.Background(), "model.video", upstream.URL+"/v1", "sk-test")
+	if result.Outcome != servicecatalog.OutcomeUnverified {
+		t.Fatalf("expected unverified, got %q (%s)", result.Outcome, result.Message)
+	}
+	if len(models) != 0 {
+		t.Errorf("a failed read must not report models, got %v", models)
+	}
+}
+
 // 火山语音's 资源 ID is not a model name, and miyun is an asset source. Asking
 // either for a model list would hit an endpoint that answers something else, so
 // the page never offers the button.
