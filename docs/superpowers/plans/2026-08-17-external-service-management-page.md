@@ -590,90 +590,90 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: 放开 connection_type 约束
+### Task 3: 补齐 schema（已完成，与原计划有出入）
 
 **Files:**
-- Create: `migrations/provider/20260818090000_provider_connection_types.up.sql`
-- Create: `migrations/provider/20260818090000_provider_connection_types.down.sql`
+- Create: `migrations/provider/20260818090000_provider_service_catalog.up.sql`
+- Create: `migrations/provider/20260818090000_provider_service_catalog.down.sql`
 
 **Interfaces:**
 - Consumes: 无
-- Produces: `provider_connections.connection_type` 接受 `adapter_gateway`、`ark`、`las_operator`、`minimax_speech`、`volcengine_speech`
+- Produces: `provider_connections.connection_type` 接受 `adapter_gateway`、`ark`、`las_operator`、`minimax_speech`、`volcengine_speech`；`provider_connections.last_verification_outcome`；`provider_connection_revisions.created_by`
 
-**背景**：原表的 CHECK 约束只允许 `adapter_gateway`（见 `migrations/provider/20260723120000_provider_gateway_config.up.sql`），但 `gateway_config.go` 已经在按 `ark`、`las_operator`、`minimax_speech` 查询，`gateway_config_write.go:279` 也在写 `'ark'`。约束与实际用法已经不一致，这次一并对齐。
+**原计划的两处错误，实施时已纠正：**
 
-- [ ] **Step 1: 先确认现有数据里已有哪些类型**
+1. 原文说「约束只允许 `adapter_gateway`，与代码实际用法不一致」——**不成立**。约束此前已被放开过两次：`20260727090000_provider_video_routes.up.sql` 加了 `ark`，`20260811101000_provider_document_vision_routes.up.sql` 加了 `minimax_speech` 和 `las_operator`。真正缺的只有 `volcengine_speech` 一个。
+2. 原文要加 `last_probe_outcome` / `last_probe_message` / `last_probed_at` 三列——**会与已有列重复**。`20260815100000_provider_connection_verification.up.sql` 已经加了 `last_verified_at`、`last_verification_ok`、`last_verification_message`，且 `gateway_config_write.go:306` 正在写它们。只有一样是缺的：`last_verification_ok` 是 `TINYINT(1)` 布尔，装不下「密钥无效 / 连不上 / 被拒绝」这三种失败的区别，而页面要按这个区别给出不同的下一步动作。所以只补一列 `last_verification_outcome`，时间和文案复用已有列。
+
+**新增的一项**：`provider_connection_revisions` 确认**没有** `created_by` 列（原计划第 1244 行假设它有）。规格 4.6 的审计要求「谁在什么时候改了哪个服务」，改动本身已按版本追加在 revisions 表里，缺的只是「谁」，这次一并补上。
+
+- [x] **Step 1: 确认现有数据里已有哪些类型**
 
 Run:
 ```bash
-docker compose exec -T mysql mysql -uroot -p"$COOKIES_MYSQL_ROOT_PASSWORD" "$COOKIES_MYSQL_DATABASE" -e "SELECT connection_type, COUNT(*) FROM provider_connections GROUP BY connection_type;"
+docker exec -i $(docker ps --format '{{.Names}}' | grep -i mysql | head -1) mysql -ucookies -p"$COOKIES_MYSQL_PASSWORD" cookies -e "SELECT connection_type, COUNT(*) FROM provider_connections GROUP BY connection_type;"
 ```
-Expected: 列出现有类型。**把输出记下来**，Step 3 的允许值集合必须是其超集，否则迁移会失败。
+允许值集合必须是输出的超集，否则迁移会失败。
 
-- [ ] **Step 2: 写迁移**
+- [x] **Step 2: 写迁移**
 
-创建 `migrations/provider/20260818090000_provider_connection_types.up.sql`：
+`migrations/provider/20260818090000_provider_service_catalog.up.sql`：
 
 ```sql
--- The original CHECK allowed only 'adapter_gateway', but gateway_config.go has
--- been resolving 'ark', 'las_operator' and 'minimax_speech' routes and
--- gateway_config_write.go has been inserting 'ark' rows. MySQL only began
--- enforcing CHECK constraints in 8.0.16, which is why this drifted unnoticed.
--- The settings page needs one connection per catalog entry, so align the
--- constraint with what the code actually writes.
-ALTER TABLE provider_connections
-  DROP CHECK chk_provider_connection_type;
+-- 外部服务管理页需要三样已有 schema 没有的东西。
 
+-- 1. 火山语音（TTS）此前从未走过 provider_connections，现在要能存进来。
 ALTER TABLE provider_connections
+  DROP CHECK chk_provider_connection_type,
   ADD CONSTRAINT chk_provider_connection_type
-  CHECK (connection_type IN (
-    'adapter_gateway',
-    'ark',
-    'las_operator',
-    'minimax_speech',
-    'volcengine_speech'
-  ));
+    CHECK (connection_type IN ('adapter_gateway', 'ark', 'minimax_speech', 'las_operator', 'volcengine_speech'));
 
--- The settings page shows a "最近检查" column for every row. Without somewhere
--- to persist the last probe, that column would only ever be filled for the one
--- service edited in the current page session.
+-- 2. 已有的 last_verification_ok 是布尔，装不下「密钥无效 / 连不上 / 被拒绝」
+--    这三种失败的区别，而页面要按这个区别给出不同的下一步动作。
+--    last_verified_at 和 last_verification_message 复用已有列，不重复建。
 ALTER TABLE provider_connections
-  ADD COLUMN last_probe_outcome VARCHAR(32) NOT NULL DEFAULT '',
-  ADD COLUMN last_probe_message VARCHAR(512) NOT NULL DEFAULT '',
-  ADD COLUMN last_probed_at DATETIME(6) NULL;
+  ADD COLUMN last_verification_outcome VARCHAR(32) NULL AFTER last_verification_ok;
+
+-- 3. 设计文档 4.6 要求审计「谁在什么时候改了哪个服务」。改动本身已经按版本
+--    追加在 revisions 表里，缺的只是「谁」。留空串而不是 NULL，避免读取端
+--    到处判空；历史行改不出操作人，就是空串。
+ALTER TABLE provider_connection_revisions
+  ADD COLUMN created_by VARCHAR(128) NOT NULL DEFAULT '' AFTER config_json;
 ```
 
-创建 `migrations/provider/20260818090000_provider_connection_types.down.sql`：
+`migrations/provider/20260818090000_provider_service_catalog.down.sql`：
 
 ```sql
--- Rolling back only restores the narrower constraint. Rows already written
--- with a now-disallowed type would make this fail, which is the correct
--- signal: delete or retype those connections first.
-ALTER TABLE provider_connections
-  DROP CHECK chk_provider_connection_type;
+ALTER TABLE provider_connection_revisions
+  DROP COLUMN created_by;
 
 ALTER TABLE provider_connections
+  DROP COLUMN last_verification_outcome;
+
+ALTER TABLE provider_connections
+  DROP CHECK chk_provider_connection_type,
   ADD CONSTRAINT chk_provider_connection_type
-  CHECK (connection_type IN ('adapter_gateway'));
-
-ALTER TABLE provider_connections
-  DROP COLUMN last_probe_outcome,
-  DROP COLUMN last_probe_message,
-  DROP COLUMN last_probed_at;
+    CHECK (connection_type IN ('adapter_gateway', 'ark', 'minimax_speech', 'las_operator'));
 ```
 
-- [ ] **Step 3: 跑迁移**
+回滚只收窄到迁移前的状态，不回到最初的 `('adapter_gateway')`——那会让已有的 ark/las/minimax 连接全部违规。若已写入 `volcengine_speech` 类型的行，回滚会失败，这是正确的信号：先删掉或改类型。
+
+- [x] **Step 3: 跑迁移**
 
 Run: `npm run go:migrate`
-Expected: 迁移成功，无报错。
+Expected: `migrations are current`，无报错。
 
-- [ ] **Step 4: 验证约束生效**
+- [x] **Step 4: 验证约束两侧**
 
-Run:
+新类型能进、乱填的挡住：
+
 ```bash
-docker compose exec -T mysql mysql -uroot -p"$COOKIES_MYSQL_ROOT_PASSWORD" "$COOKIES_MYSQL_DATABASE" -e "INSERT INTO provider_connections (id, connection_code, connection_type, status, version) VALUES ('probe_bad', 'probe-bad', 'nonsense', 'enabled', 1);"
+docker exec -i $(docker ps --format '{{.Names}}' | grep -i mysql | head -1) mysql -ucookies -p"$COOKIES_MYSQL_PASSWORD" cookies -e "
+INSERT INTO provider_connections (id, connection_code, connection_type, status, version) VALUES ('t-ok','__probe_ok','volcengine_speech','enabled',1);
+DELETE FROM provider_connections WHERE id='t-ok';
+INSERT INTO provider_connections (id, connection_code, connection_type, status, version) VALUES ('t-bad','__probe_bad','not_a_real_type','enabled',1);"
 ```
-Expected: 报错 `Check constraint 'chk_provider_connection_type' is violated`。若插入成功，说明该 MySQL 版本不强制 CHECK，需在 `SaveServiceConfiguration`（Task 4）里补一次应用层校验。
+Expected: 第一条成功，第三条报 `Check constraint 'chk_provider_connection_type' is violated`。实测结果与预期一致。若第三条也插入成功，说明该 MySQL 版本不强制 CHECK，需在 `SaveServiceConfiguration`（Task 4）里补一次应用层校验。
 
 - [ ] **Step 5: 提交**
 
@@ -1241,7 +1241,7 @@ func (s MySQLGatewayConfigStore) SaveServiceConfiguration(ctx context.Context, o
 
 `writeServiceRevision` 是把 `gateway_config_write.go:258-365` 的事务体按目录编码参数化：同样的 `SELECT ... FOR UPDATE` 版本检查、同样的 `nextVideoRevision` 取号、同样的 connection revision / route revision / credential 三段插入，区别只是 ID、`connection_type`、`capability`、`model_alias` 改为从 `servicecatalog.Find(code)` 取。**实现时把 `nextVideoRevision` 改名为 `nextRevision` 并同时供两处使用，不要复制一份。**
 
-**审计**（规格 4.6）：`provider_connection_revisions` 已有 `created_by` 字段，`writeServiceRevision` 要把发起人写进去。发起人从 `contract` 的 principal 取，签名多带一个参数。凭据密文不进审计——revision 行只记地址、模型、版本号和发起人，密钥另存在 `provider_credentials`。加一条测试断言 revision 行的 `created_by` 非空。若该表实际没有 `created_by` 列，在 Task 3 的迁移里一并补上 `created_by VARCHAR(128) NOT NULL DEFAULT ''`。
+**审计**（规格 4.6）：`provider_connection_revisions.created_by` 已由 Task 3 的迁移补上（该列原先不存在），`writeServiceRevision` 要把发起人写进去。发起人从 `contract` 的 principal 取，签名多带一个参数。凭据密文不进审计——revision 行只记地址、模型、版本号和发起人，密钥另存在 `provider_credentials`。加一条测试断言 revision 行的 `created_by` 非空。
 
 - [ ] **Step 4: 跑测试**
 
