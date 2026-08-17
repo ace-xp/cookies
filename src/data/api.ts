@@ -18,7 +18,7 @@ import {
   prepareKanonCommercePreroll,
   unsupportedKanonWrite,
 } from '../backend/kanon-api.js'
-import { serviceSubmitBody } from './serviceCatalog'
+import { serviceSubmitBody, summarizeServiceStatus } from './serviceCatalog'
 import type {
   ApiServiceConfiguration,
   ApiServiceField,
@@ -31,7 +31,7 @@ import type {
 // Re-exported so src/data/api.ts stays the single import point for the
 // frontend; the pure helpers live in their own module only so the Node test
 // runner can load them without pulling in React.
-export { serviceSubmitBody }
+export { serviceSubmitBody, summarizeServiceStatus }
 export type { ApiServiceConfiguration, ApiServiceField, ApiServiceProbe, ProbeOutcome, ServiceFieldKind, ServiceSubmitBody }
 import type { CreativeIntakeStatus, CreativeTaskStatus } from '../contracts/creative'
 // 纯类型的循环引用：verdict.ts 反过来从这里取 ApiConfidenceLevel。

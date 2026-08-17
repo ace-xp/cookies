@@ -25,6 +25,8 @@ export interface ApiServiceConfiguration {
   fields: ApiServiceField[]
   env_keys: string[]
   restart_required: boolean
+  /** Set when the service is configured somewhere other than this page. */
+  managed_note?: string
   configured: boolean
   values: Record<string, string>
   masked_secrets: Record<string, string>

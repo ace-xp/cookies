@@ -35,6 +35,9 @@ func serviceConfigurationView(service servicecatalog.Service, config provider.Se
 		"credential_readable": config.CredentialReadable,
 		"version":             config.Version,
 	}
+	if service.ManagedNote != "" {
+		view["managed_note"] = service.ManagedNote
+	}
 	if !config.UpdatedAt.IsZero() {
 		view["updated_at"] = config.UpdatedAt
 	}

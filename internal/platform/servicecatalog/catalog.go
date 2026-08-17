@@ -67,6 +67,11 @@ type Service struct {
 	// RestartRequired is true for read-only services whose values are read
 	// once at boot.
 	RestartRequired bool `json:"restart_required"`
+	// ManagedNote names the place a service is actually configured when that
+	// place is not this page and not an environment variable. Without it the
+	// page would either offer a form that writes where nothing reads, or tell
+	// the operator to edit a variable that is not the live value.
+	ManagedNote string `json:"managed_note,omitempty"`
 }
 
 // modelFields is the shape shared by every service that is an OpenAI-style
@@ -160,13 +165,13 @@ var services = []Service{
 		},
 	},
 	{
-		Code: "miyun", DisplayName: "密云素材源", Tier: TierEditable,
-		Impact:         "素材采集与竞品洞察全链路",
-		ConnectionCode: "miyun",
-		Fields: []Field{
-			{Name: "endpoint", Label: "服务地址", Kind: FieldText, Required: true, Placeholder: "https://api.youshu.youcloud.com/graphql"},
-			{Name: "session_cookie", Label: "会话 Cookie", Kind: FieldSecret, Required: false, Help: "留空则沿用已保存的会话"},
-		},
+		// The crawler reads insight_miyun_connections, which is scoped per
+		// project — not provider_connections, which this page writes. Offering
+		// an editable form here would save successfully and change nothing, so
+		// the row stays read-only and points at the section that does work.
+		Code: "miyun", DisplayName: "密云素材源", Tier: TierReadOnly,
+		Impact:      "素材采集与竞品洞察全链路",
+		ManagedNote: "密云按项目单独连接，请在本页的「米云连接」里填写地址与 Cookie。",
 		EnvKeys: []string{
 			"COOKIES_MIYUN_ENABLED", "COOKIES_MIYUN_ENDPOINT",
 			"COOKIES_MIYUN_DOWNLOAD_ALLOWED_HOSTS", "COOKIES_MIYUN_MAX_CONCURRENT",
