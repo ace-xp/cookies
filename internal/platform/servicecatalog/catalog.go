@@ -137,8 +137,8 @@ var services = []Service{
 	{
 		Code: "model.document_vision", DisplayName: "文档视觉解析", Tier: TierEditable,
 		Impact:     "PDF 与文档类素材解析",
-		Capability: "document.vision.parse", ModelAlias: "cookies.document.standard",
-		ConnectionType: "las_operator", ConnectionCode: "las-document",
+		Capability: "document.vision.parse", ModelAlias: "cookies.document.vision.standard",
+		ConnectionType: "las_operator", ConnectionCode: "las-document-vision",
 		Fields: modelFields,
 		EnvKeys: []string{
 			"COOKIES_DOCUMENT_VISION_ENABLED", "COOKIES_DOCUMENT_VISION_MODEL_ALIAS",
@@ -147,8 +147,8 @@ var services = []Service{
 	{
 		Code: "model.research", DisplayName: "联网研究", Tier: TierEditable,
 		Impact:     "需求分析的联网取证",
-		Capability: "research.web", ModelAlias: "cookies.research.standard",
-		ConnectionType: "ark", ConnectionCode: "ark-research",
+		Capability: "research.web", ModelAlias: "cookies.research.web.standard",
+		ConnectionType: "ark", ConnectionCode: "ark-research-web",
 		Fields: modelFields,
 		EnvKeys: []string{
 			"COOKIES_RESEARCH_SEED_ENABLED", "COOKIES_RESEARCH_SEED_MODEL_ALIAS",

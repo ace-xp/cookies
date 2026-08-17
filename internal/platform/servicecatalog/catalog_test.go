@@ -2,6 +2,7 @@ package servicecatalog
 
 import (
 	"bufio"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,4 +162,66 @@ func readEnvExampleKeys(t *testing.T) []string {
 		t.Fatalf("scan .env.example: %v", err)
 	}
 	return keys
+}
+
+// A model alias that no caller resolves is worse than a missing one: the page
+// would happily save a route, report success, and change nothing. This caught
+// two invented aliases (cookies.document.standard, cookies.research.standard)
+// that the platform never asks for — the real names carry an extra segment.
+func TestEveryModelAliasIsResolvedSomewhere(t *testing.T) {
+	// Volcengine speech still calls its upstream directly from
+	// creativeprovider rather than through a route. Task 8 of the external
+	// service plan moves it onto route resolution; until then this alias is
+	// declared but unresolved. Delete this entry once that lands — do not add
+	// to it, since every other name here would be a silent no-op save.
+	notYetRouted := map[string]bool{"cookies.speech.volcengine": true}
+
+	sources := goSourcesOutsideCatalog(t)
+	for _, service := range All() {
+		if service.ModelAlias == "" || notYetRouted[service.ModelAlias] {
+			continue
+		}
+		quoted := `"` + service.ModelAlias + `"`
+		found := false
+		for _, source := range sources {
+			if strings.Contains(source, quoted) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s declares alias %s, which no code outside the catalog resolves — saving it would change nothing",
+				service.Code, service.ModelAlias)
+		}
+	}
+}
+
+func goSourcesOutsideCatalog(t *testing.T) []string {
+	t.Helper()
+	root := filepath.Join("..", "..", "..", "internal")
+	sources := []string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && entry.Name() == "servicecatalog" {
+			return fs.SkipDir
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		sources = append(sources, string(content))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal tree: %v", err)
+	}
+	if len(sources) == 0 {
+		t.Fatal("found no Go sources to check against")
+	}
+	return sources
 }
